@@ -27,6 +27,8 @@ pipeline {
                     ).trim()
 
                     env.IMAGE_TAG = commitHash
+				
+					sh 'docker system prune -af'
 
                     sh """
                         docker build \
