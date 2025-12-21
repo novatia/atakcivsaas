@@ -1,5 +1,7 @@
 pipeline {
-    agent any
+	agent {
+		label 'Docker_VM'
+	}
 
     environment {
         IMAGE_NAME = "atakcivserver"
