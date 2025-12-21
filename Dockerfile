@@ -27,7 +27,7 @@ RUN apt update && apt install -y \
 WORKDIR /opt
 
 # Pin version for reproducible builds
-ARG FTS_VERSION=v2.1.0
+ARG FTS_VERSION=master
 RUN git clone --branch ${FTS_VERSION} --depth 1 \
     https://github.com/FreeTAKTeam/FreeTAKServer.git
 
