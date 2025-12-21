@@ -5,14 +5,17 @@ FROM ubuntu:24.04
 # ----------------------------
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
+ENV VENV_PATH=/opt/venv
 ENV FTS_ENV=production
 ENV FTS_CONFIG=/opt/FreeTAKServer/FreeTAKServer.ini
+ENV PATH="/opt/venv/bin:$PATH"
 
 # ----------------------------
 # System dependencies
 # ----------------------------
 RUN apt update && apt install -y \
     python3 \
+    python3-venv \
     python3-pip \
     git \
     netcat-openbsd \
@@ -21,6 +24,12 @@ RUN apt update && apt install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# ----------------------------
+# Create virtualenv (PEP 668 safe)
+# ----------------------------
+RUN python3 -m venv ${VENV_PATH} \
+ && ${VENV_PATH}/bin/pip install --upgrade pip
+ 
 # ----------------------------
 # FreeTAKServer source
 # ----------------------------
@@ -35,9 +44,6 @@ RUN git clone --branch ${FTS_VERSION} --depth 1 \
 # Python dependencies
 # ----------------------------
 WORKDIR /opt/FreeTAKServer
-
-# Lock pip version (tested & stable)
-RUN python3 -m pip install --upgrade pip==24.0
 
 # Install FreeTAKServer runtime dependencies
 # (avoids installing test-only requirements)
