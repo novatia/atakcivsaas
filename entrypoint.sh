@@ -3,10 +3,10 @@ set -e
 
 echo "Starting FreeTAKServer..."
 
+# Attiva virtualenv
+source /opt/venv/bin/activate
+
 cd /opt/FreeTAKServer
 
-# Init DB / migrations se previste
-python3 -m FreeTAKServer.controllers.services.FTS
-
-# fallback (non dovrebbe arrivarci)
-exec "$@"
+# Avvio ufficiale FreeTAKServer
+exec python -m FreeTAKServer

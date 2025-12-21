@@ -22,13 +22,23 @@ RUN apt update && apt install -y \
     iproute2 \
     openssl \
     ca-certificates \
+    \
+    # Pillow deps
+    libjpeg-dev \
+    zlib1g-dev \
+    libfreetype6-dev \
+    liblcms2-dev \
+    libopenjp2-7-dev \
+    libtiff-dev \
+    libwebp-dev \
+    \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
-
 # ----------------------------
 # Create virtualenv (PEP 668 safe)
 # ----------------------------
 RUN python3 -m venv ${VENV_PATH} \
- && ${VENV_PATH}/bin/pip install --upgrade pip
+ && ${VENV_PATH}/bin/pip install --upgrade pip setuptools wheel
  
 # ----------------------------
 # FreeTAKServer source
