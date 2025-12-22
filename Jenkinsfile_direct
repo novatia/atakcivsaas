@@ -40,11 +40,11 @@ pipeline {
                     sh 'docker system prune -af'
 
                     sh """
-                        docker build \
-                          -t ${FULL_IMAGE}:${IMAGE_TAG} \
-                          -t ${FULL_IMAGE}:latest \
-                          -f Dockerfile \
-                          .
+						docker build \
+						  -t ${FULL_IMAGE}:${IMAGE_TAG} \
+						  -t ${FULL_IMAGE}:latest \
+						  -f FreeTAKServer/Dockerfile \
+						  FreeTAKServer
                     """
                 }
             }
