@@ -28,27 +28,28 @@ pipeline {
         }
 
         stage('Docker Build') {
-            steps {
-                script {
-                    def commitHash = sh(
-                        script: "cd FreeTAKServer && git rev-parse --short HEAD",
-                        returnStdout: true
-                    ).trim()
+			steps {
+				script {
+					def commitHash = sh(
+						script: "cd FreeTAKServer && git rev-parse --short HEAD",
+						returnStdout: true
+					).trim()
 
-                    env.IMAGE_TAG = commitHash
+					env.IMAGE_TAG = commitHash
 
-                    sh 'docker system prune -af'
+					sh 'docker system prune -af'
 
-                    sh """
+					sh """
+						export DOCKER_BUILDKIT=1
 						docker build \
 						  -t ${FULL_IMAGE}:${IMAGE_TAG} \
 						  -t ${FULL_IMAGE}:latest \
 						  -f FreeTAKServer/Dockerfile \
 						  FreeTAKServer
-                    """
-                }
-            }
-        }
+					"""
+				}
+			}
+		}
 
         stage('Docker Login') {
             steps {
