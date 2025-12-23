@@ -18,8 +18,15 @@ pipeline {
         stage('Docker Build & Push') {
             steps {
                 script {
+                    // 1️⃣ Clona FreeTAKServer upstream
+                    sh '''
+                      rm -rf FreeTAKServer
+                      git clone https://github.com/FreeTAKTeam/FreeTAKServer.git
+                    '''
+
+                    // 2️⃣ Hash del repo upstream
                     def commitHash = sh(
-                        script: "git rev-parse --short HEAD",
+                        script: "cd FreeTAKServer && git rev-parse --short HEAD",
                         returnStdout: true
                     ).trim()
 
@@ -30,15 +37,15 @@ pipeline {
                     )]) {
 
                         sh """
-                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                          echo "\$DOCKER_PASS" | docker login -u "\$DOCKER_USER" --password-stdin
 
-                        docker buildx build \
-                          --platform linux/amd64 \
-                          -t ${FULL_IMAGE}:${commitHash} \
-                          -t ${FULL_IMAGE}:latest \
-                          -f FreeTAKServer/Dockerfile \
-                          FreeTAKServer \
-                          --push
+                          docker buildx build \
+                            --platform linux/amd64 \
+                            -t ${FULL_IMAGE}:${commitHash} \
+                            -t ${FULL_IMAGE}:latest \
+                            -f FreeTAKServer/Dockerfile \
+                            FreeTAKServer \
+                            --push
                         """
                     }
                 }
