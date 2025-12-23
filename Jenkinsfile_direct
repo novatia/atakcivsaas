@@ -39,7 +39,7 @@ pipeline {
                         sh """
                           echo "\$DOCKER_PASS" | docker login -u "\$DOCKER_USER" --password-stdin
 
-                          docker buildx build \
+                          docker buildx build --no-cache \
                             --platform linux/amd64 \
                             -t ${FULL_IMAGE}:${commitHash} \
                             -t ${FULL_IMAGE}:latest \
