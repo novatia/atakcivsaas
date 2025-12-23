@@ -21,7 +21,7 @@ pipeline {
                     // 1️⃣ Clona FreeTAKServer upstream
                     sh '''
                       rm -rf FreeTAKServer
-                      git clone --branch v2.0 --depth 1 https://github.com/FreeTAKTeam/FreeTAKServer.git
+                      git clone --branch v2.1 --depth 1 https://github.com/FreeTAKTeam/FreeTAKServer.git
                     '''
 
                     // 2️⃣ Hash del repo upstream
