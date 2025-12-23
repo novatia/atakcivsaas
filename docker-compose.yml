@@ -14,6 +14,7 @@ services:
       - "8443:8443"    # HTTPS UI (opzionale)
 
     environment:
+      DISABLE_TELEMETRY: "true"
       # Path dati (coerente col Dockerfile ufficiale)
       FTS_DATA_PATH: /opt/fts
 
