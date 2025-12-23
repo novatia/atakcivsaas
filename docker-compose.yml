@@ -8,25 +8,20 @@ services:
 
     # Porte principali FreeTAK / ATAK Civ
     ports:
-      - "8080:8080"    # Web UI / REST
+      - "8080:8080"    # REST / test
       - "8087:8087"    # TAK TCP
-      - "8089:8089"    # TAK SSL (se abilitato)
-      - "8443:8443"    # HTTPS UI (opzionale)
+      - "8089:8089"    # TAK SSL
+      - "8443:8443"    # HTTPS
 
     environment:
+      ENABLE_TELEMETRY: "false"
+      OPENTELEMETRY_ENABLED: "false"
       DISABLE_TELEMETRY: "true"
-      # Path dati (coerente col Dockerfile ufficiale)
       FTS_DATA_PATH: /opt/fts
-
-      # opzionali / utili
       TZ: Europe/Rome
 
     volumes:
-      # Persistenza TOTALE dati FTS
       - ./data:/opt/fts
-
-      # Override config (opzionale)
-      # - ./config/FreeTAKServer.ini:/home/freetak/FreeTAKServer.ini:ro
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080"]
@@ -34,6 +29,5 @@ services:
       timeout: 5s
       retries: 5
 
-    # sicurezza base
     security_opt:
       - no-new-privileges:true
