@@ -224,12 +224,32 @@ async function renderEvents() {
 
   const events = await api("/events");
   const list = document.getElementById("ev-list");
-  if (!events.length) { list.innerHTML = "<p class='muted'>Nessun evento in calendario.</p>"; return; }
+  window._events = events;
 
   const now = new Date();
-  window._events = events;
-  list.innerHTML = events.map(ev => {
-    const past = new Date(ev.end_time) < now;
+  const isPast = ev => new Date(ev.end_time) < now;
+  const pastCount = events.filter(isPast).length;
+
+  // Eventi passati nascosti di default; flag per mostrarli (ricordata sul dispositivo).
+  // Se il link condiviso punta a un evento passato, mostrali comunque.
+  let showPast = false;
+  try { showPast = localStorage.getItem("ec_show_past") === "1"; } catch (e) {}
+  const hm = location.hash.match(/^#event-(\d+)$/);
+  if (hm) {
+    const target = events.find(e => e.id === parseInt(hm[1], 10));
+    if (target && isPast(target)) showPast = true;
+  }
+  const visible = showPast ? events : events.filter(e => !isPast(e));
+
+  let html = pastCount ? `<label class="muted" style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+      <input type="checkbox" ${showPast ? "checked" : ""} onchange="togglePast(this.checked)">
+      Mostra eventi passati (${pastCount})</label>` : "";
+  if (!visible.length) {
+    list.innerHTML = html + "<p class='muted'>Nessun evento in programma.</p>";
+    return;
+  }
+  list.innerHTML = html + visible.map(ev => {
+    const past = isPast(ev);
     const st = ev.my_rsvp;
     return `<div class="event-card ${past ? "past" : ""}" id="event-${ev.id}">
       <div class="event-head">
@@ -253,6 +273,10 @@ async function renderEvents() {
     </div>`;
   }).join("");
   focusHashEvent();
+}
+function togglePast(show) {
+  try { localStorage.setItem("ec_show_past", show ? "1" : "0"); } catch (e) {}
+  renderEvents();
 }
 // Se l'URL contiene #event-<id> (link condiviso), scorri fino all'evento ed evidenzialo
 function focusHashEvent() {
