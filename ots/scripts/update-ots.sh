@@ -30,7 +30,9 @@ warn() { echo -e "\e[1;33m[OTS-UPDATE]\e[0m $*" >&2; }
 die()  { echo -e "\e[1;31m[OTS-UPDATE]\e[0m $*" >&2; exit 1; }
 
 installed_version() {
-    "${PIP}" show opentakserver 2>/dev/null | awk '/^Version:/{print $2}'
+    # "|| true": se il pacchetto non è installato pip show fallisce e con
+    # set -e/pipefail lo script uscirebbe in silenzio prima del messaggio di errore
+    "${PIP}" show opentakserver 2>/dev/null | awk '/^Version:/{print $2}' || true
 }
 
 latest_version() {
