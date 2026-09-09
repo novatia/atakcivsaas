@@ -70,7 +70,16 @@ mkdir -p "${BACKUP_DIR}"
 STAMP="$(date +%F_%H%M%S)"
 BACKUP_FILE="${BACKUP_DIR}/ots-data-${CURRENT}-${STAMP}.tar.gz"
 log "Backup di ${OTS_DATA} in ${BACKUP_FILE} ..."
-tar czf "${BACKUP_FILE}" -C "$(dirname "${OTS_DATA}")" "$(basename "${OTS_DATA}")"
+# I log vengono scritti mentre tar li legge: exit code 1 ("file changed as we
+# read it") è accettabile, solo >1 è un errore reale.
+set +e
+tar czf "${BACKUP_FILE}" --warning=no-file-changed \
+    -C "$(dirname "${OTS_DATA}")" "$(basename "${OTS_DATA}")"
+TAR_RC=$?
+set -e
+if (( TAR_RC > 1 )); then
+    die "Backup fallito (tar exit ${TAR_RC})."
+fi
 log "Backup completato ($(du -h "${BACKUP_FILE}" | cut -f1))."
 
 # Rotazione: tieni solo gli ultimi KEEP_BACKUPS
