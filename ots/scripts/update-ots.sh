@@ -69,27 +69,28 @@ fi
 mkdir -p "${BACKUP_DIR}"
 STAMP="$(date +%F_%H%M%S)"
 BACKUP_FILE="${BACKUP_DIR}/ots-data-${CURRENT}-${STAMP}.tar.gz"
-log "Backup di ${OTS_DATA} in ${BACKUP_FILE} ..."
-# I log vengono scritti mentre tar li legge: exit code 1 ("file changed as we
-# read it") è accettabile, solo >1 è un errore reale.
-set +e
-tar czf "${BACKUP_FILE}" --warning=no-file-changed \
-    -C "$(dirname "${OTS_DATA}")" "$(basename "${OTS_DATA}")"
-TAR_RC=$?
-set -e
-if (( TAR_RC > 1 )); then
-    die "Backup fallito (tar exit ${TAR_RC})."
-fi
-log "Backup completato ($(du -h "${BACKUP_FILE}" | cut -f1))."
-
-# Rotazione: tieni solo gli ultimi KEEP_BACKUPS
-ls -1t "${BACKUP_DIR}"/ots-data-*.tar.gz 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)) | while read -r old; do
-    warn "Rimuovo backup vecchio: ${old}"
-    rm -f "${old}"
-done
 
 # ------------------------- Upgrade backend -------------------------
 if [[ "${CURRENT}" != "${LATEST}" ]]; then
+    log "Backup di ${OTS_DATA} in ${BACKUP_FILE} ..."
+    # I log vengono scritti mentre tar li legge: exit code 1 ("file changed as
+    # we read it") è accettabile, solo >1 è un errore reale.
+    set +e
+    tar czf "${BACKUP_FILE}" --warning=no-file-changed \
+        -C "$(dirname "${OTS_DATA}")" "$(basename "${OTS_DATA}")"
+    TAR_RC=$?
+    set -e
+    if (( TAR_RC > 1 )); then
+        die "Backup fallito (tar exit ${TAR_RC})."
+    fi
+    log "Backup completato ($(du -h "${BACKUP_FILE}" | cut -f1))."
+
+    # Rotazione: tieni solo gli ultimi KEEP_BACKUPS
+    ls -1t "${BACKUP_DIR}"/ots-data-*.tar.gz 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)) | while read -r old; do
+        warn "Rimuovo backup vecchio: ${old}"
+        rm -f "${old}"
+    done
+
     log "Aggiorno opentakserver come utente ${OTS_USER} ..."
     sudo -u "${OTS_USER}" "${PIP}" install --upgrade opentakserver
 
@@ -126,9 +127,17 @@ fi
 if [[ "${1:-}" == "--ui" ]]; then
     log "Aggiornamento web UI da ${UI_REPO} ..."
 
-    # Trova la root della UI dal config nginx
-    UI_ROOT="$(grep -rhoP '^\s*root\s+\K[^;]+' /etc/nginx/sites-enabled/ 2>/dev/null | sort -u | head -1 || true)"
-    [[ -n "${UI_ROOT}" && -d "${UI_ROOT}" ]] || die "Root della UI non trovata nei config nginx. Imposta manualmente e riprova."
+    # Trova la root della UI: override manuale via UI_ROOT, altrimenti cerca
+    # nei config nginx (tutta /etc/nginx) una root che contenga un index.html
+    if [[ -z "${UI_ROOT:-}" ]]; then
+        while read -r candidate; do
+            if [[ -f "${candidate}/index.html" ]]; then
+                UI_ROOT="${candidate}"
+                break
+            fi
+        done < <(grep -rhoP '^\s*root\s+\K[^;]+' /etc/nginx/ 2>/dev/null | tr -d '"' | sort -u)
+    fi
+    [[ -n "${UI_ROOT:-}" && -d "${UI_ROOT}" ]] || die "Root della UI non trovata. Individuala con: grep -rn 'root' /etc/nginx/ | grep -v '#'  e rilancia con: UI_ROOT=/percorso/ui $0 --ui"
     log "UI servita da nginx in: ${UI_ROOT}"
 
     RELEASE_JSON="$(curl -fsSL "https://api.github.com/repos/${UI_REPO}/releases/latest")" \
@@ -166,5 +175,8 @@ for a in r.get("assets", []):
     log "UI aggiornata a ${UI_TAG}. Backup precedente: ${UI_BACKUP}"
 fi
 
-log "Fatto. In caso di problemi, ripristina con:"
-log "  systemctl stop ${OTS_SERVICE} && tar xzf ${BACKUP_FILE} -C $(dirname "${OTS_DATA}") && systemctl start ${OTS_SERVICE}"
+log "Fatto."
+if [[ -f "${BACKUP_FILE}" ]]; then
+    log "In caso di problemi, ripristina i dati con:"
+    log "  systemctl stop ${OTS_SERVICE} && tar xzf ${BACKUP_FILE} -C $(dirname "${OTS_DATA}") && systemctl start ${OTS_SERVICE}"
+fi
