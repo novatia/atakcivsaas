@@ -204,7 +204,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MO-TAK-001 · Rev 2 · 2026-09-09</span><span>Server: n3test002</span></div>
+    <div class="doc-meta"><span>MO-TAK-001 · Rev 3 · 2026-09-09</span><span>Server: n3test002</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Operatore TAK</h1>
@@ -312,10 +312,10 @@
 
   <section id="s6">
     <h2><span class="n">6</span> Telemetria del dispositivo</h2>
-    <p>La scheda di ogni EUD nella web UI ha quattro grafici, alimentati da due fonti diverse:</p>
+    <p>La scheda di ogni EUD nella web UI ha quattro grafici (traffico dati, batteria, heap, storage). Il server li popola solo se il client invia un elemento <code>&lt;stats&gt;</code> nei propri CoT — e <strong>ATAK-CIV (la versione del Play Store) non lo invia</strong>: con i client del gruppo quei grafici restano vuoti. Non è un guasto.</p>
     <ul>
-      <li><strong>Batteria</strong> — arriva col normale CoT di posizione: si popola da sola quando il dispositivo trasmette (servono più campioni e un refresh della pagina).</li>
-      <li><strong>Heap, storage, traffico dati</strong> — sono le <em>metriche</em>, che ATAK invia solo se abilitate: Settings → cerca «<code>metrics</code>» → attiva raccolta e invio. Senza, restano vuoti per design.</li>
+      <li>Il dato utile c'è comunque: la <strong>batteria</strong> viaggia dentro il normale CoT di posizione ed è visibile nel popup del marker (e nella tabella <code>points</code> del database, colonna <code>battery</code>).</li>
+      <li>Verifica rapida lato server: <code>sudo -u postgres psql -d ots -c "SELECT COUNT(*) FROM eud_stats;"</code> — se resta a zero, nessun client collegato invia statistiche.</li>
     </ul>
   </section>
 
@@ -405,7 +405,7 @@ sudo -u postgres psql -d ots -c "SELECT device_uid, battery, timestamp FROM poin
   </section>
 
   <footer>
-    <span>MO-TAK-001 · Rev 2</span>
+    <span>MO-TAK-001 · Rev 3</span>
     <span>Aggiornato al troubleshooting del 2026-09-09</span>
   </footer>
 </div>
