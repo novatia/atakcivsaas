@@ -174,6 +174,8 @@ let currentTab = "events";
 
 function renderTabs() {
   const nav = document.getElementById("tabs");
+  nav.style.display = "flex";
+  document.getElementById("content").style.borderRadius = "";
   nav.innerHTML = "";
   for (const tab of TABS) {
     if (tab.admin && !isAdmin()) continue;
@@ -293,22 +295,21 @@ function goCalendar() {
   }
 }
 async function renderEventDetail(id) {
-  currentTab = isAdmin() ? "events" : "";
-  renderTabs();
+  // Vista standalone del singolo evento: niente menu, solo l'evento
+  document.getElementById("tabs").style.display = "none";
   const el = document.getElementById("content");
+  el.style.borderRadius = "8px";
   el.innerHTML = "Caricamento…";
   let ev;
   try {
     ev = await api(`/events/${id}`);
   } catch (err) {
-    el.innerHTML = `<h2>Evento non trovato</h2><p class="muted">${esc(err.message)}</p>
-      ${isAdmin() ? `<p><button class="btn" onclick="goCalendar()">← Tutti gli eventi</button></p>` : ""}`;
+    el.innerHTML = `<h2>Evento non trovato</h2><p class="muted">${esc(err.message)}</p>`;
     return;
   }
   const past = new Date(ev.end_time) < new Date();
   const st = ev.my_rsvp;
   el.innerHTML = `
-    ${isAdmin() ? `<p style="margin-top:0"><button class="btn" onclick="goCalendar()">← Tutti gli eventi</button></p>` : ""}
     <div class="event-card ${past ? "past" : ""}">
       <div class="event-head">
         <strong style="font-size:17px">${esc(ev.title)}</strong>
