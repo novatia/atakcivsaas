@@ -6,9 +6,31 @@
 <title>Calendario Eventi</title>
 <style>
   :root {
+    color-scheme: light;
     --bg: #f5f6f8; --panel: #ffffff; --border: #dde1e6; --text: #1b1f24;
     --muted: #6b7280; --accent: #2f6f3e; --accent-2: #4c8c5c;
     --present: #2e7d32; --absent: #c62828; --maybe: #ef6c00; --neutral: #78909c;
+    --tab: #eceff1; --btn: #ffffff; --btn-hover: #f0f2f4; --input: #ffffff;
+    --highlight-glow: rgba(47,111,62,.15);
+  }
+  /* Modalità notte: automatica dal sistema, forzabile con il bottone 🌙/☀️ */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #14181c; --panel: #1e242b; --border: #333d47; --text: #e4e8ec;
+      --muted: #93a0ad; --accent: #4d9861; --accent-2: #5fae74;
+      --present: #43a047; --absent: #e05555; --maybe: #f58c2e; --neutral: #8aa0ae;
+      --tab: #262d35; --btn: #262d35; --btn-hover: #2f3842; --input: #171c21;
+      --highlight-glow: rgba(93,174,116,.22);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #14181c; --panel: #1e242b; --border: #333d47; --text: #e4e8ec;
+    --muted: #93a0ad; --accent: #4d9861; --accent-2: #5fae74;
+    --present: #43a047; --absent: #e05555; --maybe: #f58c2e; --neutral: #8aa0ae;
+    --tab: #262d35; --btn: #262d35; --btn-hover: #2f3842; --input: #171c21;
+    --highlight-glow: rgba(93,174,116,.22);
   }
   * { box-sizing: border-box; }
   body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
@@ -17,7 +39,7 @@
   #me-box { margin-left: auto; display: flex; align-items: center; gap: 10px; color: var(--muted); }
   #me-box img { width: 32px; height: 32px; object-fit: contain; }
   nav { display: flex; gap: 4px; padding: 8px 20px 0; flex-wrap: wrap; }
-  nav button { border: 1px solid var(--border); border-bottom: none; background: #eceff1; padding: 8px 14px; cursor: pointer; border-radius: 6px 6px 0 0; font-size: 13px; }
+  nav button { border: 1px solid var(--border); border-bottom: none; background: var(--tab); color: var(--text); padding: 8px 14px; cursor: pointer; border-radius: 6px 6px 0 0; font-size: 13px; }
   nav button.active { background: var(--panel); font-weight: 600; color: var(--accent); }
   main { padding: 16px 20px 40px; }
   section.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 0 8px 8px 8px; padding: 16px; }
@@ -26,8 +48,8 @@
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
   th { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
-  .btn { border: 1px solid var(--border); background: #fff; padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 12.5px; }
-  .btn:hover { background: #f0f2f4; }
+  .btn { border: 1px solid var(--border); background: var(--btn); color: var(--text); padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 12.5px; }
+  .btn:hover { background: var(--btn-hover); }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .btn.primary:hover { background: var(--accent-2); }
   .btn.danger { color: var(--absent); border-color: #e7bdbd; }
@@ -43,7 +65,7 @@
   .pill.maybe { background: var(--maybe); } .pill.not_configured { background: var(--neutral); }
   .event-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
   .event-card.past { opacity: .65; }
-  .event-card.highlight { outline: 3px solid var(--accent); box-shadow: 0 0 0 6px rgba(47,111,62,.15); }
+  .event-card.highlight { outline: 3px solid var(--accent); box-shadow: 0 0 0 6px var(--highlight-glow); }
   .event-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
   .event-head strong { font-size: 15px; }
   .event-meta { color: var(--muted); font-size: 12.5px; margin: 4px 0; }
@@ -51,17 +73,25 @@
   .counts { font-size: 12px; color: var(--muted); }
   form.inline { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 14px; }
   form.inline label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
-  input, select, textarea { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; background: #fff; }
+  input, select, textarea { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; background: var(--input); color: var(--text); }
   textarea { width: 100%; min-height: 60px; }
   #toast { position: fixed; bottom: 16px; right: 16px; background: #263238; color: #fff; padding: 10px 16px; border-radius: 8px; display: none; max-width: 380px; z-index: 10; }
   .muted { color: var(--muted); }
   .hidden { display: none !important; }
 </style>
+<script>
+  // Applica subito il tema salvato per evitare il flash chiaro/scuro al caricamento
+  try {
+    const saved = localStorage.getItem("ec_theme");
+    if (saved === "dark" || saved === "light") document.documentElement.dataset.theme = saved;
+  } catch (e) {}
+</script>
 </head>
 <body>
 <header>
   <h1>📅 Calendario Eventi</h1>
   <div id="me-box"></div>
+  <button class="btn" id="theme-btn" onclick="toggleTheme()" title="Modalità notte/giorno">🌙</button>
 </header>
 <nav id="tabs"></nav>
 <main><section class="panel" id="content">Caricamento…</section></main>
@@ -107,6 +137,25 @@ function fmtDT(iso) {
   return new Date(iso).toLocaleString("it-IT", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 function isAdmin() { return ME && ME.roles.includes("administrator"); }
+
+/* ---------------- Modalità notte ---------------- */
+function isDarkNow() {
+  const t = document.documentElement.dataset.theme;
+  if (t) return t === "dark";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+function updateThemeButton() {
+  const btn = document.getElementById("theme-btn");
+  if (btn) btn.textContent = isDarkNow() ? "☀️" : "🌙";
+}
+function toggleTheme() {
+  const next = isDarkNow() ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("ec_theme", next); } catch (e) {}
+  updateThemeButton();
+}
+updateThemeButton();
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", updateThemeButton);
 function badgeImg(rank, size) {
   if (!rank || !rank.badge_filename) return "";
   return `<img src="${API}/badges/${encodeURIComponent(rank.badge_filename)}" width="${size}" height="${size}" style="object-fit:contain" alt="">`;
