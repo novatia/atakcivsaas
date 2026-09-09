@@ -53,14 +53,9 @@ sudo -u ots /home/ots/.opentakserver_venv/bin/pip install --upgrade .
 sudo systemctl restart opentakserver
 ```
 
-In alternativa, build del pacchetto con Poetry (versione presa dal tag git) e install del wheel
-dalla pagina Plugins della web UI di OTS:
-
-```bash
-pipx install poetry
-poetry self add "poetry-dynamic-versioning[plugin]"
-poetry build
-```
+In alternativa, build del wheel con Poetry (`poetry build`) e install dalla pagina Plugins
+della web UI di OTS. La versione del pacchetto è statica in `pyproject.toml`
+(tenerla allineata a `ots_eventcalendar_plugin/__init__.py` quando si rilascia una modifica).
 
 Al primo avvio il plugin crea le proprie tabelle (`ec_*`) nel database di OTS e fa il seed
 dei gradi di default.
