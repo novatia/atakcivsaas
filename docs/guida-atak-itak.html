@@ -185,7 +185,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MU-TAK-002 · Rev 3 · 2026-09-09</span><span>Per operatori da smartphone</span></div>
+    <div class="doc-meta"><span>MU-TAK-002 · Rev 4 · 2026-09-09</span><span>Per operatori da smartphone</span></div>
     <div class="head-row">
       <div>
         <h1>Guida ATAK e iTAK</h1>
@@ -215,7 +215,7 @@
     <p>Ti servono tre cose:</p>
     <ol>
       <li>Un <strong>account sul server</strong> del gruppo — registrati dalla pagina web del server o chiedi all'amministratore di crearti l'utenza.</li>
-      <li>Il <strong>collegamento al server</strong>: la via normale è il <strong>QR code di enrollment</strong> (te lo fornisce l'amministratore o lo trovi nella pagina web del server): inquadrandolo, l'app si configura e il certificato viene emesso automaticamente. Dopo l'enrollment, nella pagina <strong>Data Packages</strong> della web UI (loggato col tuo account) trovi il tuo <em>data package</em> personale: uno zip con i certificati <code>.p12</code>, utile per configurare altre app (vedi sez. 8). È personale — non passarlo ad altri.</li>
+      <li>Il <strong>collegamento al server</strong>: la via normale è il <strong>QR code di enrollment</strong> (te lo fornisce l'amministratore o lo trovi nella pagina web del server): inquadrandolo, l'app si configura e il certificato viene emesso automaticamente. Dalla pagina <strong>Data Packages</strong> della web UI (loggato col tuo account) puoi inoltre <strong>generare il tuo data package</strong> personale: uno zip con i certificati <code>.p12</code>, utile per configurare altre app (vedi sez. 8). È personale — non passarlo ad altri.</li>
       <li>Un telefono con <strong>GPS attivo</strong> e la localizzazione consentita all'app («Consenti sempre», precisione elevata): senza, gli altri non ti vedranno in mappa.</li>
     </ol>
     <div class="note"><span class="tag">Nota</span><p>ATAK (Android) e iTAK (iPhone) parlano con lo stesso server e si vedono a vicenda. ATAK è più completo e supporta i plugin; iTAK copre mappa, posizioni, chat, marker e scambio file.</p></div>
@@ -302,11 +302,19 @@
       <li>Apri il file scaricato: alla prima installazione Android chiede di <strong>consentire le app sconosciute</strong> per il browser — Impostazioni → Consenti da questa origine → Installa.</li>
       <li>Al primo avvio concedi <strong>fotocamera, microfono e posizione</strong>.</li>
     </ol>
+    <h3>Certificati</h3>
+    <ol>
+      <li>Loggati sulla web UI del server col tuo account → menu <strong>Data Packages</strong> → premi il pulsante per <strong>generare la configurazione</strong>: ottieni uno zip col tuo data package.</li>
+      <li>Porta i certificati sul telefono: manda lo zip direttamente, oppure dezippalo sul PC e invia al telefono (es. con Telegram, nei messaggi salvati) i due file <code>.p12</code>: il <strong>truststore</strong> e il <strong>tuo certificato</strong> personale.</li>
+      <li>Salvali in una cartella del telefono (es. Download).</li>
+    </ol>
     <h3>Configurazione</h3>
     <ol>
-      <li><strong>Stream</strong>: protocollo <code>RTSP</code>, indirizzo del server, porta <code>8554</code>, un percorso a scelta (es. <code>nova-cam</code>), autenticazione con username e password del tuo account.</li>
-      <li><strong>TAK Server</strong> (per la posizione in mappa): indirizzo del server, porta <code>8089</code>, <strong>SSL attivo</strong>. Carica il <strong>truststore</strong> e il <strong>tuo certificato</strong> — i due file <code>.p12</code> che trovi nel tuo data package (sez. 1) — con la loro password, e attiva <em>Enable ATAK Authentication</em> con le credenziali dell'account.</li>
-      <li>Avvia lo stream: comparirà nella pagina <strong>Video Streams</strong> della web UI e nel tool Video degli ATAK connessi.</li>
+      <li><strong>Stream</strong>: protocollo <code>RTSP</code>, indirizzo <code>tacticalscout.3utilities.com</code>, porta <code>8554</code>, un percorso a scelta (es. <code>nova-cam</code>), autenticazione con username e password del tuo account.</li>
+      <li><strong>TAK Server</strong> (per la posizione in mappa): indirizzo <code>tacticalscout.3utilities.com</code>, porta <strong><code>8089</code></strong> (attenzione: non lasciare il default 8088), <strong>SSL attivo</strong>. Seleziona i due file <code>.p12</code> nei campi truststore e certificato client, con la loro password.</li>
+      <li>Usa i <strong>pulsanti di test dei certificati</strong> nell'app: entrambi devono rispondere <strong>Success</strong> prima di procedere — se uno fallisce, ricontrolla file e password.</li>
+      <li>Attiva <em>Enable ATAK Authentication</em> con le credenziali dell'account.</li>
+      <li>Avvia lo stream: comparirà nella pagina <strong>Video Streams</strong> della web UI e nel tool Video degli ATAK connessi, con l'icona telecamera in mappa.</li>
     </ol>
     <div class="note"><span class="tag">Nota</span><p>Lo streaming consuma molta batteria e molti dati mobili: per postazioni lunghe usa un powerbank e, se possibile, il WiFi.</p></div>
   </section>
@@ -344,7 +352,7 @@
   </section>
 
   <footer>
-    <span>MU-TAK-002 · Rev 3</span>
+    <span>MU-TAK-002 · Rev 4</span>
     <span>Compagno del Manuale Operatore TAK (MO-TAK-001)</span>
   </footer>
 </div>
