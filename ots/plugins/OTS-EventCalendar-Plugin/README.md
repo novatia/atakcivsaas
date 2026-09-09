@@ -15,8 +15,13 @@ gestione presenze, punteggi e gradi militari. Usa il login e gli utenti di OpenT
   (`title,description,field,start,end`, date ISO, separatore `,` o `;`).
 
 ### Presenze
-- Ogni utente loggato dichiara per ogni evento: **Presente / Non presente / In dubbio**;
-  il default è **Non configurato**.
+- Il calendario completo è visibile **solo agli admin**: gli operatori ricevono il link
+  del singolo evento (es. sul gruppo WhatsApp) e vedono una **pagina dedicata a quell'evento**.
+- Lì l'operatore dichiara: **Presente / Non presente / In dubbio**; il default è
+  **Non configurato**.
+- Chiunque sia loggato può registrare sull'evento un **ospite "in prova"** con nome e
+  cognome (senza account): compare nella lista presenze dell'admin, che può confermarne
+  la presenza (senza punti). L'ospite può essere rimosso da chi l'ha registrato o da un admin.
 - Gli operatori admin, sul campo, **confermano le presenze** effettive dalla scheda
   "Presenze": la conferma assegna i punti (revocabile, i punti vengono tolti).
 

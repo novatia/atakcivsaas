@@ -61,6 +61,7 @@ class CalendarEvent(db.Model):
 
     field = relationship("GameField", back_populates="events")
     attendances = relationship("EventAttendance", back_populates="event", cascade="all, delete-orphan")
+    guests = relationship("EventGuest", back_populates="event", cascade="all, delete-orphan")
 
     def serialize(self):
         return {
@@ -101,6 +102,35 @@ class EventAttendance(db.Model):
             "confirmed": self.confirmed,
             "confirmed_at": self.confirmed_at.isoformat() if self.confirmed_at else None,
             "points_awarded": self.points_awarded,
+        }
+
+
+class EventGuest(db.Model):
+    """Ospite "in prova" registrato per un evento con nome e cognome (senza account OTS)."""
+
+    __tablename__ = "ec_event_guests"
+
+    id = db.Column(Integer, primary_key=True)
+    event_id = db.Column(Integer, ForeignKey("ec_events.id"), nullable=False)
+    first_name = db.Column(String(255), nullable=False)
+    last_name = db.Column(String(255), nullable=False)
+    added_by = db.Column(Integer, ForeignKey("user.id"), nullable=True)
+    confirmed = db.Column(Boolean, nullable=False, default=False)
+    confirmed_by = db.Column(Integer, ForeignKey("user.id"), nullable=True)
+    confirmed_at = db.Column(DateTime, nullable=True)
+    created_at = db.Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    event = relationship("CalendarEvent", back_populates="guests")
+
+    def serialize(self):
+        return {
+            "id": self.id,
+            "event_id": self.event_id,
+            "first_name": self.first_name,
+            "last_name": self.last_name,
+            "added_by": self.added_by,
+            "confirmed": self.confirmed,
+            "confirmed_at": self.confirmed_at.isoformat() if self.confirmed_at else None,
         }
 
 
@@ -148,6 +178,7 @@ PLUGIN_TABLES = [
     GameField.__table__,
     CalendarEvent.__table__,
     EventAttendance.__table__,
+    EventGuest.__table__,
     Rank.__table__,
     UserScore.__table__,
 ]

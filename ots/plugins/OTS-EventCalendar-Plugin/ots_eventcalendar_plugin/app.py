@@ -27,6 +27,7 @@ from .models import (
     RSVP_STATUSES,
     CalendarEvent,
     EventAttendance,
+    EventGuest,
     GameField,
     Rank,
     UserScore,
@@ -96,6 +97,27 @@ def _resolve_rank(score_row: UserScore | None, ranks: list) -> dict | None:
         if manual:
             return manual.serialize()
     return _rank_for_score(score_value, ranks)
+
+
+def _is_admin() -> bool:
+    return any(role.name == "administrator" for role in current_user.roles)
+
+
+def _serialize_guests(event: CalendarEvent) -> list[dict]:
+    user_ids = {g.added_by for g in event.guests if g.added_by}
+    usernames = {}
+    if user_ids:
+        for user in db.session.query(User).filter(User.id.in_(user_ids)).all():
+            usernames[user.id] = user.username
+
+    admin = _is_admin()
+    guests = []
+    for guest in event.guests:
+        data = guest.serialize()
+        data["added_by_username"] = usernames.get(guest.added_by)
+        data["can_delete"] = admin or guest.added_by == current_user.id
+        guests.append(data)
+    return guests
 
 
 def _match_field(name: str | None, default_field_id: int | None):
@@ -400,8 +422,10 @@ class EventCalendarPlugin(Plugin):
     # Eventi
     # ------------------------------------------------------------------
 
+    # L'elenco completo del calendario è riservato agli admin: gli operatori
+    # accedono al singolo evento tramite il link condiviso (GET /events/<id>)
     @staticmethod
-    @auth_required()
+    @roles_accepted("administrator")
     @blueprint.route("/events")
     def get_events():
         try:
@@ -428,6 +452,34 @@ class EventCalendarPlugin(Plugin):
                 data["my_rsvp"] = my_rsvp
                 results.append(data)
             return jsonify(results)
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # Dettaglio di un singolo evento (per la vista dedicata del link condiviso)
+    @staticmethod
+    @auth_required()
+    @blueprint.route("/events/<int:event_id>")
+    def get_event(event_id):
+        try:
+            event = db.session.get(CalendarEvent, event_id)
+            if not event:
+                return jsonify({"success": False, "error": "Evento non trovato"}), 404
+
+            data = event.serialize()
+            counts = {"present": 0, "absent": 0, "maybe": 0, "confirmed": 0}
+            my_rsvp = "not_configured"
+            for attendance in event.attendances:
+                if attendance.rsvp_status in counts:
+                    counts[attendance.rsvp_status] += 1
+                if attendance.confirmed:
+                    counts["confirmed"] += 1
+                if attendance.user_id == current_user.id:
+                    my_rsvp = attendance.rsvp_status
+            data["counts"] = counts
+            data["my_rsvp"] = my_rsvp
+            data["guests"] = _serialize_guests(event)
+            return jsonify(data)
         except BaseException as e:
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 500
@@ -559,6 +611,91 @@ class EventCalendarPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     # ------------------------------------------------------------------
+    # Ospiti "in prova" (nome e cognome, senza account)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @auth_required()
+    @blueprint.route("/events/<int:event_id>/guests", methods=["POST"])
+    def add_guest(event_id):
+        try:
+            event = db.session.get(CalendarEvent, event_id)
+            if not event:
+                return jsonify({"success": False, "error": "Evento non trovato"}), 404
+
+            data = request.json or {}
+            first_name = (data.get("first_name") or "").strip()
+            last_name = (data.get("last_name") or "").strip()
+            if not first_name or not last_name:
+                return jsonify({"success": False, "error": "Nome e cognome sono obbligatori"}), 400
+
+            duplicate = (
+                db.session.query(EventGuest)
+                .filter(
+                    EventGuest.event_id == event_id,
+                    db.func.lower(EventGuest.first_name) == first_name.lower(),
+                    db.func.lower(EventGuest.last_name) == last_name.lower(),
+                )
+                .first()
+            )
+            if duplicate:
+                return jsonify({"success": False, "error": "Ospite già registrato per questo evento"}), 400
+
+            guest = EventGuest(
+                event_id=event_id,
+                first_name=first_name,
+                last_name=last_name,
+                added_by=current_user.id,
+            )
+            db.session.add(guest)
+            db.session.commit()
+            return jsonify({"success": True, "guest": guest.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    @staticmethod
+    @auth_required()
+    @blueprint.route("/guests/<int:guest_id>", methods=["DELETE"])
+    def delete_guest(guest_id):
+        try:
+            guest = db.session.get(EventGuest, guest_id)
+            if not guest:
+                return jsonify({"success": False, "error": "Ospite non trovato"}), 404
+            # Può eliminare solo chi l'ha registrato, oppure un admin
+            if guest.added_by != current_user.id and not _is_admin():
+                return jsonify({"success": False, "error": "Non autorizzato"}), 403
+
+            db.session.delete(guest)
+            db.session.commit()
+            return jsonify({"success": True})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/guests/<int:guest_id>/confirm", methods=["POST"])
+    def confirm_guest(guest_id):
+        try:
+            guest = db.session.get(EventGuest, guest_id)
+            if not guest:
+                return jsonify({"success": False, "error": "Ospite non trovato"}), 404
+
+            confirmed = bool((request.json or {}).get("confirmed"))
+            guest.confirmed = confirmed
+            guest.confirmed_by = current_user.id if confirmed else None
+            guest.confirmed_at = datetime.utcnow() if confirmed else None
+            db.session.commit()
+            return jsonify({"success": True, "guest": guest.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    # ------------------------------------------------------------------
     # Conferma presenze (admin sul campo)
     # ------------------------------------------------------------------
 
@@ -585,7 +722,13 @@ class EventCalendarPlugin(Plugin):
                         "confirmed": attendance.confirmed if attendance else False,
                     }
                 )
-            return jsonify({"event": event.serialize(), "attendance": results})
+            return jsonify(
+                {
+                    "event": event.serialize(),
+                    "attendance": results,
+                    "guests": _serialize_guests(event),
+                }
+            )
         except BaseException as e:
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 500

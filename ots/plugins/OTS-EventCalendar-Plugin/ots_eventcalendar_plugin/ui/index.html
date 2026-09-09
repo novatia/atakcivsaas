@@ -163,8 +163,8 @@ function badgeImg(rank, size) {
 
 /* ---------------- Tabs ---------------- */
 const TABS = [
-  { id: "events", label: "Eventi", admin: false, render: renderEvents },
-  { id: "leaderboard", label: "Classifica", admin: false, render: renderLeaderboard },
+  { id: "events", label: "Eventi", admin: true, render: () => { clearEventHash(); renderEvents(); } },
+  { id: "leaderboard", label: "Classifica", admin: false, render: () => { clearEventHash(); renderLeaderboard(); } },
   { id: "attendance", label: "Presenze", admin: true, render: renderAttendance },
   { id: "fields", label: "Campi da gioco", admin: true, render: renderFields },
   { id: "ranks", label: "Gradi e badge", admin: true, render: renderRanks },
@@ -230,15 +230,9 @@ async function renderEvents() {
   const isPast = ev => new Date(ev.end_time) < now;
   const pastCount = events.filter(isPast).length;
 
-  // Eventi passati nascosti di default; flag per mostrarli (ricordata sul dispositivo).
-  // Se il link condiviso punta a un evento passato, mostrali comunque.
+  // Eventi passati nascosti di default; flag per mostrarli (ricordata sul dispositivo)
   let showPast = false;
   try { showPast = localStorage.getItem("ec_show_past") === "1"; } catch (e) {}
-  const hm = location.hash.match(/^#event-(\d+)$/);
-  if (hm) {
-    const target = events.find(e => e.id === parseInt(hm[1], 10));
-    if (target && isPast(target)) showPast = true;
-  }
   const visible = showPast ? events : events.filter(e => !isPast(e));
 
   let html = pastCount ? `<label class="muted" style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
@@ -253,7 +247,7 @@ async function renderEvents() {
     const st = ev.my_rsvp;
     return `<div class="event-card ${past ? "past" : ""}" id="event-${ev.id}">
       <div class="event-head">
-        <strong>${esc(ev.title)}</strong>
+        <strong><a href="#event-${ev.id}" style="color:inherit">${esc(ev.title)}</a></strong>
         <span class="pill ${st}">${{present:"Presente",absent:"Non presente",maybe:"In dubbio",not_configured:"Non configurato"}[st]}</span>
         <span style="margin-left:auto">
           <button class="btn small" onclick="copyEventLink(${ev.id})" title="Copia il link all'evento per condividerlo">📋 Copia link</button>
@@ -272,21 +266,110 @@ async function renderEvents() {
       </div>`}
     </div>`;
   }).join("");
-  focusHashEvent();
 }
 function togglePast(show) {
   try { localStorage.setItem("ec_show_past", show ? "1" : "0"); } catch (e) {}
   renderEvents();
 }
-// Se l'URL contiene #event-<id> (link condiviso), scorri fino all'evento ed evidenzialo
-function focusHashEvent() {
+
+/* ---------------- Vista singolo evento (link condiviso) ---------------- */
+function hashEventId() {
   const m = location.hash.match(/^#event-(\d+)$/);
-  if (!m) return;
-  const card = document.getElementById("event-" + m[1]);
-  if (!card) return;
-  card.classList.add("highlight");
-  card.scrollIntoView({ behavior: "smooth", block: "center" });
-  setTimeout(() => card.classList.remove("highlight"), 6000);
+  return m ? parseInt(m[1], 10) : null;
+}
+function clearEventHash() {
+  if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+}
+function goCalendar() {
+  clearEventHash();
+  if (isAdmin()) {
+    currentTab = "events";
+    renderTabs();
+    renderEvents();
+  } else {
+    currentTab = "leaderboard";
+    renderTabs();
+    renderLeaderboard();
+  }
+}
+async function renderEventDetail(id) {
+  currentTab = isAdmin() ? "events" : "";
+  renderTabs();
+  const el = document.getElementById("content");
+  el.innerHTML = "Caricamento…";
+  let ev;
+  try {
+    ev = await api(`/events/${id}`);
+  } catch (err) {
+    el.innerHTML = `<h2>Evento non trovato</h2><p class="muted">${esc(err.message)}</p>
+      ${isAdmin() ? `<p><button class="btn" onclick="goCalendar()">← Tutti gli eventi</button></p>` : ""}`;
+    return;
+  }
+  const past = new Date(ev.end_time) < new Date();
+  const st = ev.my_rsvp;
+  el.innerHTML = `
+    ${isAdmin() ? `<p style="margin-top:0"><button class="btn" onclick="goCalendar()">← Tutti gli eventi</button></p>` : ""}
+    <div class="event-card ${past ? "past" : ""}">
+      <div class="event-head">
+        <strong style="font-size:17px">${esc(ev.title)}</strong>
+        <span class="pill ${st}">${{present:"Presente",absent:"Non presente",maybe:"In dubbio",not_configured:"Non configurato"}[st]}</span>
+        <span style="margin-left:auto"><button class="btn small" onclick="copyEventLink(${ev.id})">📋 Copia link</button></span>
+      </div>
+      <div class="event-meta">📍 ${esc(ev.field ? ev.field.name : "?")}${ev.field && ev.field.address ? " — " + esc(ev.field.address) : ""}</div>
+      <div class="event-meta">🕓 ${fmtDT(ev.start_time)} → ${fmtDT(ev.end_time)}</div>
+      ${ev.description ? `<div class="event-desc">${esc(ev.description)}</div>` : ""}
+      <div class="counts">✅ ${ev.counts.present} presenti · ❌ ${ev.counts.absent} assenti · ❔ ${ev.counts.maybe} in dubbio · 🏅 ${ev.counts.confirmed} confermati sul campo</div>
+      ${past ? "<p class='muted'>Evento concluso.</p>" : `
+      <p style="margin:10px 0 4px"><strong>La tua presenza:</strong></p>
+      <div class="rsvp-group">
+        <button class="btn ${st === "present" ? "on-present" : ""}" onclick="rsvp(${ev.id},'present')">Presente</button>
+        <button class="btn ${st === "absent" ? "on-absent" : ""}" onclick="rsvp(${ev.id},'absent')">Non presente</button>
+        <button class="btn ${st === "maybe" ? "on-maybe" : ""}" onclick="rsvp(${ev.id},'maybe')">In dubbio</button>
+      </div>`}
+    </div>
+    <h3>Ospiti in prova (${ev.guests.length})</h3>
+    ${ev.guests.length ? `<table><thead><tr><th>Nome</th><th>Registrato da</th><th></th></tr></thead><tbody>
+      ${ev.guests.map(g => `<tr>
+        <td>${esc(g.first_name)} ${esc(g.last_name)}${g.confirmed ? " 🏅" : ""}</td>
+        <td class="muted">${esc(g.added_by_username || "—")}</td>
+        <td>${g.can_delete ? `<button class="btn small danger" onclick="deleteGuest(${g.id}, ${ev.id})">Rimuovi</button>` : ""}</td>
+      </tr>`).join("")}
+    </tbody></table>` : "<p class='muted'>Nessun ospite registrato.</p>"}
+    ${past ? "" : `
+    <form class="inline" id="guest-form" style="margin-top:10px">
+      <label>Nome <input name="first_name" required></label>
+      <label>Cognome <input name="last_name" required></label>
+      <button class="btn primary" type="submit">Registra ospite</button>
+    </form>
+    <p class="muted">Porti qualcuno a provare? Registralo qui con nome e cognome: comparirà nella lista presenze dell'evento.</p>`}
+  `;
+  const form = document.getElementById("guest-form");
+  if (form) form.onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api(`/events/${id}/guests`, { method: "POST", body: Object.fromEntries(new FormData(e.target).entries()) });
+      toast("Ospite registrato");
+      renderEventDetail(id);
+    } catch (err) { toast(err.message, false); }
+  };
+}
+async function deleteGuest(guestId, eventId) {
+  if (!confirm("Rimuovere questo ospite?")) return;
+  try {
+    await api(`/guests/${guestId}`, { method: "DELETE" });
+    toast("Ospite rimosso");
+    if (hashEventId() === eventId) renderEventDetail(eventId);
+    else if (window._reloadAttendance) window._reloadAttendance();
+  } catch (err) { toast(err.message, false); }
+}
+async function confirmGuest(guestId, confirmed) {
+  try {
+    await api(`/guests/${guestId}/confirm`, { method: "POST", body: { confirmed } });
+    toast(confirmed ? "Presenza ospite confermata" : "Presenza ospite revocata");
+  } catch (err) {
+    toast(err.message, false);
+    if (window._reloadAttendance) window._reloadAttendance();
+  }
 }
 function eventUrl(id) {
   return location.origin + location.pathname.replace(/\/$/, "") + "#event-" + id;
@@ -335,8 +418,11 @@ async function editEvent(id) {
   };
 }
 async function rsvp(eventId, status) {
-  try { await api(`/events/${eventId}/rsvp`, { method: "POST", body: { status } }); renderEvents(); }
-  catch (err) { toast(err.message, false); }
+  try {
+    await api(`/events/${eventId}/rsvp`, { method: "POST", body: { status } });
+    if (hashEventId() === eventId) renderEventDetail(eventId);
+    else renderEvents();
+  } catch (err) { toast(err.message, false); }
 }
 async function delEvent(eventId) {
   if (!confirm("Eliminare questo evento? I punti delle presenze confermate verranno rimossi.")) return;
@@ -412,7 +498,17 @@ async function renderAttendance() {
              onchange="confirmAttendance(${data.event.id}, ${a.user_id}, this.checked)"></td>
       </tr>`).join("")}
       </tbody></table>
-      <p class="muted">Spuntando la casella l'operatore riceve i punti presenza; togliendo la spunta i punti vengono revocati.</p>`;
+      <p class="muted">Spuntando la casella l'operatore riceve i punti presenza; togliendo la spunta i punti vengono revocati.</p>
+      ${data.guests.length ? `<h3>Ospiti in prova (${data.guests.length})</h3>
+      <table><thead><tr><th>Nome</th><th>Registrato da</th><th>Presenza confermata</th><th></th></tr></thead><tbody>
+        ${data.guests.map(g => `<tr>
+          <td>${esc(g.first_name)} ${esc(g.last_name)}</td>
+          <td class="muted">${esc(g.added_by_username || "—")}</td>
+          <td><input type="checkbox" ${g.confirmed ? "checked" : ""} onchange="confirmGuest(${g.id}, this.checked)"></td>
+          <td><button class="btn small danger" onclick="deleteGuest(${g.id}, ${data.event.id})">Rimuovi</button></td>
+        </tr>`).join("")}
+      </tbody></table>
+      <p class="muted">Gli ospiti non hanno un account: la conferma registra solo la loro presenza, senza punti.</p>` : ""}`;
   }
   window._reloadAttendance = loadAttendance;
 }
@@ -571,7 +667,10 @@ function showImportResult(result) {
   try {
     await refreshMe();
     renderTabs();
-    await renderEvents();
+    const id = hashEventId();
+    if (id) await renderEventDetail(id);        // link condiviso: solo quell'evento
+    else if (isAdmin()) await renderEvents();   // calendario completo solo per admin
+    else { currentTab = "leaderboard"; renderTabs(); await renderLeaderboard(); }
   } catch (err) {
     // Non autenticato (link aperto da WhatsApp senza sessione) o errore server
     document.getElementById("content").innerHTML = `
@@ -583,8 +682,12 @@ function showImportResult(result) {
       <p class="muted">Dettaglio: ${esc(err.message)}</p>`;
   }
 })();
-// Se l'utente cambia hash (es. clic su un altro link evento nella stessa scheda)
-window.addEventListener("hashchange", () => { if (currentTab === "events") focusHashEvent(); });
+// Cambio hash: apri la vista del singolo evento, o torna alla vista di default
+window.addEventListener("hashchange", () => {
+  const id = hashEventId();
+  if (id) renderEventDetail(id);
+  else goCalendar();
+});
 </script>
 </body>
 </html>

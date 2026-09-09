@@ -1,6 +1,6 @@
 [project]
 name = "OTS-EventCalendar-Plugin"
-version = "1.4.0"
+version = "1.5.0"
 description = "Calendario eventi con RSVP, conferma presenze sul campo, punteggi e gradi militari per OpenTAKServer"
 authors = [{name = "Andrea Novati", email = "email@nov41337.online"}]
 readme = "README.md"
