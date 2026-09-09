@@ -175,6 +175,13 @@ for a in r.get("assets", []):
 
     nginx -t && systemctl reload nginx
     log "UI aggiornata a ${UI_TAG}. Backup precedente: ${UI_BACKUP}"
+
+    # Riapplica il branding personalizzato (logo/favicon), che l'update della UI sovrascrive
+    BRANDING_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/apply-branding.sh"
+    if [[ -x "${BRANDING_SCRIPT}" ]]; then
+        log "Riapplico il branding personalizzato..."
+        "${BRANDING_SCRIPT}" || warn "apply-branding.sh fallito: rilancialo a mano."
+    fi
 fi
 
 log "Fatto."
