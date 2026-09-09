@@ -37,9 +37,19 @@ Lo script fa il backup di `/home/ots/ots` in `/root/ots-backups/` (ruota gli ult
 ```
 ots/
   scripts/
-    update-ots.sh    # aggiornamento backend + UI con backup e verifica
-  # qui andranno plugin e pagine personalizzate
+    update-ots.sh                      # aggiornamento backend + UI con backup e verifica
+    install-eventcalendar-plugin.sh    # installa/aggiorna il plugin calendario nel venv
+  plugins/
+    OTS-EventCalendar-Plugin/   # calendario eventi, presenze, punteggi e gradi
 ```
+
+### Plugin
+
+- **[OTS-EventCalendar-Plugin](ots/plugins/OTS-EventCalendar-Plugin/README.md)** — calendario
+  eventi (sede dall'anagrafica campi da gioco, inizio/fine, descrizione), import da Google
+  Calendar (ICS) o CSV, RSVP utenti (presente / non presente / in dubbio, default non
+  configurato), conferma presenze sul campo da parte degli admin con assegnazione punti,
+  classifica e gradi militari con badge configurabili.
 
 ### Note
 

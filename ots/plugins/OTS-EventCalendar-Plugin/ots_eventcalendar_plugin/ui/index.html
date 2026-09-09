@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calendario Eventi</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --border: #dde1e6; --text: #1b1f24;
+    --muted: #6b7280; --accent: #2f6f3e; --accent-2: #4c8c5c;
+    --present: #2e7d32; --absent: #c62828; --maybe: #ef6c00; --neutral: #78909c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; }
+  #me-box { margin-left: auto; display: flex; align-items: center; gap: 10px; color: var(--muted); }
+  #me-box img { width: 32px; height: 32px; object-fit: contain; }
+  nav { display: flex; gap: 4px; padding: 8px 20px 0; flex-wrap: wrap; }
+  nav button { border: 1px solid var(--border); border-bottom: none; background: #eceff1; padding: 8px 14px; cursor: pointer; border-radius: 6px 6px 0 0; font-size: 13px; }
+  nav button.active { background: var(--panel); font-weight: 600; color: var(--accent); }
+  main { padding: 16px 20px 40px; }
+  section.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 0 8px 8px 8px; padding: 16px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  h3 { font-size: 13px; margin: 18px 0 8px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  th { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+  .btn { border: 1px solid var(--border); background: #fff; padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 12.5px; }
+  .btn:hover { background: #f0f2f4; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: var(--accent-2); }
+  .btn.danger { color: var(--absent); border-color: #e7bdbd; }
+  .btn.small { padding: 3px 8px; font-size: 12px; }
+  .rsvp-group { display: inline-flex; gap: 4px; }
+  .rsvp-group .btn.on-present { background: var(--present); color: #fff; border-color: var(--present); }
+  .rsvp-group .btn.on-absent { background: var(--absent); color: #fff; border-color: var(--absent); }
+  .rsvp-group .btn.on-maybe { background: var(--maybe); color: #fff; border-color: var(--maybe); }
+  .badge-chip { display: inline-flex; align-items: center; gap: 6px; }
+  .badge-chip img { width: 26px; height: 26px; object-fit: contain; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11.5px; color: #fff; }
+  .pill.present { background: var(--present); } .pill.absent { background: var(--absent); }
+  .pill.maybe { background: var(--maybe); } .pill.not_configured { background: var(--neutral); }
+  .event-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
+  .event-card.past { opacity: .65; }
+  .event-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  .event-head strong { font-size: 15px; }
+  .event-meta { color: var(--muted); font-size: 12.5px; margin: 4px 0; }
+  .event-desc { white-space: pre-wrap; margin: 6px 0; }
+  .counts { font-size: 12px; color: var(--muted); }
+  form.inline { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 14px; }
+  form.inline label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+  input, select, textarea { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; background: #fff; }
+  textarea { width: 100%; min-height: 60px; }
+  #toast { position: fixed; bottom: 16px; right: 16px; background: #263238; color: #fff; padding: 10px 16px; border-radius: 8px; display: none; max-width: 380px; z-index: 10; }
+  .muted { color: var(--muted); }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📅 Calendario Eventi</h1>
+  <div id="me-box"></div>
+</header>
+<nav id="tabs"></nav>
+<main><section class="panel" id="content">Caricamento…</section></main>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const API = location.pathname.replace(/\/ui\/?$/, "");
+let ME = null, FIELDS = [], RANKS = [];
+
+function xsrf() {
+  const m = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : "";
+}
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({}, opts.headers);
+  if (opts.method && opts.method !== "GET") {
+    const token = xsrf();
+    opts.headers["X-XSRF-TOKEN"] = token;
+    opts.headers["X-CSRFToken"] = token;
+  }
+  if (opts.body && !(opts.body instanceof FormData)) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(opts.body);
+  }
+  const res = await fetch(API + path, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* non-JSON */ }
+  if (!res.ok) throw new Error((data && data.error) || ("HTTP " + res.status));
+  return data;
+}
+function toast(msg, ok = true) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.style.background = ok ? "#2e7d32" : "#c62828";
+  el.style.display = "block";
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.style.display = "none", 4000);
+}
+function esc(s) { return (s ?? "").toString().replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function fmtDT(iso) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleString("it-IT", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+function isAdmin() { return ME && ME.roles.includes("administrator"); }
+function badgeImg(rank, size) {
+  if (!rank || !rank.badge_filename) return "";
+  return `<img src="${API}/badges/${encodeURIComponent(rank.badge_filename)}" width="${size}" height="${size}" style="object-fit:contain" alt="">`;
+}
+
+/* ---------------- Tabs ---------------- */
+const TABS = [
+  { id: "events", label: "Eventi", admin: false, render: renderEvents },
+  { id: "leaderboard", label: "Classifica", admin: false, render: renderLeaderboard },
+  { id: "attendance", label: "Presenze", admin: true, render: renderAttendance },
+  { id: "fields", label: "Campi da gioco", admin: true, render: renderFields },
+  { id: "ranks", label: "Gradi e badge", admin: true, render: renderRanks },
+  { id: "import", label: "Import", admin: true, render: renderImport },
+];
+let currentTab = "events";
+
+function renderTabs() {
+  const nav = document.getElementById("tabs");
+  nav.innerHTML = "";
+  for (const tab of TABS) {
+    if (tab.admin && !isAdmin()) continue;
+    const btn = document.createElement("button");
+    btn.textContent = tab.label;
+    btn.className = tab.id === currentTab ? "active" : "";
+    btn.onclick = () => { currentTab = tab.id; renderTabs(); tab.render(); };
+    nav.appendChild(btn);
+  }
+}
+
+async function refreshMe() {
+  ME = await api("/me");
+  const box = document.getElementById("me-box");
+  const rank = ME.rank;
+  box.innerHTML = `${rank ? badgeImg(rank, 32) : ""}
+    <span><strong>${esc(ME.username)}</strong>${rank ? " · " + esc(rank.name) : ""} · ${ME.score} punti</span>`;
+}
+
+/* ---------------- Eventi ---------------- */
+async function renderEvents() {
+  const el = document.getElementById("content");
+  el.innerHTML = "<h2>Eventi</h2><div id='ev-admin'></div><div id='ev-list'>Caricamento…</div>";
+
+  if (isAdmin()) {
+    if (!FIELDS.length) FIELDS = await api("/fields");
+    document.getElementById("ev-admin").innerHTML = `
+      <h3>Nuovo evento</h3>
+      <form class="inline" id="ev-form">
+        <label>Titolo <input name="title" required></label>
+        <label>Sede di gioco <select name="field_id" required>
+          ${FIELDS.filter(f => f.active).map(f => `<option value="${f.id}">${esc(f.name)}</option>`).join("")}
+        </select></label>
+        <label>Inizio <input type="datetime-local" name="start_time" required></label>
+        <label>Fine <input type="datetime-local" name="end_time" required></label>
+        <label style="flex:1;min-width:220px">Descrizione <input name="description"></label>
+        <button class="btn primary" type="submit">Crea evento</button>
+      </form><h3>Calendario</h3>`;
+    document.getElementById("ev-form").onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      try {
+        await api("/events", { method: "POST", body: Object.fromEntries(fd.entries()) });
+        toast("Evento creato"); renderEvents();
+      } catch (err) { toast(err.message, false); }
+    };
+  }
+
+  const events = await api("/events");
+  const list = document.getElementById("ev-list");
+  if (!events.length) { list.innerHTML = "<p class='muted'>Nessun evento in calendario.</p>"; return; }
+
+  const now = new Date();
+  list.innerHTML = events.map(ev => {
+    const past = new Date(ev.end_time) < now;
+    const st = ev.my_rsvp;
+    return `<div class="event-card ${past ? "past" : ""}">
+      <div class="event-head">
+        <strong>${esc(ev.title)}</strong>
+        <span class="pill ${st}">${{present:"Presente",absent:"Non presente",maybe:"In dubbio",not_configured:"Non configurato"}[st]}</span>
+        ${isAdmin() ? `<span style="margin-left:auto"><button class="btn small danger" onclick="delEvent(${ev.id})">Elimina</button></span>` : ""}
+      </div>
+      <div class="event-meta">📍 ${esc(ev.field ? ev.field.name : "?")}${ev.field && ev.field.address ? " — " + esc(ev.field.address) : ""}</div>
+      <div class="event-meta">🕓 ${fmtDT(ev.start_time)} → ${fmtDT(ev.end_time)}</div>
+      ${ev.description ? `<div class="event-desc">${esc(ev.description)}</div>` : ""}
+      <div class="counts">✅ ${ev.counts.present} presenti · ❌ ${ev.counts.absent} assenti · ❔ ${ev.counts.maybe} in dubbio · 🏅 ${ev.counts.confirmed} confermati sul campo</div>
+      ${past ? "" : `<div style="margin-top:8px" class="rsvp-group">
+        <button class="btn ${st === "present" ? "on-present" : ""}" onclick="rsvp(${ev.id},'present')">Presente</button>
+        <button class="btn ${st === "absent" ? "on-absent" : ""}" onclick="rsvp(${ev.id},'absent')">Non presente</button>
+        <button class="btn ${st === "maybe" ? "on-maybe" : ""}" onclick="rsvp(${ev.id},'maybe')">In dubbio</button>
+      </div>`}
+    </div>`;
+  }).join("");
+}
+async function rsvp(eventId, status) {
+  try { await api(`/events/${eventId}/rsvp`, { method: "POST", body: { status } }); renderEvents(); }
+  catch (err) { toast(err.message, false); }
+}
+async function delEvent(eventId) {
+  if (!confirm("Eliminare questo evento? I punti delle presenze confermate verranno rimossi.")) return;
+  try { await api(`/events/${eventId}`, { method: "DELETE" }); toast("Evento eliminato"); renderEvents(); }
+  catch (err) { toast(err.message, false); }
+}
+
+/* ---------------- Classifica ---------------- */
+async function renderLeaderboard() {
+  const el = document.getElementById("content");
+  el.innerHTML = "<h2>Classifica operatori</h2><div id='lb'>Caricamento…</div>";
+  RANKS = await api("/ranks");
+  const rows = await api("/leaderboard");
+  const admin = isAdmin();
+  document.getElementById("lb").innerHTML = `<table><thead><tr>
+      <th>#</th><th>Operatore</th><th>Grado</th><th>Punti</th>${admin ? "<th>Assegna grado</th><th>Punteggio</th>" : ""}
+    </tr></thead><tbody>
+    ${rows.map((r, i) => `<tr>
+      <td>${i + 1}</td>
+      <td>${esc(r.username)}</td>
+      <td><span class="badge-chip">${badgeImg(r.rank, 26)} ${r.rank ? esc(r.rank.name) : "<span class='muted'>—</span>"}${r.manual_rank_id ? " <span class='muted'>(manuale)</span>" : ""}</span></td>
+      <td><strong>${r.score}</strong></td>
+      ${admin ? `<td>
+        <select onchange="setRank(${r.user_id}, this.value)">
+          <option value="">Automatico (da punti)</option>
+          ${RANKS.map(k => `<option value="${k.id}" ${r.manual_rank_id === k.id ? "selected" : ""}>${esc(k.name)}</option>`).join("")}
+        </select></td>
+        <td><button class="btn small" onclick="editScore(${r.user_id}, ${r.score})">Modifica</button></td>` : ""}
+    </tr>`).join("")}
+    </tbody></table>`;
+}
+async function setRank(userId, rankId) {
+  try {
+    await api(`/users/${userId}/rank`, { method: "POST", body: { rank_id: rankId ? parseInt(rankId) : null } });
+    toast("Grado aggiornato"); renderLeaderboard(); refreshMe();
+  } catch (err) { toast(err.message, false); }
+}
+async function editScore(userId, current) {
+  const value = prompt("Nuovo punteggio:", current);
+  if (value === null) return;
+  try {
+    await api(`/users/${userId}/score`, { method: "POST", body: { score: parseInt(value, 10) } });
+    toast("Punteggio aggiornato"); renderLeaderboard(); refreshMe();
+  } catch (err) { toast(err.message, false); }
+}
+
+/* ---------------- Presenze (admin) ---------------- */
+async function renderAttendance() {
+  const el = document.getElementById("content");
+  const events = await api("/events");
+  el.innerHTML = `<h2>Conferma presenze sul campo</h2>
+    <form class="inline"><label>Evento
+      <select id="att-event">${events.map(ev => `<option value="${ev.id}">${fmtDT(ev.start_time)} — ${esc(ev.title)}</option>`).join("")}</select>
+    </label></form><div id="att-list"></div>`;
+  const select = document.getElementById("att-event");
+  if (!events.length) { document.getElementById("att-list").innerHTML = "<p class='muted'>Nessun evento.</p>"; return; }
+  // preseleziona l'evento più vicino a oggi
+  const now = Date.now();
+  let best = 0, bestDelta = Infinity;
+  events.forEach((ev, i) => { const d = Math.abs(new Date(ev.start_time) - now); if (d < bestDelta) { bestDelta = d; best = i; } });
+  select.selectedIndex = best;
+  select.onchange = loadAttendance;
+  await loadAttendance();
+
+  async function loadAttendance() {
+    const data = await api(`/events/${select.value}/attendance`);
+    document.getElementById("att-list").innerHTML = `<table><thead><tr>
+      <th>Operatore</th><th>Dichiarazione</th><th>Presenza confermata</th></tr></thead><tbody>
+      ${data.attendance.map(a => `<tr>
+        <td>${esc(a.username)}</td>
+        <td><span class="pill ${a.rsvp_status}">${{present:"Presente",absent:"Non presente",maybe:"In dubbio",not_configured:"Non configurato"}[a.rsvp_status]}</span></td>
+        <td><input type="checkbox" ${a.confirmed ? "checked" : ""}
+             onchange="confirmAttendance(${data.event.id}, ${a.user_id}, this.checked)"></td>
+      </tr>`).join("")}
+      </tbody></table>
+      <p class="muted">Spuntando la casella l'operatore riceve i punti presenza; togliendo la spunta i punti vengono revocati.</p>`;
+  }
+  window._reloadAttendance = loadAttendance;
+}
+async function confirmAttendance(eventId, userId, confirmed) {
+  try {
+    await api(`/events/${eventId}/attendance`, { method: "POST", body: { user_id: userId, confirmed } });
+    toast(confirmed ? "Presenza confermata (+punti)" : "Presenza revocata");
+    refreshMe();
+  } catch (err) { toast(err.message, false); window._reloadAttendance && window._reloadAttendance(); }
+}
+
+/* ---------------- Campi da gioco (admin) ---------------- */
+async function renderFields() {
+  const el = document.getElementById("content");
+  FIELDS = await api("/fields");
+  el.innerHTML = `<h2>Anagrafica campi da gioco</h2>
+    <h3>Nuovo campo</h3>
+    <form class="inline" id="field-form">
+      <label>Nome <input name="name" required></label>
+      <label>Indirizzo <input name="address"></label>
+      <label>Lat <input name="latitude" type="number" step="any" style="width:90px"></label>
+      <label>Lon <input name="longitude" type="number" step="any" style="width:90px"></label>
+      <label style="flex:1;min-width:180px">Note <input name="description"></label>
+      <button class="btn primary" type="submit">Aggiungi</button>
+    </form>
+    <table><thead><tr><th>Nome</th><th>Indirizzo</th><th>Coordinate</th><th>Note</th><th>Attivo</th><th></th></tr></thead><tbody>
+    ${FIELDS.map(f => `<tr>
+      <td><strong>${esc(f.name)}</strong></td><td>${esc(f.address || "")}</td>
+      <td class="muted">${f.latitude != null ? f.latitude + ", " + f.longitude : ""}</td>
+      <td>${esc(f.description || "")}</td>
+      <td><input type="checkbox" ${f.active ? "checked" : ""} onchange="toggleField(${f.id}, this.checked)"></td>
+      <td><button class="btn small danger" onclick="delField(${f.id})">Elimina</button></td>
+    </tr>`).join("")}
+    </tbody></table>`;
+  document.getElementById("field-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(e.target).entries());
+    if (data.latitude === "") delete data.latitude; else data.latitude = parseFloat(data.latitude);
+    if (data.longitude === "") delete data.longitude; else data.longitude = parseFloat(data.longitude);
+    try { await api("/fields", { method: "POST", body: data }); toast("Campo aggiunto"); renderFields(); }
+    catch (err) { toast(err.message, false); }
+  };
+}
+async function toggleField(id, active) {
+  try { await api(`/fields/${id}`, { method: "PUT", body: { active } }); toast("Campo aggiornato"); }
+  catch (err) { toast(err.message, false); renderFields(); }
+}
+async function delField(id) {
+  if (!confirm("Eliminare questo campo?")) return;
+  try { await api(`/fields/${id}`, { method: "DELETE" }); toast("Campo eliminato"); renderFields(); }
+  catch (err) { toast(err.message, false); }
+}
+
+/* ---------------- Gradi e badge (admin) ---------------- */
+async function renderRanks() {
+  const el = document.getElementById("content");
+  RANKS = await api("/ranks");
+  el.innerHTML = `<h2>Gradi e badge</h2>
+    <h3>Nuovo grado</h3>
+    <form class="inline" id="rank-form">
+      <label>Nome <input name="name" required></label>
+      <label>Punti minimi <input name="min_score" type="number" min="0" required style="width:110px"></label>
+      <button class="btn primary" type="submit">Aggiungi</button>
+    </form>
+    <table><thead><tr><th>Badge</th><th>Grado</th><th>Punti minimi</th><th>Carica badge</th><th></th></tr></thead><tbody>
+    ${RANKS.map(r => `<tr>
+      <td>${badgeImg(r, 34) || "<span class='muted'>—</span>"}</td>
+      <td><input value="${esc(r.name)}" onchange="updateRank(${r.id}, {name: this.value})"></td>
+      <td><input type="number" min="0" value="${r.min_score}" style="width:100px" onchange="updateRank(${r.id}, {min_score: parseInt(this.value, 10)})"></td>
+      <td><input type="file" accept="image/*" onchange="uploadBadge(${r.id}, this)"></td>
+      <td><button class="btn small danger" onclick="delRank(${r.id})">Elimina</button></td>
+    </tr>`).join("")}
+    </tbody></table>
+    <p class="muted">Il grado di un operatore è il più alto con "punti minimi" ≤ ai suoi punti, salvo assegnazione manuale dalla Classifica.</p>`;
+  document.getElementById("rank-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(e.target).entries());
+    data.min_score = parseInt(data.min_score, 10);
+    try { await api("/ranks", { method: "POST", body: data }); toast("Grado aggiunto"); renderRanks(); }
+    catch (err) { toast(err.message, false); }
+  };
+}
+async function updateRank(id, body) {
+  try { await api(`/ranks/${id}`, { method: "PUT", body }); toast("Grado aggiornato"); refreshMe(); }
+  catch (err) { toast(err.message, false); renderRanks(); }
+}
+async function uploadBadge(id, input) {
+  if (!input.files.length) return;
+  const fd = new FormData();
+  fd.append("file", input.files[0]);
+  try { await api(`/ranks/${id}/badge`, { method: "POST", body: fd }); toast("Badge caricato"); renderRanks(); refreshMe(); }
+  catch (err) { toast(err.message, false); }
+}
+async function delRank(id) {
+  if (!confirm("Eliminare questo grado?")) return;
+  try { await api(`/ranks/${id}`, { method: "DELETE" }); toast("Grado eliminato"); renderRanks(); refreshMe(); }
+  catch (err) { toast(err.message, false); }
+}
+
+/* ---------------- Import (admin) ---------------- */
+async function renderImport() {
+  const el = document.getElementById("content");
+  if (!FIELDS.length) FIELDS = await api("/fields");
+  const fieldOptions = `<option value="">— nessuno —</option>` +
+    FIELDS.map(f => `<option value="${f.id}">${esc(f.name)}</option>`).join("");
+  el.innerHTML = `<h2>Import eventi</h2>
+    <h3>Da Google Calendar (URL iCal/ICS)</h3>
+    <p class="muted">In Google Calendar: Impostazioni → Integra il calendario → "Indirizzo segreto in formato iCal".
+       Gli eventi già importati (stesso UID) vengono saltati: puoi rilanciare l'import per sincronizzare.
+       La LOCATION dell'evento viene confrontata con i nomi dei campi da gioco.</p>
+    <form class="inline" id="ics-form">
+      <label style="flex:1;min-width:280px">URL ICS <input name="url" type="url" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" required></label>
+      <label>Campo di default <select name="default_field_id">${fieldOptions}</select></label>
+      <button class="btn primary" type="submit">Importa da URL</button>
+    </form>
+    <h3>Da file CSV</h3>
+    <p class="muted">Intestazione: <code>title,description,field,start,end</code> — date in formato ISO
+       (es. <code>2026-10-04T09:00</code>), separatore <code>,</code> o <code>;</code>.
+       La colonna <code>field</code> è il nome del campo da gioco.</p>
+    <form class="inline" id="csv-form">
+      <label>File CSV <input name="file" type="file" accept=".csv,text/csv" required></label>
+      <label>Campo di default <select name="default_field_id">${fieldOptions}</select></label>
+      <button class="btn primary" type="submit">Importa CSV</button>
+    </form>
+    <div id="import-result"></div>`;
+
+  document.getElementById("ics-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      const result = await api("/import/ics", { method: "POST", body: {
+        url: fd.get("url"),
+        default_field_id: fd.get("default_field_id") || null,
+      }});
+      showImportResult(result);
+    } catch (err) { toast(err.message, false); }
+  };
+  document.getElementById("csv-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      const result = await api("/import/csv", { method: "POST", body: fd });
+      showImportResult(result);
+    } catch (err) { toast(err.message, false); }
+  };
+}
+function showImportResult(result) {
+  toast(`Importati ${result.imported}, saltati ${result.skipped}`);
+  document.getElementById("import-result").innerHTML =
+    `<p><strong>Importati:</strong> ${result.imported} · <strong>Saltati (duplicati):</strong> ${result.skipped}</p>` +
+    (result.errors.length ? `<p class="muted">Errori:<br>${result.errors.map(esc).join("<br>")}</p>` : "");
+}
+
+/* ---------------- Init ---------------- */
+(async function init() {
+  try {
+    await refreshMe();
+    renderTabs();
+    await renderEvents();
+  } catch (err) {
+    document.getElementById("content").innerHTML =
+      `<p>Errore di caricamento: ${esc(err.message)}. Assicurati di aver effettuato il login su OpenTAKServer.</p>`;
+  }
+})();
+</script>
+</body>
+</html>
