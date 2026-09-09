@@ -1,0 +1,403 @@
+<title>Manuale Operatore TAK</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper: #F3F3EC;
+    --paper-raised: #FBFBF6;
+    --ink: #1D2418;
+    --ink-soft: #4A5142;
+    --ink-faint: #7C8272;
+    --line: #D6D8C9;
+    --accent: #57683F;
+    --accent-ink: #3E4B2C;
+    --accent-wash: #E8EBDD;
+    --warn: #9A6B15;
+    --warn-wash: #F4EBD6;
+    --ok: #3E6B4F;
+    --code-bg: #24291F;
+    --code-ink: #DCE0D0;
+    --code-accent: #A8BC85;
+  }
+  :root:not([data-theme="light"]) {
+    @media (prefers-color-scheme: dark) {
+      --paper: #171A12;
+      --paper-raised: #1F231A;
+      --ink: #E2E4D8;
+      --ink-soft: #B4B9A6;
+      --ink-faint: #82887400;
+      --ink-faint: #878D78;
+      --line: #333829;
+      --accent: #97AC72;
+      --accent-ink: #B3C692;
+      --accent-wash: #252B1D;
+      --warn: #D3A44C;
+      --warn-wash: #2A2415;
+      --ok: #7FAE8F;
+      --code-bg: #10130C;
+      --code-ink: #CBD0BC;
+      --code-accent: #97AC72;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #171A12;
+    --paper-raised: #1F231A;
+    --ink: #E2E4D8;
+    --ink-soft: #B4B9A6;
+    --ink-faint: #878D78;
+    --line: #333829;
+    --accent: #97AC72;
+    --accent-ink: #B3C692;
+    --accent-wash: #252B1D;
+    --warn: #D3A44C;
+    --warn-wash: #2A2415;
+    --ok: #7FAE8F;
+    --code-bg: #10130C;
+    --code-ink: #CBD0BC;
+    --code-accent: #97AC72;
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+    font-size: 1.05rem;
+    line-height: 1.65;
+    margin: 0;
+  }
+  .wrap { max-width: 46rem; margin: 0 auto; padding: 0 1.25rem 5rem; }
+
+  /* ---------- Testata ---------- */
+  header {
+    border-bottom: 3px solid var(--accent);
+    padding: 2.5rem 0 1.5rem;
+    margin-bottom: 2.5rem;
+  }
+  .doc-meta {
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: .78rem; letter-spacing: .06em;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    margin-bottom: 1rem;
+  }
+  h1 {
+    font-family: "Saira Condensed", "Arial Narrow", sans-serif;
+    font-weight: 700; font-size: 2.9rem; line-height: 1.05;
+    text-transform: uppercase; letter-spacing: .02em;
+    margin: 0 0 .5rem; text-wrap: balance;
+  }
+  .subtitle { color: var(--ink-soft); margin: 0; max-width: 38rem; }
+
+  /* ---------- Indice ---------- */
+  nav {
+    background: var(--paper-raised);
+    border: 1px solid var(--line);
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 3rem;
+  }
+  nav .nav-title {
+    font-family: "Saira Condensed", sans-serif; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .12em; font-size: .85rem;
+    color: var(--ink-faint); margin-bottom: .75rem;
+  }
+  nav ol { margin: 0; padding: 0; list-style: none; display: grid; gap: .35rem; }
+  nav a { color: var(--ink); text-decoration: none; display: flex; gap: .75rem; }
+  nav a:hover { color: var(--accent-ink); }
+  nav .n {
+    font-family: "IBM Plex Mono", monospace; font-size: .85rem;
+    color: var(--accent); min-width: 1.6rem; font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- Sezioni ---------- */
+  section { margin-bottom: 3.25rem; }
+  h2 {
+    font-family: "Saira Condensed", sans-serif;
+    font-weight: 700; font-size: 1.85rem; text-transform: uppercase;
+    letter-spacing: .03em; line-height: 1.1;
+    display: flex; align-items: baseline; gap: .8rem;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: .5rem; margin: 0 0 1.25rem;
+    text-wrap: balance;
+  }
+  h2 .n { color: var(--accent); font-size: 1.4rem; font-variant-numeric: tabular-nums; }
+  h3 {
+    font-family: "Saira Condensed", sans-serif;
+    font-weight: 600; font-size: 1.25rem; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--accent-ink);
+    margin: 1.75rem 0 .6rem;
+  }
+  p { margin: 0 0 1rem; }
+  ul, ol { margin: 0 0 1rem; padding-left: 1.4rem; }
+  li { margin-bottom: .4rem; }
+  li::marker { color: var(--accent); font-weight: 600; }
+  strong { font-weight: 700; }
+  a { color: var(--accent-ink); }
+
+  /* ---------- Comandi ---------- */
+  pre {
+    background: var(--code-bg); color: var(--code-ink);
+    font-family: "IBM Plex Mono", Consolas, monospace;
+    font-size: .88rem; line-height: 1.55;
+    padding: .85rem 1.1rem; margin: 0 0 1rem;
+    overflow-x: auto;
+    border-left: 3px solid var(--accent);
+  }
+  pre .c { color: var(--code-accent); }
+  code {
+    font-family: "IBM Plex Mono", Consolas, monospace;
+    font-size: .88em;
+    background: var(--accent-wash); color: var(--accent-ink);
+    padding: .1em .35em;
+  }
+  pre code { background: none; color: inherit; padding: 0; }
+
+  /* ---------- Avvisi ---------- */
+  .warn, .note {
+    padding: .9rem 1.1rem; margin: 0 0 1rem;
+    border-left: 3px solid;
+  }
+  .warn { background: var(--warn-wash); border-color: var(--warn); }
+  .note { background: var(--accent-wash); border-color: var(--accent); }
+  .warn .tag, .note .tag {
+    font-family: "Saira Condensed", sans-serif; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .1em; font-size: .8rem;
+    display: block; margin-bottom: .25rem;
+  }
+  .warn .tag { color: var(--warn); }
+  .note .tag { color: var(--accent-ink); }
+  .warn p:last-child, .note p:last-child { margin-bottom: 0; }
+
+  /* ---------- Tabelle ---------- */
+  .tblwrap { overflow-x: auto; margin-bottom: 1rem; }
+  table { border-collapse: collapse; width: 100%; font-size: .95rem; }
+  th {
+    font-family: "Saira Condensed", sans-serif; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .07em; font-size: .8rem;
+    text-align: left; color: var(--ink-faint);
+    border-bottom: 2px solid var(--accent);
+    padding: .4rem .75rem .4rem 0;
+  }
+  td {
+    border-bottom: 1px solid var(--line);
+    padding: .55rem .75rem .55rem 0;
+    vertical-align: top;
+  }
+  td code { white-space: nowrap; }
+
+  footer {
+    border-top: 1px solid var(--line);
+    margin-top: 4rem; padding-top: 1rem;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: .75rem; color: var(--ink-faint);
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem;
+  }
+
+  @media print {
+    body { font-size: 10.5pt; }
+    pre { border: 1px solid #999; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="doc-meta"><span>MO-TAK-001 · Rev 2 · 2026-09-09</span><span>Server: n3test002</span></div>
+    <h1>Manuale Operatore TAK</h1>
+    <p class="subtitle">Procedure operative per il server OpenTAKServer e i client ATAK: collegamento dei dispositivi, visibilità in mappa, missioni, amministrazione e risoluzione dei problemi.</p>
+  </header>
+
+  <nav>
+    <div class="nav-title">Indice</div>
+    <ol>
+      <li><a href="#s1"><span class="n">1</span> Il sistema in breve</a></li>
+      <li><a href="#s2"><span class="n">2</span> Collegare un dispositivo (EUD)</a></li>
+      <li><a href="#s3"><span class="n">3</span> Vedersi in mappa</a></li>
+      <li><a href="#s4"><span class="n">4</span> Missioni (Data Sync)</a></li>
+      <li><a href="#s5"><span class="n">5</span> Meshtastic: la radio quando manca la rete</a></li>
+      <li><a href="#s6"><span class="n">6</span> Telemetria del dispositivo</a></li>
+      <li><a href="#s7"><span class="n">7</span> Amministrazione del server</a></li>
+      <li><a href="#s8"><span class="n">8</span> Troubleshooting rapido</a></li>
+      <li><a href="#s9"><span class="n">9</span> Riferimenti</a></li>
+    </ol>
+  </nav>
+
+  <section id="s1">
+    <h2><span class="n">1</span> Il sistema in breve</h2>
+    <p>Il server <strong>OpenTAKServer</strong> gira su <code>n3test002</code> e collega i client TAK (ATAK su Android, iTAK su iPhone, WinTAK su PC). Ogni informazione che un client invia — posizione, marker, chat, file — è un messaggio <strong>CoT</strong> (Cursor-on-Target) che attraversa questa catena:</p>
+    <pre>ATAK ──SSL 8089──▶ eud_handler ──▶ RabbitMQ ──▶ cot_parser ──▶ PostgreSQL
+                                        │                          │
+                                        ▼                          ▼
+                                 altri client                 mappa web</pre>
+    <p>Se un anello della catena è fermo, i client risultano «connessi» ma i dati non circolano (vedi sez. 7).</p>
+    <h3>Porte del server</h3>
+    <div class="tblwrap"><table>
+      <tr><th>Porta</th><th>Servizio</th><th>Uso</th></tr>
+      <tr><td><code>8089</code></td><td>CoT SSL (<code>eud_handler</code>)</td><td>Connessione dei client TAK, con certificato</td></tr>
+      <tr><td><code>8443</code></td><td>HTTPS (nginx)</td><td>API/Marti — richiede certificato client (mutual TLS)</td></tr>
+      <tr><td><code>8080</code></td><td>HTTP (nginx)</td><td>Web UI e REST</td></tr>
+      <tr><td><code>8087</code></td><td>—</td><td>TCP in chiaro: volutamente disabilitata</td></tr>
+    </table></div>
+  </section>
+
+  <section id="s2">
+    <h2><span class="n">2</span> Collegare un dispositivo (EUD)</h2>
+    <ol>
+      <li>Crea l'utente (o fai registrare l'operatore) sulla web UI del server.</li>
+      <li>Genera dal server il <strong>data package</strong> con i certificati per quel dispositivo e trasferiscilo sul telefono.</li>
+      <li>In ATAK: <em>Settings → Network Preferences → Import</em> (o importa il file dal gestore file). Il pacchetto configura da solo indirizzo, porta 8089 e certificati.</li>
+      <li>Verifica che l'icona del server (in basso a destra sulla mappa ATAK) diventi <strong>verde</strong>.</li>
+    </ol>
+    <p>Controprova lato server: web UI → pagina <strong>EUDs</strong> → il dispositivo compare con «Last event: Connected» e orario recente.</p>
+    <div class="note"><span class="tag">Nota</span><p>Un EUD può risultare «Connected» con data vecchia di mesi: è uno stato stantio rimasto dopo un riavvio del server, non significa che sia online. Fa fede l'orario dell'ultimo evento.</p></div>
+  </section>
+
+  <section id="s3">
+    <h2><span class="n">3</span> Vedersi in mappa</h2>
+    <p>La mappa web mostra ogni dispositivo <strong>all'ultima posizione che ha trasmesso</strong>. «Connesso» non basta: servono tutte queste condizioni.</p>
+    <ol>
+      <li><strong>Fix GPS sul telefono</strong> — in ATAK il proprio marker è ancorato alla posizione reale e in basso compaiono coordinate e precisione (es. <code>+/- 21 m</code>). Se vedi «NO GPS», esci all'aperto o verifica i permessi di localizzazione.</li>
+      <li><strong>Location reporting attivo</strong> — Settings → Reporting Preferences → strategia <em>Dynamic</em> o <em>Constant</em>. Da fermi gli invii si diradano (≈1/min): è normale.</li>
+      <li><strong>Connessione verde</strong> — icona server in basso a destra.</li>
+      <li><strong>Catena server sana</strong> — in particolare il servizio <code>opentakserver-cot-parser</code> (sez. 6 e 7).</li>
+    </ol>
+    <h3>Test del marker</h3>
+    <p>Distingue in un colpo i problemi di trasporto da quelli di GPS: piazza un marker dalla mappa ATAK (pressione prolungata → punto). Se il marker compare sulla mappa web, tutto il canale funziona e il problema è solo il reporting di posizione del telefono.</p>
+  </section>
+
+  <section id="s4">
+    <h2><span class="n">4</span> Missioni (Data Sync)</h2>
+    <p>Una <strong>missione</strong> è un canale di lavoro condiviso e persistente: chi si iscrive riceve tutto il contenuto (marker, disegni, foto, file) e ogni modifica successiva, incluso lo storico se entra a partita già iniziata. È cosa diversa da:</p>
+    <ul>
+      <li><strong>Channels</strong> — gruppi che segmentano chi vede chi sulla mappa generale;</li>
+      <li><strong>Data Packages</strong> — invio manuale di un singolo file a un destinatario.</li>
+    </ul>
+    <h3>Prerequisito: il plugin</h3>
+    <p>Data Sync <strong>non è incluso in ATAK base</strong>. Con ATAK installato dal Play Store: cerca «<em>ATAK Plugin Data Sync</em>» (editore TAK Product Center) sul Play Store, installalo, riapri ATAK e attivalo da <em>Tools → Plugins</em>. Serve su ogni dispositivo che partecipa.</p>
+    <div class="warn"><span class="tag">Attenzione</span><p>I plugin ATAK sono legati alla versione dell'app: usa plugin della stessa provenienza di ATAK (Play Store con Play Store). Mescolare APK di tak.gov con l'app del Play Store crea incompatibilità.</p></div>
+    <h3>Uso</h3>
+    <ol>
+      <li><strong>Creare</strong>: Tools → Data Sync → New Mission (nome, eventuale password). In alternativa dalla pagina Missions della web UI.</li>
+      <li><strong>Iscriversi</strong>: gli altri dispositivi aprono Data Sync, vedono l'elenco e fanno Subscribe.</li>
+      <li><strong>Lavorare</strong>: i contenuti si pubblicano nella missione e si sincronizzano a tutti gli iscritti; i ruoli distinguono chi può solo leggere da chi scrive.</li>
+    </ol>
+  </section>
+
+  <section id="s5">
+    <h2><span class="n">5</span> Meshtastic: la radio quando manca la rete</h2>
+    <p><strong>Meshtastic</strong> è una rete di piccole radio LoRa a lunga portata (chilometri in campo aperto) che formano una <em>mesh</em> tra loro, senza SIM né internet. Il <strong>plugin Meshtastic per ATAK</strong> — già installato sui dispositivi del gruppo — collega ATAK a una di queste radio via Bluetooth: posizioni e chat viaggiano via LoRa tra gli operatori anche dove il telefono non ha copertura dati.</p>
+    <h3>Cosa passa e cosa no</h3>
+    <ul>
+      <li><strong>Passa</strong>: posizione dei compagni, chat testuale, marker essenziali.</li>
+      <li><strong>Non passa</strong>: foto, video, data package, missioni — la banda LoRa è minima (poche decine di byte per messaggio). Meshtastic è il canale di riserva, non un sostituto del server.</li>
+    </ul>
+    <h3>Uso sul campo</h3>
+    <ol>
+      <li>Accendi la radio Meshtastic e accoppiala al telefono via <strong>Bluetooth</strong> (prima volta: dall'app Meshtastic).</li>
+      <li>Tutte le radio del gruppo devono avere la <strong>stessa configurazione di canale</strong> (stessa chiave/QR di canale, regione <code>EU_868</code>).</li>
+      <li>In ATAK: Tools → <strong>Meshtastic Plugin</strong> → verifica che la radio risulti connessa e abilita l'inoltro della propria posizione.</li>
+      <li>Gli altri operatori con radio sullo stesso canale compaiono in mappa come contatti normali.</li>
+    </ol>
+    <h3>Integrazione col server</h3>
+    <p>OpenTAKServer può fare da <strong>gateway Meshtastic</strong> via MQTT: un nodo della mesh con accesso a internet inoltra il traffico al server (RabbitMQ espone il broker MQTT), e i dispositivi raggiungibili solo via LoRa compaiono sulla mappa web come gli altri EUD. Sul server sono già presenti tracce di questa configurazione (code <code>mqtt-subscription-*</code> su RabbitMQ); la configurazione del gateway si fa dalla sezione Meshtastic della web UI.</p>
+    <div class="warn"><span class="tag">Attenzione</span><p>Come per Data Sync, la versione del plugin deve combaciare con quella di ATAK: installala dalla stessa fonte (Play Store con Play Store) e aggiornale insieme.</p></div>
+  </section>
+
+  <section id="s6">
+    <h2><span class="n">6</span> Telemetria del dispositivo</h2>
+    <p>La scheda di ogni EUD nella web UI ha quattro grafici, alimentati da due fonti diverse:</p>
+    <ul>
+      <li><strong>Batteria</strong> — arriva col normale CoT di posizione: si popola da sola quando il dispositivo trasmette (servono più campioni e un refresh della pagina).</li>
+      <li><strong>Heap, storage, traffico dati</strong> — sono le <em>metriche</em>, che ATAK invia solo se abilitate: Settings → cerca «<code>metrics</code>» → attiva raccolta e invio. Senza, restano vuoti per design.</li>
+    </ul>
+  </section>
+
+  <section id="s7">
+    <h2><span class="n">7</span> Amministrazione del server</h2>
+    <h3>Dove sta cosa</h3>
+    <div class="tblwrap"><table>
+      <tr><th>Cosa</th><th>Dove</th></tr>
+      <tr><td>Programma (venv Python)</td><td><code>/home/ots/.opentakserver_venv/</code></td></tr>
+      <tr><td>Dati, config, certificati, log</td><td><code>/home/ots/ots/</code> (<code>config.yml</code>, <code>ca/</code>, <code>logs/</code>)</td></tr>
+      <tr><td>Repo operativo (script, unit, docs)</td><td><code>/home/ots/atakcivsaas/</code> — <a href="https://github.com/novatia/atakcivsaas">github.com/novatia/atakcivsaas</a></td></tr>
+      <tr><td>Backup</td><td><code>/root/ots-backups/</code> (rotazione: ultimi 5)</td></tr>
+      <tr><td>Database</td><td>PostgreSQL, db <code>ots</code></td></tr>
+    </table></div>
+    <h3>Servizi</h3>
+    <div class="tblwrap"><table>
+      <tr><th>Servizio</th><th>Ruolo</th></tr>
+      <tr><td><code>opentakserver</code></td><td>Processo principale (Flask, API, web) — spawna gli <code>eud_handler</code></td></tr>
+      <tr><td><code>opentakserver-cot-parser</code></td><td><strong>Unit dedicata</strong>: consuma i CoT da RabbitMQ e li scrive nel DB. Il main non lo avvia da solo — senza questa unit nessun dato viene salvato.</td></tr>
+      <tr><td><code>rabbitmq-server</code></td><td>Smistamento interno dei messaggi</td></tr>
+      <tr><td><code>nginx</code></td><td>Reverse proxy 8080/8443 e web UI</td></tr>
+    </table></div>
+    <h3>Aggiornamento</h3>
+    <pre><span class="c"># dal clone del repo, come root</span>
+cd /home/ots/atakcivsaas &amp;&amp; git pull &amp;&amp; cd ots/scripts
+./update-ots.sh --check   <span class="c"># confronta installata vs PyPI</span>
+./update-ots.sh           <span class="c"># backup + upgrade + restart + verifica</span>
+./update-ots.sh --ui      <span class="c"># aggiorna anche la web UI (serve unzip)</span></pre>
+    <div class="warn"><span class="tag">Attenzione</span><p>Dopo ogni upgrade verifica che il parser giri ancora: <code>ps aux | grep cot_parser</code>. E non modificare mai i file in <code>site-packages/</code>: il prossimo upgrade li sovrascrive — le personalizzazioni vanno nel repo (plugin o config).</p></div>
+    <h3>Verifica rapida di salute</h3>
+    <pre>systemctl status opentakserver opentakserver-cot-parser --no-pager | grep -E "●|Active"
+ss -tlnp | grep -E '8080|8089|8443'
+tail -20 /home/ots/ots/logs/opentakserver.log</pre>
+  </section>
+
+  <section id="s8">
+    <h2><span class="n">8</span> Troubleshooting rapido</h2>
+    <div class="tblwrap"><table>
+      <tr><th>Sintomo</th><th>Causa probabile</th><th>Azione</th></tr>
+      <tr>
+        <td>EUD connessi ma invisibili in mappa; chat e data package non arrivano; tabelle <code>cot</code>/<code>points</code> vuote</td>
+        <td><code>cot_parser</code> non in esecuzione</td>
+        <td><code>systemctl restart opentakserver-cot-parser</code> e verifica con <code>ps aux | grep cot_parser</code></td>
+      </tr>
+      <tr>
+        <td>Un solo dispositivo non compare, gli altri sì</td>
+        <td>GPS o reporting del telefono</td>
+        <td>Checklist di sez. 3 + test del marker</td>
+      </tr>
+      <tr>
+        <td>Dispositivo non si connette (icona non verde)</td>
+        <td>Certificati / data package</td>
+        <td>Reimporta il data package; nel log cerca la riga «ID'ed by cert» della connessione</td>
+      </tr>
+      <tr>
+        <td><code>curl</code> sulla 8443 risponde <strong>400</strong> «No required SSL certificate was sent»</td>
+        <td>Nessuna: è il mutual TLS che fa il suo dovere</td>
+        <td>Niente — il test completo si fa con il certificato client</td>
+      </tr>
+      <tr>
+        <td>Log invaso da «AISStream websocket opened» o errori SkyFi</td>
+        <td>Plugin non usati che tentano connessioni esterne</td>
+        <td>Disabilita dalla UI o <code>pip uninstall</code> dal venv, poi riavvia il servizio</td>
+      </tr>
+      <tr>
+        <td>Un plugin disabilitato dalla UI continua a girare</td>
+        <td>La disabilitazione ha effetto al riavvio</td>
+        <td><code>systemctl restart opentakserver</code></td>
+      </tr>
+    </table></div>
+    <h3>Verificare i dati sul database</h3>
+    <pre>sudo -u postgres psql -d ots -c "SELECT COUNT(*) FROM cot;"
+sudo -u postgres psql -d ots -c "SELECT device_uid, battery, timestamp FROM points ORDER BY id DESC LIMIT 5;"</pre>
+    <p>Contatori che crescono mentre un client trasmette = catena sana. Fermi a zero = riparti dalla prima riga della tabella qui sopra.</p>
+    <h3>Verificare lo smistamento (RabbitMQ)</h3>
+    <pre>rabbitmqctl list_queues name messages consumers</pre>
+    <p>Ogni client connesso ha una coda di consegna col suo nome/UID. Code con messaggi accumulati e zero consumer indicano un consumer morto.</p>
+  </section>
+
+  <section id="s9">
+    <h2><span class="n">9</span> Riferimenti</h2>
+    <ul>
+      <li>Repo operativo: <a href="https://github.com/novatia/atakcivsaas">github.com/novatia/atakcivsaas</a> (script <code>update-ots.sh</code>, unit systemd, questo manuale in <code>docs/</code>)</li>
+      <li>OpenTAKServer: <a href="https://github.com/brian7704/OpenTAKServer">github.com/brian7704/OpenTAKServer</a> · documentazione: <a href="https://docs.opentakserver.io">docs.opentakserver.io</a></li>
+      <li>Rollback dati dopo un upgrade fallito: fermare il servizio, estrarre il tar da <code>/root/ots-backups/</code> in <code>/home/ots/</code>, riavviare (lo script stampa il comando esatto).</li>
+    </ul>
+  </section>
+
+  <footer>
+    <span>MO-TAK-001 · Rev 2</span>
+    <span>Aggiornato al troubleshooting del 2026-09-09</span>
+  </footer>
+</div>
