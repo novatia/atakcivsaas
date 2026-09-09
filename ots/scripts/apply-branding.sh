@@ -43,9 +43,9 @@ while IFS= read -r -d '' target; do
     cp "${BRANDING_DIR}/logo.png" "${target}"
     log "Logo sostituito: ${target}"
     FOUND=1
-done < <(find "${UI_ROOT}/assets" -maxdepth 1 -name 'ots-logo-*.png' -print0 2>/dev/null)
+done < <(find "${UI_ROOT}" -name 'ots-logo-*.png' -print0 2>/dev/null)
 
-[[ ${FOUND} -eq 1 ]] || warn "Nessun assets/ots-logo-*.png trovato in ${UI_ROOT}: build della UI diversa dal previsto?"
+[[ ${FOUND} -eq 1 ]] || warn "Nessun ots-logo-*.png trovato sotto ${UI_ROOT}: build della UI diversa dal previsto?"
 
 # ------------------------- Favicon (opzionali) -------------------------
 # Se metti questi file in ots/branding/, vengono copiati con lo stesso nome nella root della UI.
