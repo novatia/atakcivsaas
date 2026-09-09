@@ -1034,6 +1034,57 @@ class EventCalendarPlugin(Plugin):
             return "", 500
 
     # ------------------------------------------------------------------
+    # Manutenzione tabelle OTS (Alerts / CasEvac)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/maintenance/stats")
+    def maintenance_stats():
+        try:
+            from opentakserver.models.Alert import Alert
+            from opentakserver.models.CasEvac import CasEvac
+
+            return jsonify(
+                {
+                    "alerts": db.session.query(Alert).count(),
+                    "casevac": db.session.query(CasEvac).count(),
+                }
+            )
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/maintenance/clear", methods=["POST"])
+    def maintenance_clear():
+        """Svuota la tabella alerts o casevac di OpenTAKServer.
+
+        Eliminazione riga per riga cosi' scattano le cascade ORM (es. ZMIST dei CasEvac).
+        """
+        try:
+            from opentakserver.models.Alert import Alert
+            from opentakserver.models.CasEvac import CasEvac
+
+            target = (request.json or {}).get("target")
+            models = {"alerts": Alert, "casevac": CasEvac}
+            if target not in models:
+                return jsonify({"success": False, "error": "target deve essere 'alerts' o 'casevac'"}), 400
+
+            rows = db.session.query(models[target]).all()
+            deleted = len(rows)
+            for row in rows:
+                db.session.delete(row)
+            db.session.commit()
+            logger.info(f"EventCalendar maintenance: {current_user.username} deleted {deleted} rows from {target}")
+            return jsonify({"success": True, "deleted": deleted})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    # ------------------------------------------------------------------
     # Classifica e gestione punteggi/gradi utente
     # ------------------------------------------------------------------
 

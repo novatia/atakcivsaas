@@ -169,6 +169,7 @@ const TABS = [
   { id: "fields", label: "Campi da gioco", admin: true, render: renderFields },
   { id: "ranks", label: "Gradi e badge", admin: true, render: renderRanks },
   { id: "import", label: "Import", admin: true, render: renderImport },
+  { id: "maintenance", label: "Manutenzione", admin: true, render: renderMaintenance },
 ];
 let currentTab = "events";
 
@@ -661,6 +662,31 @@ function showImportResult(result) {
   document.getElementById("import-result").innerHTML =
     `<p><strong>Importati:</strong> ${result.imported} · <strong>Saltati (duplicati):</strong> ${result.skipped}</p>` +
     (result.errors.length ? `<p class="muted">Errori:<br>${result.errors.map(esc).join("<br>")}</p>` : "");
+}
+
+/* ---------------- Manutenzione (admin) ---------------- */
+async function renderMaintenance() {
+  const el = document.getElementById("content");
+  el.innerHTML = "<h2>Manutenzione dati OpenTAKServer</h2><div id='maint'>Caricamento…</div>";
+  const stats = await api("/maintenance/stats");
+  document.getElementById("maint").innerHTML = `
+    <p class="muted">Svuota le tabelle di OpenTAKServer quando si accumulano dati di test o vecchi.
+       L'operazione è definitiva e riguarda tutte le righe.</p>
+    <table style="max-width:520px"><thead><tr><th>Tabella</th><th>Righe</th><th></th></tr></thead><tbody>
+      <tr><td>Alerts (allarmi inviati dagli EUD)</td><td><strong>${stats.alerts}</strong></td>
+        <td><button class="btn danger small" onclick="clearTable('alerts', ${stats.alerts})">Svuota</button></td></tr>
+      <tr><td>CasEvac (richieste di evacuazione)</td><td><strong>${stats.casevac}</strong></td>
+        <td><button class="btn danger small" onclick="clearTable('casevac', ${stats.casevac})">Svuota</button></td></tr>
+    </tbody></table>`;
+}
+async function clearTable(target, count) {
+  if (!count) { toast("Tabella già vuota"); return; }
+  if (!confirm(`Eliminare definitivamente ${count} righe da "${target}"?`)) return;
+  try {
+    const result = await api("/maintenance/clear", { method: "POST", body: { target } });
+    toast(`Eliminate ${result.deleted} righe da ${target}`);
+    renderMaintenance();
+  } catch (err) { toast(err.message, false); }
 }
 
 /* ---------------- Init ---------------- */
