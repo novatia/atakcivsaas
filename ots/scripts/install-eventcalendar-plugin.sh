@@ -67,7 +67,14 @@ fi
 # ------------------------- Git pull (opzionale) -------------------------
 if [[ "${1:-}" == "--pull" ]]; then
     step "Aggiornamento repo (git pull)"
-    git -C "${SCRIPT_DIR}" pull --ff-only
+    # Il clone sul server è solo di deploy: scarta eventuali modifiche locali
+    # (es. chmod, edit al volo) che bloccherebbero la pull
+    BRANCH="$(git -C "${SCRIPT_DIR}" rev-parse --abbrev-ref HEAD)"
+    if ! git -C "${SCRIPT_DIR}" diff --quiet; then
+        warn "Modifiche locali nel repo: le scarto (git reset --hard)."
+    fi
+    git -C "${SCRIPT_DIR}" fetch origin
+    git -C "${SCRIPT_DIR}" reset --hard "origin/${BRANCH}"
     log "Repo a: $(git -C "${SCRIPT_DIR}" log -1 --format='%h %s')"
 fi
 

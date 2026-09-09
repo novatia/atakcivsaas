@@ -188,7 +188,8 @@ async function renderEvents() {
         <span class="pill ${st}">${{present:"Presente",absent:"Non presente",maybe:"In dubbio",not_configured:"Non configurato"}[st]}</span>
         <span style="margin-left:auto">
           <button class="btn small" onclick="copyEventLink(${ev.id})" title="Copia il link all'evento per condividerlo">📋 Copia link</button>
-          ${isAdmin() ? `<button class="btn small danger" onclick="delEvent(${ev.id})">Elimina</button>` : ""}
+          ${isAdmin() ? `<button class="btn small" onclick="editEvent(${ev.id})">✏️ Modifica</button>
+          <button class="btn small danger" onclick="delEvent(${ev.id})">Elimina</button>` : ""}
         </span>
       </div>
       <div class="event-meta">📍 ${esc(ev.field ? ev.field.name : "?")}${ev.field && ev.field.address ? " — " + esc(ev.field.address) : ""}</div>
@@ -230,6 +231,35 @@ async function copyEventLink(id) {
     // Clipboard non disponibile (permessi/iframe): mostra il testo da copiare a mano
     prompt("Copia il testo e incollalo su WhatsApp:", text);
   }
+}
+// Form di modifica evento inline nella card (solo admin)
+async function editEvent(id) {
+  const ev = (window._events || []).find(e => e.id === id);
+  if (!ev) return;
+  if (!FIELDS.length) FIELDS = await api("/fields");
+  const card = document.getElementById("event-" + id);
+  const toLocal = iso => iso ? iso.slice(0, 16) : "";
+  card.innerHTML = `
+    <form class="inline" id="edit-form-${id}" style="margin-bottom:0">
+      <label>Titolo <input name="title" required value="${esc(ev.title)}"></label>
+      <label>Sede di gioco <select name="field_id" required>
+        ${FIELDS.filter(f => f.active || f.id === ev.field_id)
+                .map(f => `<option value="${f.id}" ${f.id === ev.field_id ? "selected" : ""}>${esc(f.name)}</option>`).join("")}
+      </select></label>
+      <label>Inizio <input type="datetime-local" name="start_time" required value="${toLocal(ev.start_time)}"></label>
+      <label>Fine <input type="datetime-local" name="end_time" required value="${toLocal(ev.end_time)}"></label>
+      <label style="flex:1;min-width:220px">Descrizione <input name="description" value="${esc(ev.description || "")}"></label>
+      <button class="btn primary" type="submit">Salva</button>
+      <button class="btn" type="button" onclick="renderEvents()">Annulla</button>
+    </form>`;
+  document.getElementById("edit-form-" + id).onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api(`/events/${id}`, { method: "PUT", body: Object.fromEntries(new FormData(e.target).entries()) });
+      toast("Evento aggiornato");
+      renderEvents();
+    } catch (err) { toast(err.message, false); }
+  };
 }
 async function rsvp(eventId, status) {
   try { await api(`/events/${eventId}/rsvp`, { method: "POST", body: { status } }); renderEvents(); }
