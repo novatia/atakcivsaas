@@ -185,7 +185,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MU-TAK-002 · Rev 2 · 2026-09-09</span><span>Per operatori da smartphone</span></div>
+    <div class="doc-meta"><span>MU-TAK-002 · Rev 3 · 2026-09-09</span><span>Per operatori da smartphone</span></div>
     <div class="head-row">
       <div>
         <h1>Guida ATAK e iTAK</h1>
@@ -205,7 +205,8 @@
       <li><a href="#s5"><span class="n">5</span> Installare iTAK <span class="chip ios">iPhone</span></a></li>
       <li><a href="#s6"><span class="n">6</span> Collegarsi al server <span class="chip ios">iPhone</span></a></li>
       <li><a href="#s7"><span class="n">7</span> Primi passi sulla mappa</a></li>
-      <li><a href="#s8"><span class="n">8</span> Problemi comuni</a></li>
+      <li><a href="#s8"><span class="n">8</span> Video dal telefono (OpenTAK ICU) <span class="chip android">Android</span></a></li>
+      <li><a href="#s9"><span class="n">9</span> Problemi comuni</a></li>
     </ol>
   </nav>
 
@@ -214,7 +215,7 @@
     <p>Ti servono tre cose:</p>
     <ol>
       <li>Un <strong>account sul server</strong> del gruppo — registrati dalla pagina web del server o chiedi all'amministratore di crearti l'utenza.</li>
-      <li>Il <strong>pacchetto di collegamento</strong> per il tuo dispositivo: su Android è un file zip (<em>data package</em>) con i certificati; su iPhone di solito è un <strong>QR code</strong> da inquadrare. Te lo fornisce l'amministratore — è personale, non passarlo ad altri.</li>
+      <li>Il <strong>collegamento al server</strong>: la via normale è il <strong>QR code di enrollment</strong> (te lo fornisce l'amministratore o lo trovi nella pagina web del server): inquadrandolo, l'app si configura e il certificato viene emesso automaticamente. Dopo l'enrollment, nella pagina <strong>Data Packages</strong> della web UI (loggato col tuo account) trovi il tuo <em>data package</em> personale: uno zip con i certificati <code>.p12</code>, utile per configurare altre app (vedi sez. 8). È personale — non passarlo ad altri.</li>
       <li>Un telefono con <strong>GPS attivo</strong> e la localizzazione consentita all'app («Consenti sempre», precisione elevata): senza, gli altri non ti vedranno in mappa.</li>
     </ol>
     <div class="note"><span class="tag">Nota</span><p>ATAK (Android) e iTAK (iPhone) parlano con lo stesso server e si vedono a vicenda. ATAK è più completo e supporta i plugin; iTAK copre mappa, posizioni, chat, marker e scambio file.</p></div>
@@ -293,7 +294,25 @@
   </section>
 
   <section id="s8">
-    <h2><span class="n">8</span> Problemi comuni</h2>
+    <h2><span class="n">8</span> Video dal telefono (OpenTAK ICU) <span class="chip android">Android</span></h2>
+    <p><strong>OpenTAK ICU</strong> trasforma il telefono in una telecamera collegata al server: lo stream si vede in diretta dalla web UI e dal tool <em>Video</em> di ATAK, e la posizione della telecamera compare in mappa. Utile per riprese dal campo, postazioni fisse e — in prospettiva — per fare pratica con la catena video dei droni.</p>
+    <h3>Installazione</h3>
+    <ol>
+      <li>L'app non è sul Play Store: dal browser del telefono vai su <a href="https://github.com/brian7704/OpenTAK_ICU/releases">github.com/brian7704/OpenTAK_ICU/releases</a> e scarica il file <code>.apk</code> dell'ultima release (sezione <em>Assets</em>).</li>
+      <li>Apri il file scaricato: alla prima installazione Android chiede di <strong>consentire le app sconosciute</strong> per il browser — Impostazioni → Consenti da questa origine → Installa.</li>
+      <li>Al primo avvio concedi <strong>fotocamera, microfono e posizione</strong>.</li>
+    </ol>
+    <h3>Configurazione</h3>
+    <ol>
+      <li><strong>Stream</strong>: protocollo <code>RTSP</code>, indirizzo del server, porta <code>8554</code>, un percorso a scelta (es. <code>nova-cam</code>), autenticazione con username e password del tuo account.</li>
+      <li><strong>TAK Server</strong> (per la posizione in mappa): indirizzo del server, porta <code>8089</code>, <strong>SSL attivo</strong>. Carica il <strong>truststore</strong> e il <strong>tuo certificato</strong> — i due file <code>.p12</code> che trovi nel tuo data package (sez. 1) — con la loro password, e attiva <em>Enable ATAK Authentication</em> con le credenziali dell'account.</li>
+      <li>Avvia lo stream: comparirà nella pagina <strong>Video Streams</strong> della web UI e nel tool Video degli ATAK connessi.</li>
+    </ol>
+    <div class="note"><span class="tag">Nota</span><p>Lo streaming consuma molta batteria e molti dati mobili: per postazioni lunghe usa un powerbank e, se possibile, il WiFi.</p></div>
+  </section>
+
+  <section id="s9">
+    <h2><span class="n">9</span> Problemi comuni</h2>
     <div class="tblwrap"><table>
       <tr><th>Problema</th><th>Soluzione</th></tr>
       <tr>
@@ -325,7 +344,7 @@
   </section>
 
   <footer>
-    <span>MU-TAK-002 · Rev 2</span>
+    <span>MU-TAK-002 · Rev 3</span>
     <span>Compagno del Manuale Operatore TAK (MO-TAK-001)</span>
   </footer>
 </div>
