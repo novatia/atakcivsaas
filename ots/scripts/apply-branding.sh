@@ -21,9 +21,18 @@ die()  { echo -e "\e[1;31m[BRANDING]\e[0m $*" >&2; exit 1; }
 
 [[ -f "${BRANDING_DIR}/logo.png" ]] || die "Logo non trovato: ${BRANDING_DIR}/logo.png"
 
-# Trova la root della UI dal config nginx (stessa logica di update-ots.sh)
-UI_ROOT="${UI_ROOT:-$(grep -rhoP '^\s*root\s+\K[^;]+' /etc/nginx/sites-enabled/ 2>/dev/null | sort -u | head -1 || true)}"
-[[ -n "${UI_ROOT}" && -d "${UI_ROOT}" ]] || die "Root della UI non trovata nei config nginx. Imposta UI_ROOT e riprova."
+# Trova la root della UI: override manuale via UI_ROOT, altrimenti cerca
+# nei config nginx (tutta /etc/nginx) una root che contenga un index.html
+# (stessa logica di update-ots.sh)
+if [[ -z "${UI_ROOT:-}" ]]; then
+    while read -r candidate; do
+        if [[ -f "${candidate}/index.html" ]]; then
+            UI_ROOT="${candidate}"
+            break
+        fi
+    done < <(grep -rhoP '^\s*root\s+\K[^;]+' /etc/nginx/ 2>/dev/null | tr -d '"' | sort -u)
+fi
+[[ -n "${UI_ROOT:-}" && -d "${UI_ROOT}" ]] || die "Root della UI non trovata. Individuala con: grep -rn 'root' /etc/nginx/ | grep -v '#'  e rilancia con: UI_ROOT=/percorso/ui $0"
 log "UI servita da nginx in: ${UI_ROOT}"
 
 # ------------------------- Logo principale -------------------------
