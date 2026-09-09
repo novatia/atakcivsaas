@@ -101,12 +101,26 @@ log "Servizio attivo."
 
 # ------------------------- Verifica caricamento plugin -------------------------
 step "Verifica caricamento plugin"
-sleep 3
-if tail -n 100 "${OTS_DATA}/logs/opentakserver.log" 2>/dev/null | grep -qi "Successfully Loaded ${PLUGIN_DISTRO}"; then
+# All'avvio OTS fa prima le migrazioni DB e carica i plugin dopo:
+# facciamo polling del log fino a 60 secondi invece di un'attesa fissa.
+LOADED=""
+for _ in $(seq 1 12); do
+    if tail -n 200 "${OTS_DATA}/logs/opentakserver.log" 2>/dev/null | grep -qi "Successfully Loaded ${PLUGIN_DISTRO}"; then
+        LOADED=1
+        break
+    fi
+    echo -n "."
+    sleep 5
+done
+echo ""
+
+if [[ -n "${LOADED}" ]]; then
     log "Plugin caricato correttamente:"
-    tail -n 100 "${OTS_DATA}/logs/opentakserver.log" | grep -i "${PLUGIN_DISTRO}\|EventCalendar" | tail -n 5 || true
+    tail -n 200 "${OTS_DATA}/logs/opentakserver.log" | grep -i "EventCalendar" | tail -n 5 || true
 else
-    warn "Non trovo la conferma di caricamento nel log applicativo — ultime righe:"
+    warn "Nessuna conferma di caricamento entro 60s. Controlla manualmente con:"
+    warn "  grep -i EventCalendar ${OTS_DATA}/logs/opentakserver.log | tail"
+    warn "Ultime righe del log applicativo:"
     tail -n 30 "${OTS_DATA}/logs/opentakserver.log" 2>/dev/null || warn "Log applicativo non trovato."
 fi
 
