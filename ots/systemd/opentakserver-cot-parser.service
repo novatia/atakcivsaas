@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenTAKServer CoT Parser
+Wants=network.target rabbitmq-server.service
+After=network.target rabbitmq-server.service opentakserver.service
+PartOf=opentakserver.service
+
+[Service]
+User=ots
+WorkingDirectory=/home/ots/ots
+ExecStart=/home/ots/.opentakserver_venv/bin/cot_parser
+Restart=on-failure
+RestartSec=5s
+StandardOutput=append:/home/ots/ots/logs/opentakserver.log
+StandardError=append:/home/ots/ots/logs/opentakserver.log
+
+[Install]
+WantedBy=multi-user.target
