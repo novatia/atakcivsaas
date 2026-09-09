@@ -41,6 +41,8 @@ ots/
     install-eventcalendar-plugin.sh    # installa/aggiorna il plugin calendario nel venv
   plugins/
     OTS-EventCalendar-Plugin/   # calendario eventi, presenze, punteggi e gradi
+  systemd/
+    opentakserver-cot-parser.service   # unit per il parser CoT (vedi Troubleshooting)
 ```
 
 ### Plugin
@@ -50,6 +52,17 @@ ots/
   Calendar (ICS) o CSV, RSVP utenti (presente / non presente / in dubbio, default non
   configurato), conferma presenze sul campo da parte degli admin con assegnazione punti,
   classifica e gradi militari con badge configurabili.
+
+### Troubleshooting
+
+- **EUD connessi ma invisibili in mappa / tabelle `cot` e `points` vuote**: il main di OTS
+  non avvia il processo `cot_parser` (che consuma i CoT da RabbitMQ e li scrive nel DB),
+  nonostante `OTS_COT_PARSER_PROCESSES: 1` in `config.yml`. Soluzione: unit dedicata —
+  ```bash
+  cp ots/systemd/opentakserver-cot-parser.service /etc/systemd/system/
+  systemctl daemon-reload && systemctl enable --now opentakserver-cot-parser
+  ```
+  Dopo ogni upgrade verificare che giri: `ps aux | grep cot_parser`.
 
 ### Note
 
