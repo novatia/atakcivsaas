@@ -234,9 +234,10 @@ class EventCalendarPlugin(Plugin):
             logger.error(e)
             return jsonify({"success": False, "error": str(e)}), 500
 
-    # La UI è accessibile a tutti gli utenti loggati (non solo admin)
+    # La shell HTML della UI è pubblica così i link condivisi (es. WhatsApp) si aprono
+    # sempre; i dati restano protetti dalle API (auth_required/roles_accepted) e la
+    # pagina mostra l'invito al login se l'utente non è autenticato.
     @staticmethod
-    @auth_required()
     @blueprint.route("/ui")
     def ui():
         return send_from_directory(
@@ -244,7 +245,6 @@ class EventCalendarPlugin(Plugin):
         )
 
     @staticmethod
-    @auth_required()
     @blueprint.route("/assets/<file_name>")
     @blueprint.route("/ui/<file_name>")
     def serve(file_name):

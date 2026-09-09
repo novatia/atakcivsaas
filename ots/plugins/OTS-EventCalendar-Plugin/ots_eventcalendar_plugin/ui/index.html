@@ -43,6 +43,7 @@
   .pill.maybe { background: var(--maybe); } .pill.not_configured { background: var(--neutral); }
   .event-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
   .event-card.past { opacity: .65; }
+  .event-card.highlight { outline: 3px solid var(--accent); box-shadow: 0 0 0 6px rgba(47,111,62,.15); }
   .event-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
   .event-head strong { font-size: 15px; }
   .event-meta { color: var(--muted); font-size: 12.5px; margin: 4px 0; }
@@ -177,14 +178,18 @@ async function renderEvents() {
   if (!events.length) { list.innerHTML = "<p class='muted'>Nessun evento in calendario.</p>"; return; }
 
   const now = new Date();
+  window._events = events;
   list.innerHTML = events.map(ev => {
     const past = new Date(ev.end_time) < now;
     const st = ev.my_rsvp;
-    return `<div class="event-card ${past ? "past" : ""}">
+    return `<div class="event-card ${past ? "past" : ""}" id="event-${ev.id}">
       <div class="event-head">
         <strong>${esc(ev.title)}</strong>
         <span class="pill ${st}">${{present:"Presente",absent:"Non presente",maybe:"In dubbio",not_configured:"Non configurato"}[st]}</span>
-        ${isAdmin() ? `<span style="margin-left:auto"><button class="btn small danger" onclick="delEvent(${ev.id})">Elimina</button></span>` : ""}
+        <span style="margin-left:auto">
+          <button class="btn small" onclick="copyEventLink(${ev.id})" title="Copia il link all'evento per condividerlo">📋 Copia link</button>
+          ${isAdmin() ? `<button class="btn small danger" onclick="delEvent(${ev.id})">Elimina</button>` : ""}
+        </span>
       </div>
       <div class="event-meta">📍 ${esc(ev.field ? ev.field.name : "?")}${ev.field && ev.field.address ? " — " + esc(ev.field.address) : ""}</div>
       <div class="event-meta">🕓 ${fmtDT(ev.start_time)} → ${fmtDT(ev.end_time)}</div>
@@ -197,6 +202,34 @@ async function renderEvents() {
       </div>`}
     </div>`;
   }).join("");
+  focusHashEvent();
+}
+// Se l'URL contiene #event-<id> (link condiviso), scorri fino all'evento ed evidenzialo
+function focusHashEvent() {
+  const m = location.hash.match(/^#event-(\d+)$/);
+  if (!m) return;
+  const card = document.getElementById("event-" + m[1]);
+  if (!card) return;
+  card.classList.add("highlight");
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+  setTimeout(() => card.classList.remove("highlight"), 6000);
+}
+function eventUrl(id) {
+  return location.origin + location.pathname.replace(/\/$/, "") + "#event-" + id;
+}
+async function copyEventLink(id) {
+  const ev = (window._events || []).find(e => e.id === id);
+  const url = eventUrl(id);
+  const text = ev
+    ? `🗓 ${ev.title}\n📍 ${ev.field ? ev.field.name : ""}\n🕓 ${fmtDT(ev.start_time)} → ${fmtDT(ev.end_time)}\n${url}`
+    : url;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Link copiato! Incollalo su WhatsApp.");
+  } catch (e) {
+    // Clipboard non disponibile (permessi/iframe): mostra il testo da copiare a mano
+    prompt("Copia il testo e incollalo su WhatsApp:", text);
+  }
 }
 async function rsvp(eventId, status) {
   try { await api(`/events/${eventId}/rsvp`, { method: "POST", body: { status } }); renderEvents(); }
@@ -437,10 +470,18 @@ function showImportResult(result) {
     renderTabs();
     await renderEvents();
   } catch (err) {
-    document.getElementById("content").innerHTML =
-      `<p>Errore di caricamento: ${esc(err.message)}. Assicurati di aver effettuato il login su OpenTAKServer.</p>`;
+    // Non autenticato (link aperto da WhatsApp senza sessione) o errore server
+    document.getElementById("content").innerHTML = `
+      <h2>Accesso richiesto</h2>
+      <p>Per vedere il calendario eventi devi prima accedere con il tuo account OpenTAKServer.</p>
+      <p><a class="btn primary" style="text-decoration:none;display:inline-block"
+            href="${location.origin}/login" target="_top">Vai al login</a></p>
+      <p class="muted">Dopo il login riapri il link che hai ricevuto per arrivare direttamente all'evento.</p>
+      <p class="muted">Dettaglio: ${esc(err.message)}</p>`;
   }
 })();
+// Se l'utente cambia hash (es. clic su un altro link evento nella stessa scheda)
+window.addEventListener("hashchange", () => { if (currentTab === "events") focusHashEvent(); });
 </script>
 </body>
 </html>

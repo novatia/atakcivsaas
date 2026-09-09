@@ -66,6 +66,13 @@ dei gradi di default.
 - Tutti gli utenti loggati: `https://<server>/api/plugins/ots_eventcalendar_plugin/ui`
   (comodo da linkare nel menu o come location nginx dedicata, es. `/calendario`).
 
+### Link diretto a un evento (WhatsApp)
+
+Ogni evento ha il bottone **📋 Copia link**, che mette negli appunti un messaggio pronto da
+incollare (titolo, campo, orari) con il link diretto `…/ui#event-<id>`. Chi apre il link
+arriva sulla pagina con l'evento evidenziato; se non è loggato vede l'invito al login di
+OpenTAKServer (la pagina è pubblica, i dati restano protetti dalle API).
+
 ## Configurazione (`~/ots/config.yml`)
 
 | Chiave | Default | Descrizione |
