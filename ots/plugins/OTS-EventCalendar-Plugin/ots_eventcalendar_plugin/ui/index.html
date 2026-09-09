@@ -677,14 +677,19 @@ async function renderMaintenance() {
         <td><button class="btn danger small" onclick="clearTable('alerts', ${stats.alerts})">Svuota</button></td></tr>
       <tr><td>CasEvac (richieste di evacuazione)</td><td><strong>${stats.casevac}</strong></td>
         <td><button class="btn danger small" onclick="clearTable('casevac', ${stats.casevac})">Svuota</button></td></tr>
-    </tbody></table>`;
+      <tr><td>Markers (punti disegnati sulla mappa)</td><td><strong>${stats.markers}</strong></td>
+        <td><button class="btn danger small" onclick="clearTable('markers', ${stats.markers})">Svuota</button></td></tr>
+    </tbody></table>
+    <p class="muted">Per i marker viene trasmesso anche il CoT di cancellazione, così spariscono
+       pure dalle mappe degli ATAK collegati.</p>`;
 }
 async function clearTable(target, count) {
   if (!count) { toast("Tabella già vuota"); return; }
   if (!confirm(`Eliminare definitivamente ${count} righe da "${target}"?`)) return;
   try {
     const result = await api("/maintenance/clear", { method: "POST", body: { target } });
-    toast(`Eliminate ${result.deleted} righe da ${target}`);
+    if (result.warning) toast(result.warning, false);
+    else toast(`Eliminate ${result.deleted} righe da ${target}`);
     renderMaintenance();
   } catch (err) { toast(err.message, false); }
 }

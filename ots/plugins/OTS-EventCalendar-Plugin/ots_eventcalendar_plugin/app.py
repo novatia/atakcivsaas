@@ -1,10 +1,12 @@
 import csv
 import io
+import json
 import os
 import pathlib
 import traceback
 import uuid
-from datetime import datetime
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
 
 import yaml
 from flask import (
@@ -118,6 +120,63 @@ def _serialize_guests(event: CalendarEvent) -> list[dict]:
         data["can_delete"] = admin or guest.added_by == current_user.id
         guests.append(data)
     return guests
+
+
+def _broadcast_marker_deletions(markers) -> bool:
+    """Trasmette il CoT di cancellazione (t-x-d-d) per ogni marker, come fa
+    l'endpoint DELETE /api/markers di OTS, cosi' i marker spariscono anche
+    dagli EUD collegati. Ritorna False se la pubblicazione su RabbitMQ fallisce."""
+    try:
+        import pika
+        from opentakserver.functions import iso8601_string_from_datetime
+
+        credentials = pika.PlainCredentials(
+            app.config.get("OTS_RABBITMQ_USERNAME"), app.config.get("OTS_RABBITMQ_PASSWORD")
+        )
+        connection = pika.BlockingConnection(
+            pika.ConnectionParameters(
+                host=app.config.get("OTS_RABBITMQ_SERVER_ADDRESS"), credentials=credentials
+            )
+        )
+        channel = connection.channel()
+
+        for marker in markers:
+            now = datetime.now(timezone.utc)
+            event = ET.Element(
+                "event",
+                {
+                    "how": "h-g-i-g-o",
+                    "type": "t-x-d-d",
+                    "version": "2.0",
+                    "uid": marker.uid,
+                    "start": iso8601_string_from_datetime(now),
+                    "time": iso8601_string_from_datetime(now),
+                    "stale": iso8601_string_from_datetime(now + timedelta(minutes=10)),
+                },
+            )
+            ET.SubElement(
+                event, "point", {"ce": "9999999", "le": "9999999", "hae": "0", "lat": "0", "lon": "0"}
+            )
+            detail = ET.SubElement(event, "detail")
+            cot_type = marker.cot.type if marker.cot else "a-u-G"
+            ET.SubElement(detail, "link", {"relation": "p-p", "uid": marker.uid, "type": cot_type})
+
+            body = json.dumps(
+                {"cot": ET.tostring(event).decode("utf-8"), "uid": app.config["OTS_NODE_ID"]}
+            )
+            properties = pika.BasicProperties(expiration=app.config.get("OTS_RABBITMQ_TTL"))
+            channel.basic_publish(
+                exchange="cot_parser", routing_key="cot_parser", body=body, properties=properties
+            )
+            channel.basic_publish(exchange="firehose", routing_key="", body=body, properties=properties)
+
+        channel.close()
+        connection.close()
+        return True
+    except BaseException as e:
+        logger.error(f"EventCalendar maintenance: failed to broadcast marker deletions: {e}")
+        logger.debug(traceback.format_exc())
+        return False
 
 
 def _match_field(name: str | None, default_field_id: int | None):
@@ -1044,11 +1103,13 @@ class EventCalendarPlugin(Plugin):
         try:
             from opentakserver.models.Alert import Alert
             from opentakserver.models.CasEvac import CasEvac
+            from opentakserver.models.Marker import Marker
 
             return jsonify(
                 {
                     "alerts": db.session.query(Alert).count(),
                     "casevac": db.session.query(CasEvac).count(),
+                    "markers": db.session.query(Marker).count(),
                 }
             )
         except BaseException as e:
@@ -1066,19 +1127,33 @@ class EventCalendarPlugin(Plugin):
         try:
             from opentakserver.models.Alert import Alert
             from opentakserver.models.CasEvac import CasEvac
+            from opentakserver.models.Marker import Marker
 
             target = (request.json or {}).get("target")
-            models = {"alerts": Alert, "casevac": CasEvac}
+            models = {"alerts": Alert, "casevac": CasEvac, "markers": Marker}
             if target not in models:
-                return jsonify({"success": False, "error": "target deve essere 'alerts' o 'casevac'"}), 400
+                return jsonify({"success": False, "error": "target deve essere 'alerts', 'casevac' o 'markers'"}), 400
 
             rows = db.session.query(models[target]).all()
             deleted = len(rows)
+
+            # Per i marker trasmetti anche il CoT di cancellazione agli EUD collegati
+            broadcast_ok = True
+            if target == "markers" and rows:
+                broadcast_ok = _broadcast_marker_deletions(rows)
+
             for row in rows:
                 db.session.delete(row)
             db.session.commit()
             logger.info(f"EventCalendar maintenance: {current_user.username} deleted {deleted} rows from {target}")
-            return jsonify({"success": True, "deleted": deleted})
+
+            result = {"success": True, "deleted": deleted}
+            if not broadcast_ok:
+                result["warning"] = (
+                    "Marker eliminati dal database, ma la notifica agli EUD è fallita: "
+                    "sugli ATAK collegati potrebbero restare finché non si riconnettono."
+                )
+            return jsonify(result)
         except BaseException as e:
             db.session.rollback()
             logger.error(traceback.format_exc())
