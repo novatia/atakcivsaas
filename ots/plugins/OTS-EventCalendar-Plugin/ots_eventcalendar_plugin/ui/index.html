@@ -575,6 +575,15 @@ async function renderPlayers() {
       <label>Callsign <input name="callsign"></label>
       <button class="btn primary" type="submit">Aggiungi</button>
     </form>
+    <h3>Import da CSV (export Excel)</h3>
+    <p class="muted">Intestazione: <code>nome,cognome,callsign</code> — separatore <code>,</code> o <code>;</code>
+       (in Excel: Salva con nome → CSV). I giocatori già presenti (stesso nome+cognome o stesso callsign)
+       vengono saltati, quindi puoi rilanciare l'import con il foglio aggiornato.</p>
+    <form class="inline" id="players-csv-form">
+      <label>File CSV <input name="file" type="file" accept=".csv,text/csv" required></label>
+      <button class="btn primary" type="submit">Importa giocatori</button>
+    </form>
+    <div id="players-import-result"></div>
     <table><thead><tr><th>Nome</th><th>Cognome</th><th>Callsign</th><th>Account OTS</th><th></th></tr></thead><tbody>
     ${active.map(p => `<tr>
       <td><input value="${esc(p.first_name)}" onchange="updatePlayer(${p.id}, {first_name: this.value})"></td>
@@ -610,6 +619,17 @@ async function renderPlayers() {
       await api("/players", { method: "POST", body: Object.fromEntries(new FormData(e.target).entries()) });
       toast("Giocatore aggiunto");
       renderPlayers();
+    } catch (err) { toast(err.message, false); }
+  };
+  document.getElementById("players-csv-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const result = await api("/players/import/csv", { method: "POST", body: new FormData(e.target) });
+      toast(`Importati ${result.imported}, saltati ${result.skipped}`);
+      await renderPlayers();
+      document.getElementById("players-import-result").innerHTML =
+        `<p><strong>Importati:</strong> ${result.imported} · <strong>Saltati (già presenti):</strong> ${result.skipped}</p>` +
+        (result.errors.length ? `<p class="muted">Errori:<br>${result.errors.map(esc).join("<br>")}</p>` : "");
     } catch (err) { toast(err.message, false); }
   };
 }

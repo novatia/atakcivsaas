@@ -1412,6 +1412,94 @@ class EventCalendarPlugin(Plugin):
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 400
 
+    # Import giocatori da CSV (export Excel)
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/players/import/csv", methods=["POST"])
+    def import_players_csv():
+        """CSV con intestazione: nome,cognome,callsign (o first_name,last_name,callsign).
+
+        Separatore , o ; (qualsiasi export CSV di Excel). Righe duplicate
+        (stesso nome+cognome o stesso callsign già in anagrafica) vengono saltate.
+        """
+        try:
+            if "file" not in request.files:
+                return jsonify({"success": False, "error": "Nessun file caricato"}), 400
+
+            content = request.files["file"].read().decode("utf-8-sig", errors="replace")
+            try:
+                dialect = csv.Sniffer().sniff(content.splitlines()[0], delimiters=",;")
+            except BaseException:
+                dialect = csv.excel
+
+            # Alias di intestazione accettati -> campo interno
+            aliases = {
+                "nome": "first_name",
+                "first_name": "first_name",
+                "cognome": "last_name",
+                "last_name": "last_name",
+                "callsign": "callsign",
+                "nickname": "callsign",
+                "soprannome": "callsign",
+            }
+
+            existing_names = {
+                (p.first_name.strip().lower(), p.last_name.strip().lower())
+                for p in db.session.query(Player).all()
+                if (p.first_name or p.last_name)
+            }
+            existing_callsigns = {
+                p.callsign.strip().lower()
+                for p in db.session.query(Player).all()
+                if p.callsign
+            }
+
+            reader = csv.DictReader(io.StringIO(content), dialect=dialect)
+            imported, skipped, errors = 0, 0, []
+            for index, line in enumerate(reader, start=2):
+                try:
+                    row = {}
+                    for key, value in line.items():
+                        field = aliases.get((key or "").strip().lower())
+                        if field:
+                            row[field] = (value or "").strip()
+
+                    first_name = row.get("first_name", "")
+                    last_name = row.get("last_name", "")
+                    callsign = row.get("callsign", "") or None
+                    if not (first_name or last_name or callsign):
+                        continue  # riga vuota
+
+                    name_key = (first_name.lower(), last_name.lower())
+                    if (first_name or last_name) and name_key in existing_names:
+                        skipped += 1
+                        continue
+                    if callsign and callsign.lower() in existing_callsigns:
+                        skipped += 1
+                        continue
+
+                    db.session.add(
+                        Player(first_name=first_name, last_name=last_name, callsign=callsign)
+                    )
+                    existing_names.add(name_key)
+                    if callsign:
+                        existing_callsigns.add(callsign.lower())
+                    imported += 1
+                except BaseException as e:
+                    errors.append(f"Riga {index}: {e}")
+
+            db.session.commit()
+            logger.info(
+                f"EventCalendar: {current_user.username} imported {imported} players from CSV"
+            )
+            return jsonify(
+                {"success": True, "imported": imported, "skipped": skipped, "errors": errors}
+            )
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
     # Account OTS disponibili per l'associazione a un giocatore
     @staticmethod
     @roles_accepted("administrator")
