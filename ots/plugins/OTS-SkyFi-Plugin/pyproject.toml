@@ -1,6 +1,6 @@
 [project]
 name = "OTS-SkyFi-Plugin"
-version = "1.0.0"
+version = "1.1.0"
 description = "Ordini SkyFi su OpenTAKServer: lista asset acquistati, download deliverable e data package ATAK (fork di brian7704/OTS-SkyFi-Plugin)"
 authors = [{name = "Andrea Novati", email = "email@nov41337.online"}]
 readme = "README.md"

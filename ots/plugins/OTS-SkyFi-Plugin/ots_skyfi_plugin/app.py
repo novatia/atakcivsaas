@@ -3,14 +3,19 @@
 # download dei deliverable (image/payload/cog/view-ready) via proxy, dato che
 # il browser non può chiamare l'API SkyFi direttamente per via del CORS.
 import base64
+import datetime
+import hashlib
+import json
 import mimetypes
 import os
 import pathlib
 import re
 import traceback
+import uuid
 from urllib.parse import unquote, urlparse
 from xml.etree.ElementTree import Element, SubElement, tostring
 
+import pika
 import requests
 import yaml
 from flask import (
@@ -23,10 +28,15 @@ from flask import (
     send_from_directory,
     stream_with_context,
 )
-from flask_security import roles_accepted
+from flask_security import current_user, roles_accepted
+from sqlalchemy import insert
 
 from opentakserver.blueprints.marti_api.data_package_marti_api import create_data_package_zip
-from opentakserver.extensions import logger
+from opentakserver.extensions import db, logger
+from opentakserver.models.Mission import Mission
+from opentakserver.models.MissionChange import MissionChange, generate_mission_change_cot
+from opentakserver.models.MissionContent import MissionContent
+from opentakserver.models.MissionContentMission import MissionContentMission
 from opentakserver.plugins.Plugin import Plugin
 
 from .default_config import DefaultConfig
@@ -48,6 +58,22 @@ def _get_order(uid: str) -> dict | None:
 
 def _safe_name(name: str) -> str:
     return re.sub(r"[^\w.\- ]+", "_", name).strip() or "SkyFi"
+
+
+def _deliverable_filename(response: requests.Response, order: dict, uid: str, deliverable_type: str) -> str:
+    """Nome file del deliverable: Content-Disposition di SkyFi, altrimenti
+    basename dell'URL firmato, altrimenti ricostruito da ordine + content-type."""
+    disposition = response.headers.get("Content-Disposition", "")
+    match = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', disposition)
+    if match:
+        return _safe_name(os.path.basename(unquote(match.group(1))))
+
+    url_name = os.path.basename(urlparse(response.url).path)
+    if url_name and "." in url_name:
+        return _safe_name(unquote(url_name))
+
+    ext = mimetypes.guess_extension(response.headers.get("Content-Type", "").split(";")[0]) or ""
+    return _safe_name(f"SkyFi-{order.get('orderCode', uid)}-{deliverable_type}{ext}")
 
 
 class SkyFiPlugin(Plugin):
@@ -256,24 +282,11 @@ class SkyFiPlugin(Plugin):
                 logger.error(f"Deliverable {deliverable_type} for {uid} failed: {r.status_code}")
                 return jsonify({"success": False, "error": f"Download fallito: HTTP {r.status_code}"}), r.status_code
 
-            # Nome file: Content-Disposition di SkyFi, altrimenti basename
-            # dell'URL firmato, altrimenti ricostruito da ordine + content-type
-            filename = None
-            disposition = r.headers.get("Content-Disposition", "")
-            match = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', disposition)
-            if match:
-                filename = os.path.basename(unquote(match.group(1)))
-            if not filename:
-                url_name = os.path.basename(urlparse(r.url).path)
-                if url_name and "." in url_name:
-                    filename = unquote(url_name)
-            if not filename:
-                ext = mimetypes.guess_extension(r.headers.get("Content-Type", "").split(";")[0]) or ""
-                filename = f"SkyFi-{order.get('orderCode', uid)}-{deliverable_type}{ext}"
+            filename = _deliverable_filename(r, order, uid, deliverable_type)
 
             headers = {
                 "Content-Type": r.headers.get("Content-Type", "application/octet-stream"),
-                "Content-Disposition": f'attachment; filename="{_safe_name(filename)}"',
+                "Content-Disposition": f'attachment; filename="{filename}"',
             }
             if r.headers.get("Content-Length"):
                 headers["Content-Length"] = r.headers["Content-Length"]
@@ -336,5 +349,180 @@ class SkyFiPlugin(Plugin):
             return jsonify({"success": True, "name": package_name}), 200
         except BaseException as e:
             logger.error(f"Failed to create data package for {uid}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # Missioni (Data Sync)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/missions", methods=["GET"])
+    def get_missions():
+        try:
+            missions = db.session.execute(db.session.query(Mission)).scalars().all()
+            return jsonify(
+                [
+                    {
+                        "name": m.name,
+                        "guid": m.guid,
+                        "description": m.description,
+                        "password_protected": bool(m.password_protected),
+                    }
+                    for m in missions
+                ]
+            )
+        except BaseException as e:
+            logger.error(f"Failed to get missions: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/orders/<uid>/mission", methods=["POST"])
+    def assign_to_mission(uid: str):
+        """Scarica un deliverable da SkyFi e lo aggiunge come contenuto di una
+        missione Data Sync, replicando il flusso di /Marti/sync/upload +
+        PUT /Marti/api/missions/<name>/contents: gli EUD iscritti ricevono il
+        CoT di mission change e scaricano il file da /Marti/sync/content."""
+        body = request.json or {}
+        mission_name = body.get("mission")
+        deliverable_type = body.get("deliverable_type", "payload")
+
+        if not mission_name:
+            return jsonify({"success": False, "error": "Manca il nome della missione"}), 400
+        if deliverable_type not in DELIVERABLE_TYPES:
+            return jsonify({"success": False, "error": f"Tipo non valido: {deliverable_type}"}), 400
+
+        try:
+            mission = db.session.execute(
+                db.session.query(Mission).filter_by(name=mission_name)
+            ).scalar()
+            if not mission:
+                return jsonify({"success": False, "error": f"Missione non trovata: {mission_name}"}), 404
+
+            order = _get_order(uid)
+            if not order:
+                return jsonify({"success": False, "error": "Ordine non trovato su SkyFi"}), 404
+
+            # Download in streaming nella cartella missioni, con hash calcolato al volo
+            missions_folder = os.path.join(app.config.get("OTS_DATA_FOLDER"), "missions")
+            os.makedirs(missions_folder, exist_ok=True)
+
+            r = requests.get(
+                f"{BASE_URL}/orders/{uid}/{deliverable_type}",
+                headers=_headers(),
+                stream=True,
+                allow_redirects=True,
+                timeout=(10, 600),
+            )
+            if r.status_code != 200:
+                return jsonify({"success": False, "error": f"Download da SkyFi fallito: HTTP {r.status_code}"}), r.status_code
+
+            filename = _deliverable_filename(r, order, uid, deliverable_type)
+            mime_type = r.headers.get("Content-Type", "application/octet-stream").split(";")[0]
+
+            sha256 = hashlib.sha256()
+            size = 0
+            tmp_path = os.path.join(missions_folder, f".skyfi-{uuid.uuid4().hex}.part")
+            try:
+                with open(tmp_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=1024 * 1024):
+                        sha256.update(chunk)
+                        size += len(chunk)
+                        f.write(chunk)
+                file_hash = sha256.hexdigest()
+                # /Marti/sync/content serve i contenuti missione per nome file
+                os.replace(tmp_path, os.path.join(missions_folder, filename))
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+
+            username = current_user.username if current_user else "SkyFi-Plugin"
+
+            # Stesso flusso di /Marti/sync/upload: MissionContent riusato se lo
+            # stesso file (hash) è già presente
+            content = db.session.execute(
+                db.session.query(MissionContent).filter_by(hash=file_hash)
+            ).scalar()
+            if not content:
+                content = MissionContent()
+                content.mime_type = mime_type
+                content.filename = filename
+                content.submission_time = datetime.datetime.now(datetime.timezone.utc)
+                content.submitter = username
+                content.uid = str(uuid.uuid4())
+                content.creator_uid = username
+                content.size = size
+                content.expiration = -1
+                content.keywords = ["skyfi", order.get("orderCode", uid)]
+                content.hash = file_hash
+                db.session.execute(insert(MissionContent).values(**content.serialize()))
+                db.session.commit()
+                content = db.session.execute(
+                    db.session.query(MissionContent).filter_by(hash=file_hash)
+                ).scalar()
+            elif content.filename != filename:
+                # Il file su disco è stato salvato col nuovo nome: allinea il DB
+                content.filename = filename
+                db.session.add(content)
+                db.session.commit()
+
+            # Associazione alla missione + MissionChange, come PUT /Marti/api/missions/<name>/contents
+            already_assigned = db.session.execute(
+                db.session.query(MissionContentMission).filter_by(
+                    mission_content_id=content.id, mission_name=mission_name
+                )
+            ).first()
+            if already_assigned:
+                return jsonify(
+                    {"success": True, "filename": filename, "mission": mission_name, "already_assigned": True}
+                )
+
+            mission_content_mission = MissionContentMission()
+            mission_content_mission.mission_name = mission_name
+            mission_content_mission.mission_content_id = content.id
+            db.session.add(mission_content_mission)
+
+            mission_change = MissionChange()
+            mission_change.isFederatedChange = False
+            mission_change.change_type = MissionChange.ADD_CONTENT
+            mission_change.content_uid = content.uid
+            mission_change.mission_name = mission_name
+            mission_change.timestamp = datetime.datetime.now(datetime.timezone.utc)
+            mission_change.creator_uid = username
+            mission_change.server_time = datetime.datetime.now(datetime.timezone.utc)
+            db.session.add(mission_change)
+            db.session.commit()
+
+            # Notifica gli EUD iscritti col CoT di mission change; se RabbitMQ non
+            # risponde il contenuto resta comunque associato (gli EUD lo vedono
+            # alla prossima sincronizzazione)
+            try:
+                event = generate_mission_change_cot(mission_name, mission, mission_change, content=content)
+                message = json.dumps({"uid": username, "cot": tostring(event).decode("utf-8")})
+                rabbit_credentials = pika.PlainCredentials(
+                    app.config.get("OTS_RABBITMQ_USERNAME"), app.config.get("OTS_RABBITMQ_PASSWORD")
+                )
+                rabbit_connection = pika.BlockingConnection(
+                    pika.ConnectionParameters(
+                        host=app.config.get("OTS_RABBITMQ_SERVER_ADDRESS"),
+                        credentials=rabbit_credentials,
+                    )
+                )
+                channel = rabbit_connection.channel()
+                channel.basic_publish("missions", routing_key=f"missions.{mission_name}", body=message)
+                channel.close()
+                rabbit_connection.close()
+            except BaseException as e:
+                logger.warning(f"SkyFi: contenuto assegnato ma notifica missione fallita: {e}")
+
+            logger.info(f"SkyFi: {filename} ({size} bytes) assegnato alla missione {mission_name} da {username}")
+            return jsonify(
+                {"success": True, "filename": filename, "mission": mission_name, "hash": file_hash, "size": size}
+            )
+        except BaseException as e:
+            logger.error(f"Failed to assign order {uid} to mission: {e}")
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 500

@@ -67,6 +67,13 @@
   .order-meta { font-size: 12px; color: var(--muted); line-height: 1.5; }
   .order-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 8px; }
   .pager { display: flex; align-items: center; gap: 10px; justify-content: center; margin-top: 16px; }
+  #modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 20; }
+  #modal-backdrop.hidden { display: none; }
+  .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; width: min(420px, 92vw); display: flex; flex-direction: column; gap: 12px; }
+  .modal h2 { margin: 0; }
+  .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  .modal select { width: 100%; }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 </style>
 <script>
   // Applica subito il tema salvato per evitare il flash chiaro/scuro al caricamento
@@ -87,6 +94,25 @@
 <nav id="tabs"></nav>
 <main><section class="panel" id="content">Caricamento…</section></main>
 <div id="toast"></div>
+<div id="modal-backdrop" class="hidden" onclick="closeMissionModal()">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h2>🎯 Assegna a missione</h2>
+    <div id="modal-order" class="muted"></div>
+    <label>Missione (Data Sync)
+      <select id="mission-select"></select>
+    </label>
+    <label>Asset da inviare
+      <select id="deliverable-select"></select>
+    </label>
+    <p class="muted" style="margin:0">Il file viene scaricato da SkyFi sul server e aggiunto ai contenuti
+      della missione: gli EUD iscritti ricevono la notifica e possono scaricarlo. Per file grandi
+      (payload/COG) il trasferimento può richiedere qualche minuto.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeMissionModal()">Annulla</button>
+      <button class="btn primary" id="assign-btn" onclick="assignToMission()">Assegna</button>
+    </div>
+  </div>
+</div>
 
 <script>
 "use strict";
@@ -181,6 +207,7 @@ function switchTab(id) {
 
 /* ---------------- Ordini ---------------- */
 let PAGE = 0, PAGE_SIZE = 9, SEARCH = "", TOTAL = 0;
+let ORDERS_BY_UID = {};
 
 // La delivery passa per vari stati SkyFi: verde = consegnato, rosso = fallito
 function statusPill(status) {
@@ -242,6 +269,9 @@ async function loadOrders() {
     return;
   }
 
+  ORDERS_BY_UID = {};
+  orders.forEach(o => ORDERS_BY_UID[o.id || o.orderId] = o);
+
   const pages = Math.max(1, Math.ceil(TOTAL / PAGE_SIZE));
   box.innerHTML = `
     <div class="orders-grid">${orders.map(orderCard).join("")}</div>
@@ -278,6 +308,8 @@ function orderCard(o) {
             title="Scarica il deliverable ${d.label}">⬇ ${d.label}${d.size ? " (" + fmtBytes(d.size) + ")" : ""}</button>`).join("")}
         ${o.tilesUrl ? `<button class="btn primary" onclick="dataPackage(this, '${esc(uid)}')"
             title="Crea un data package con i tile per ATAK/EUD">📦 Data package ATAK</button>` : ""}
+        ${dls.length ? `<button class="btn" onclick="openMissionModal('${esc(uid)}')"
+            title="Aggiunge un asset ai contenuti di una missione Data Sync">🎯 Missione</button>` : ""}
         ${!dls.length && !o.tilesUrl ? '<span class="muted">nessun asset scaricabile (delivery non completata)</span>' : ""}
       </div>
     </div>
@@ -323,6 +355,74 @@ async function dataPackage(btn, uid) {
     toast("Errore data package: " + e.message, false);
   } finally {
     btn.disabled = false;
+  }
+}
+
+/* ---------------- Assegnazione a missione ---------------- */
+let MODAL_UID = null;
+
+async function openMissionModal(uid) {
+  const order = ORDERS_BY_UID[uid];
+  if (!order) return;
+  MODAL_UID = uid;
+
+  let missions;
+  try {
+    missions = await api("/missions");
+  } catch (e) {
+    if (e.message === "AUTH") return authMessage();
+    return toast("Errore caricamento missioni: " + e.message, false);
+  }
+  if (!missions.length) {
+    return toast("Nessuna missione sul server: creane una dalla web UI di OTS o da ATAK (Data Sync).", false);
+  }
+
+  document.getElementById("modal-order").textContent =
+    `Ordine ${order.orderCode}${order.geocodeLocation ? " — " + order.geocodeLocation : ""}`;
+  document.getElementById("mission-select").innerHTML = missions.map(m =>
+    `<option value="${esc(m.name)}">${esc(m.name)}${m.password_protected ? " 🔒" : ""}${m.description ? " — " + esc(m.description) : ""}</option>`
+  ).join("");
+
+  const dls = deliverables(order);
+  document.getElementById("deliverable-select").innerHTML = dls.map(d =>
+    `<option value="${d.type}" ${d.type === "payload" ? "selected" : ""}>${d.label}${d.size ? " (" + fmtBytes(d.size) + ")" : ""}</option>`
+  ).join("");
+
+  const btn = document.getElementById("assign-btn");
+  btn.disabled = false;
+  btn.textContent = "Assegna";
+  document.getElementById("modal-backdrop").classList.remove("hidden");
+}
+
+function closeMissionModal() {
+  document.getElementById("modal-backdrop").classList.add("hidden");
+  MODAL_UID = null;
+}
+
+async function assignToMission() {
+  if (!MODAL_UID) return;
+  const btn = document.getElementById("assign-btn");
+  btn.disabled = true;
+  btn.textContent = "Trasferimento…";
+  try {
+    const res = await api(`/orders/${encodeURIComponent(MODAL_UID)}/mission`, {
+      method: "POST",
+      body: {
+        mission: document.getElementById("mission-select").value,
+        deliverable_type: document.getElementById("deliverable-select").value,
+      },
+    });
+    if (res.already_assigned) {
+      toast(`"${res.filename}" era già nei contenuti della missione "${res.mission}".`);
+    } else {
+      toast(`"${res.filename}" aggiunto alla missione "${res.mission}": gli EUD iscritti sono stati notificati.`);
+    }
+    closeMissionModal();
+  } catch (e) {
+    if (e.message === "AUTH") return authMessage();
+    toast("Errore assegnazione: " + e.message, false);
+    btn.disabled = false;
+    btn.textContent = "Assegna";
   }
 }
 

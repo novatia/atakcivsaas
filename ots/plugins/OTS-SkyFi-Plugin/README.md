@@ -20,6 +20,10 @@ richiesto.
   l'API key non raggiunge mai il client.
 - **Data package ATAK**: per gli ordini con tile WMTS crea un data package
   (Google Hybrid + layer SkyFi) pronto per gli EUD, come nell'upstream.
+- **Assegna a missione**: un deliverable (payload di default) viene scaricato
+  da SkyFi sul server e aggiunto ai contenuti di una missione Data Sync — gli
+  EUD iscritti ricevono il CoT di mission change e scaricano il file da
+  `/Marti/sync/content`, come se fosse stato caricato da ATAK.
 - **Configurazione**: API key modificabile dalla UI, salvata in `config.yml`.
 
 ## Configurazione
