@@ -185,7 +185,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MU-TAK-002 · Rev 4 · 2026-09-09</span><span>Per operatori da smartphone</span></div>
+    <div class="doc-meta"><span>MU-TAK-002 · Rev 5 · 2026-09-15</span><span>Per operatori da smartphone</span></div>
     <div class="head-row">
       <div>
         <h1>Guida ATAK e iTAK</h1>
@@ -227,7 +227,9 @@
       <li>Apri il <strong>Play Store</strong> e cerca «<strong>ATAK-CIV</strong>». L'editore corretto è <em>TAK Product Center</em>. Installa.</li>
       <li>Al primo avvio accetta l'informativa e concedi i permessi richiesti. Quello che conta davvero è la <strong>posizione</strong>: scegli «Consenti sempre» con <strong>posizione precisa</strong>.</li>
       <li>La procedura guidata chiede il <strong>callsign</strong> (il tuo nome in mappa — scegli quello assegnato dal gruppo), la squadra (colore) e il ruolo. Si possono cambiare in seguito da Settings.</li>
+      <li>Installa anche <strong>Binary Eye</strong> dal Play Store (lettore QR gratuito, open source e senza pubblicità): serve per i QR code del server (enrollment e data package), che usano link <code>tak://</code>. Con Binary Eye inquadri il codice e tocchi <strong>«Apri»</strong>: si apre direttamente ATAK.</li>
     </ol>
+    <div class="note"><span class="tag">Nota</span><p>Non usare l'app fotocamera per i QR code del server: la maggior parte delle fotocamere apre i link <code>tak://</code> nel browser, dove non funzionano (pagina di errore o ricerca Google). È un limite delle fotocamere, non un problema del telefono o di ATAK.</p></div>
     <div class="warn"><span class="tag">Attenzione</span><p>Disattiva l'<strong>ottimizzazione batteria</strong> per ATAK (Impostazioni Android → App → ATAK → Batteria → «Senza restrizioni»). Altrimenti Android chiude l'app in background e sparisci dalla mappa appena spegni lo schermo.</p></div>
   </section>
 
@@ -347,12 +349,16 @@
         <td>Non trovo Data Sync su iPhone</td>
         <td>Non esiste per iTAK: i plugin sono solo per ATAK su Android.</td>
       </tr>
+      <tr>
+        <td>Scansiono il QR del server ma si apre il browser con un errore</td>
+        <td>La fotocamera non gestisce i link <code>tak://</code> e li scarica sul browser, che non sa aprirli. Usa <strong>Binary Eye</strong> (sez. 2): scansiona e tocca «Apri». In alternativa scarica lo zip dalla web UI del server e importalo da Tools → Import → Local SD.</td>
+      </tr>
     </table></div>
     <p>Per tutto il resto — e per ottenere il pacchetto di collegamento — il riferimento è l'<strong>amministratore del server</strong>.</p>
   </section>
 
   <footer>
-    <span>MU-TAK-002 · Rev 4</span>
+    <span>MU-TAK-002 · Rev 5</span>
     <span>Compagno del Manuale Operatore TAK (MO-TAK-001)</span>
   </footer>
 </div>
