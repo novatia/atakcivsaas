@@ -204,7 +204,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MA-TAK-001 · Rev 5 · 2026-09-15</span><span>Server: n3test002</span></div>
+    <div class="doc-meta"><span>MA-TAK-001 · Rev 6 · 2026-09-15</span><span>Server: n3test002</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Amministratore<br>Tactical Scout Codogno</h1>
@@ -224,8 +224,9 @@
       <li><a href="#s5"><span class="n">5</span> Meshtastic: la radio quando manca la rete</a></li>
       <li><a href="#s6"><span class="n">6</span> Telemetria del dispositivo</a></li>
       <li><a href="#s7"><span class="n">7</span> Amministrazione del server</a></li>
-      <li><a href="#s8"><span class="n">8</span> Troubleshooting rapido</a></li>
-      <li><a href="#s9"><span class="n">9</span> Riferimenti</a></li>
+      <li><a href="#s8"><span class="n">8</span> Aggiornamento dei plugin sviluppati</a></li>
+      <li><a href="#s9"><span class="n">9</span> Troubleshooting rapido</a></li>
+      <li><a href="#s10"><span class="n">10</span> Riferimenti</a></li>
     </ol>
   </nav>
 
@@ -352,7 +353,67 @@ tail -20 /home/ots/ots/logs/opentakserver.log</pre>
   </section>
 
   <section id="s8">
-    <h2><span class="n">8</span> Troubleshooting rapido</h2>
+    <h2><span class="n">8</span> Aggiornamento dei plugin sviluppati</h2>
+    <p>Oltre a OpenTAKServer (sez. 7), sul server girano due plugin sviluppati internamente, mantenuti in questo repo sotto <code>ots/plugins/</code>. Ognuno ha il suo script di aggiornamento in <code>ots/scripts/</code>:</p>
+    <div class="tblwrap"><table>
+      <tr><th>Plugin</th><th>Script</th><th>UI</th></tr>
+      <tr><td><code>OTS-SkyFi-Plugin</code> (fork con UI inclusa)</td><td><code>update-skyfi-plugin.sh</code></td><td><code>/api/plugins/ots_skyfi_plugin/ui</code> (solo administrator)</td></tr>
+      <tr><td><code>OTS-EventCalendar-Plugin</code></td><td><code>install-eventcalendar-plugin.sh</code></td><td><code>/api/plugins/ots_eventcalendar_plugin/ui</code></td></tr>
+    </table></div>
+    <div class="note"><span class="tag">Perché git pull da solo non basta</span><p>Il codice e la UI dei plugin <strong>non</strong> vengono serviti dal clone del repo (<code>/home/ots/atakcivsaas</code>): girano dal <strong>pacchetto pip installato nel venv</strong> (<code>/home/ots/.opentakserver_venv</code>), UI statica compresa. Dopo un <code>git pull</code> il sorgente nel clone è aggiornato ma il venv contiene ancora il pacchetto vecchio: anche riavviando il servizio non cambia nulla. Serve la <strong>reinstallazione</strong> del pacchetto nel venv — che è esattamente ciò che fanno gli script qui sotto.</p></div>
+    <h3>Procedura standard</h3>
+    <p>Un solo comando per plugin, come root: fa git pull, reinstalla il pacchetto nel venv e riavvia il servizio, con verifica finale.</p>
+    <pre><span class="c"># SkyFi</span>
+sudo /home/ots/atakcivsaas/ots/scripts/update-skyfi-plugin.sh --pull
+<span class="c"># EventCalendar</span>
+sudo /home/ots/atakcivsaas/ots/scripts/install-eventcalendar-plugin.sh --pull</pre>
+    <p>Nell'ordine, lo script:</p>
+    <ol>
+      <li><strong>Preflight</strong> — verifica venv, sorgente del plugin e unit systemd; mostra la versione installata.</li>
+      <li><strong>Git pull</strong> (con <code>--pull</code>) — allinea il clone a <code>origin</code> con <code>fetch</code> + <code>reset --hard</code>.</li>
+      <li><strong>Reinstallazione</strong> — <code>pip install --upgrade</code> dalla directory del plugin, eseguito come utente <code>ots</code> nel venv (lo stesso comando fa sia prima installazione che update). Per SkyFi controlla anche che <code>ui/index.html</code> sia finita nel pacchetto.</li>
+      <li><strong>Riavvio</strong> — <code>systemctl restart opentakserver</code>.</li>
+      <li><strong>Verifica</strong> — attende fino a 60 s la riga «Successfully Loaded …» nel log applicativo e controlla che le porte 8080/8443 siano in ascolto.</li>
+    </ol>
+    <p>Ultimo passo, <strong>sul browser</strong>: apri la pagina della UI del plugin e forza il refresh con <strong>Ctrl+F5</strong> (Cmd+Shift+R su Mac) — la <code>index.html</code> può restare in cache e mostrarti ancora la versione precedente.</p>
+    <h3>Solo controllo versione</h3>
+    <pre>sudo /home/ots/atakcivsaas/ots/scripts/update-skyfi-plugin.sh --check
+sudo /home/ots/atakcivsaas/ots/scripts/install-eventcalendar-plugin.sh --check</pre>
+    <p>Con <code>--check</code> lo script mostra la versione installata nel venv senza toccare nulla. Senza opzioni, invece, reinstalla quello che è già presente nel clone (utile se hai già fatto tu il <code>git pull</code>).</p>
+    <div class="warn"><span class="tag">Attenzione</span><p>Con <code>--pull</code> eventuali modifiche locali nel clone sul server vengono <strong>scartate</strong> (<code>git reset --hard</code>): il clone in <code>/home/ots/atakcivsaas</code> è solo di deploy. Le modifiche ai plugin si fanno in sviluppo e passano da git.</p></div>
+    <h3>Troubleshooting aggiornamento plugin</h3>
+    <div class="tblwrap"><table>
+      <tr><th>Sintomo</th><th>Causa probabile</th><th>Azione</th></tr>
+      <tr>
+        <td>Dopo l'aggiornamento non vedo le modifiche o i nuovi tab nella UI</td>
+        <td><code>index.html</code> in cache del browser</td>
+        <td><strong>Ctrl+F5</strong> sulla pagina del plugin; se non basta, svuota la cache. Conferma la versione installata con <code>--check</code></td>
+      </tr>
+      <tr>
+        <td>Ho fatto <code>git pull</code> e riavviato, ma non cambia niente</td>
+        <td>Il codice gira dal pacchetto pip nel venv, non dal clone</td>
+        <td>Lancia lo script di update (anche senza <code>--pull</code>): è la reinstallazione che applica le modifiche</td>
+      </tr>
+      <tr>
+        <td>Nessuna riga «Successfully Loaded» nel log entro 60 s</td>
+        <td>Errore del plugin all'avvio</td>
+        <td><code>grep -i skyfi /home/ots/ots/logs/opentakserver.log | tail</code> (o <code>-i eventcalendar</code>)</td>
+      </tr>
+      <tr>
+        <td>Servizio non attivo dopo il riavvio</td>
+        <td>Installazione fallita</td>
+        <td><code>journalctl -u opentakserver -n 30</code>; per tornare indietro: <code>sudo -u ots /home/ots/.opentakserver_venv/bin/pip uninstall --yes OTS-SkyFi-Plugin</code> e riavvia il servizio</td>
+      </tr>
+      <tr>
+        <td>SkyFi risulta in versione <code>0.0.0</code></td>
+        <td>È installato l'upstream da GitHub, senza UI</td>
+        <td>Lancia <code>update-skyfi-plugin.sh</code>: la 0.0.0 viene sostituita dal fork del repo</td>
+      </tr>
+    </table></div>
+  </section>
+
+  <section id="s9">
+    <h2><span class="n">9</span> Troubleshooting rapido</h2>
     <div class="tblwrap"><table>
       <tr><th>Sintomo</th><th>Causa probabile</th><th>Azione</th></tr>
       <tr>
@@ -395,17 +456,17 @@ sudo -u postgres psql -d ots -c "SELECT device_uid, battery, timestamp FROM poin
     <p>Ogni client connesso ha una coda di consegna col suo nome/UID. Code con messaggi accumulati e zero consumer indicano un consumer morto.</p>
   </section>
 
-  <section id="s9">
-    <h2><span class="n">9</span> Riferimenti</h2>
+  <section id="s10">
+    <h2><span class="n">10</span> Riferimenti</h2>
     <ul>
-      <li>Repo operativo: <a href="https://github.com/novatia/atakcivsaas">github.com/novatia/atakcivsaas</a> (script <code>update-ots.sh</code>, unit systemd, questo manuale in <code>docs/</code>)</li>
+      <li>Repo operativo: <a href="https://github.com/novatia/atakcivsaas">github.com/novatia/atakcivsaas</a> (script <code>update-ots.sh</code> e di aggiornamento plugin in <code>ots/scripts/</code>, unit systemd, questo manuale in <code>docs/</code>)</li>
       <li>OpenTAKServer: <a href="https://github.com/brian7704/OpenTAKServer">github.com/brian7704/OpenTAKServer</a> · documentazione: <a href="https://docs.opentakserver.io">docs.opentakserver.io</a></li>
       <li>Rollback dati dopo un upgrade fallito: fermare il servizio, estrarre il tar da <code>/root/ots-backups/</code> in <code>/home/ots/</code>, riavviare (lo script stampa il comando esatto).</li>
     </ul>
   </section>
 
   <footer>
-    <span>MA-TAK-001 · Rev 5</span>
-    <span>Aggiornato al troubleshooting del 2026-09-09</span>
+    <span>MA-TAK-001 · Rev 6</span>
+    <span>Aggiornato con le procedure di aggiornamento plugin del 2026-09-15</span>
   </footer>
 </div>
