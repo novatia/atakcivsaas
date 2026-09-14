@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SkyFi — Ordini</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f5f6f8; --panel: #ffffff; --border: #dde1e6; --text: #1b1f24;
+    --muted: #6b7280; --accent: #1d5b8f; --accent-2: #2e77b3;
+    --ok: #2e7d32; --err: #c62828; --warn: #ef6c00; --neutral: #78909c;
+    --tab: #eceff1; --btn: #ffffff; --btn-hover: #f0f2f4; --input: #ffffff;
+    --preview-bg: #e8ebee;
+  }
+  /* Modalità notte: automatica dal sistema, forzabile con il bottone 🌙/☀️ */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #14181c; --panel: #1e242b; --border: #333d47; --text: #e4e8ec;
+      --muted: #93a0ad; --accent: #3d84c0; --accent-2: #5599cc;
+      --ok: #43a047; --err: #e05555; --warn: #f58c2e; --neutral: #8aa0ae;
+      --tab: #262d35; --btn: #262d35; --btn-hover: #2f3842; --input: #171c21;
+      --preview-bg: #10141a;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #14181c; --panel: #1e242b; --border: #333d47; --text: #e4e8ec;
+    --muted: #93a0ad; --accent: #3d84c0; --accent-2: #5599cc;
+    --ok: #43a047; --err: #e05555; --warn: #f58c2e; --neutral: #8aa0ae;
+    --tab: #262d35; --btn: #262d35; --btn-hover: #2f3842; --input: #171c21;
+    --preview-bg: #10141a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; }
+  #header-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  nav { display: flex; gap: 4px; padding: 8px 20px 0; flex-wrap: wrap; }
+  nav button { border: 1px solid var(--border); border-bottom: none; background: var(--tab); color: var(--text); padding: 8px 14px; cursor: pointer; border-radius: 6px 6px 0 0; font-size: 13px; }
+  nav button.active { background: var(--panel); font-weight: 600; color: var(--accent); }
+  main { padding: 16px 20px 40px; }
+  section.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 0 8px 8px 8px; padding: 16px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  .btn { border: 1px solid var(--border); background: var(--btn); color: var(--text); padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 12.5px; }
+  .btn:hover { background: var(--btn-hover); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: var(--accent-2); }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11px; color: #fff; text-transform: uppercase; letter-spacing: .03em; }
+  .pill.ok { background: var(--ok); } .pill.err { background: var(--err); }
+  .pill.warn { background: var(--warn); } .pill.neutral { background: var(--neutral); }
+  form.inline { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 14px; }
+  form.inline label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+  input, select { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; background: var(--input); color: var(--text); }
+  #toast { position: fixed; bottom: 16px; right: 16px; background: #263238; color: #fff; padding: 10px 16px; border-radius: 8px; display: none; max-width: 380px; z-index: 10; }
+  .muted { color: var(--muted); }
+
+  .orders-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+  .order-card { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
+  .order-preview { background: var(--preview-bg); aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; overflow: hidden; }
+  .order-preview img { width: 100%; height: 100%; object-fit: cover; }
+  .order-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+  .order-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .order-head strong { font-size: 14px; }
+  .order-meta { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .order-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 8px; }
+  .pager { display: flex; align-items: center; gap: 10px; justify-content: center; margin-top: 16px; }
+</style>
+<script>
+  // Applica subito il tema salvato per evitare il flash chiaro/scuro al caricamento
+  try {
+    const saved = localStorage.getItem("skyfi_theme");
+    if (saved === "dark" || saved === "light") document.documentElement.dataset.theme = saved;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<header>
+  <h1>🛰️ SkyFi — Ordini e asset</h1>
+  <div id="header-right">
+    <span id="total-box" class="muted"></span>
+    <button class="btn" id="theme-btn" onclick="toggleTheme()" title="Modalità notte/giorno">🌙</button>
+  </div>
+</header>
+<nav id="tabs"></nav>
+<main><section class="panel" id="content">Caricamento…</section></main>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const API = location.pathname.replace(/\/ui\/?$/, "");
+
+function xsrf() {
+  const m = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : "";
+}
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({}, opts.headers);
+  if (opts.method && opts.method !== "GET") {
+    const token = xsrf();
+    opts.headers["X-XSRF-TOKEN"] = token;
+    opts.headers["X-CSRFToken"] = token;
+  }
+  if (opts.body && !(opts.body instanceof FormData)) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(opts.body);
+  }
+  const res = await fetch(API + path, opts);
+  if (res.status === 401 || res.status === 403) throw new Error("AUTH");
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* non-JSON */ }
+  if (!res.ok) throw new Error((data && data.error) || ("HTTP " + res.status));
+  return data;
+}
+function toast(msg, ok = true) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.style.background = ok ? "#2e7d32" : "#c62828";
+  el.style.display = "block";
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.style.display = "none", 5000);
+}
+function esc(s) { return (s ?? "").toString().replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function fmtDT(iso) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleString("it-IT", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+function fmtBytes(n) {
+  if (n == null) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return n.toFixed(n >= 100 || i === 0 ? 0 : 1) + " " + units[i];
+}
+function fmtCost(cents) {
+  if (cents == null) return "";
+  return (cents / 100).toLocaleString("it-IT", { style: "currency", currency: "USD" });
+}
+function authMessage() {
+  document.getElementById("content").innerHTML =
+    '<p>Sessione scaduta o permessi insufficienti: accedi alla web UI di OpenTAKServer come <b>administrator</b> e riapri il plugin.</p>';
+}
+
+/* ---------------- Modalità notte ---------------- */
+function isDarkNow() {
+  const t = document.documentElement.dataset.theme;
+  if (t) return t === "dark";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+function updateThemeButton() {
+  const btn = document.getElementById("theme-btn");
+  if (btn) btn.textContent = isDarkNow() ? "☀️" : "🌙";
+}
+function toggleTheme() {
+  const next = isDarkNow() ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("skyfi_theme", next); } catch (e) {}
+  updateThemeButton();
+}
+updateThemeButton();
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", updateThemeButton);
+
+/* ---------------- Tabs ---------------- */
+const TABS = [
+  { id: "orders", label: "Ordini", render: renderOrders },
+  { id: "config", label: "Configurazione", render: renderConfig },
+];
+let currentTab = "orders";
+function renderTabs() {
+  document.getElementById("tabs").innerHTML = TABS.map(t =>
+    `<button class="${t.id === currentTab ? "active" : ""}" onclick="switchTab('${t.id}')">${t.label}</button>`
+  ).join("");
+}
+function switchTab(id) {
+  currentTab = id;
+  renderTabs();
+  TABS.find(t => t.id === id).render();
+}
+
+/* ---------------- Ordini ---------------- */
+let PAGE = 0, PAGE_SIZE = 9, SEARCH = "", TOTAL = 0;
+
+// La delivery passa per vari stati SkyFi: verde = consegnato, rosso = fallito
+function statusPill(status) {
+  const s = (status || "").toUpperCase();
+  let cls = "neutral";
+  if (s === "DELIVERY_COMPLETED") cls = "ok";
+  else if (s.endsWith("_FAILED")) cls = "err";
+  else if (s.includes("PENDING") || s === "CREATED" || s === "STARTED") cls = "warn";
+  return `<span class="pill ${cls}">${esc(s.replaceAll("_", " ") || "?")}</span>`;
+}
+
+function deliverables(o) {
+  const list = [];
+  if (o.downloadImageUrl) list.push({ type: "image", label: "Immagine" });
+  if (o.downloadPayloadUrl) list.push({ type: "payload", label: "Payload", size: o.payloadSize });
+  if (o.downloadCogUrl) list.push({ type: "cog", label: "COG", size: o.cogSize });
+  if (o.downloadViewReadyCogUrl) list.push({ type: "view-ready", label: "View-ready", size: o.viewReadyCogSize });
+  return list;
+}
+
+async function renderOrders() {
+  const el = document.getElementById("content");
+  el.innerHTML = `
+    <form class="inline" onsubmit="event.preventDefault(); PAGE = 0; loadOrders();">
+      <label>Cerca (località, codice, stato…)
+        <input id="search" value="${esc(SEARCH)}" placeholder="es. Milano">
+      </label>
+      <label>Per pagina
+        <select id="page-size" onchange="PAGE_SIZE = +this.value; PAGE = 0; loadOrders();">
+          ${[9, 18, 50].map(n => `<option ${n === PAGE_SIZE ? "selected" : ""}>${n}</option>`).join("")}
+        </select>
+      </label>
+      <button class="btn primary">Cerca</button>
+      <button class="btn" type="button" onclick="loadOrders()">↻ Aggiorna</button>
+    </form>
+    <div id="orders-box">Caricamento ordini…</div>`;
+  loadOrders();
+}
+
+async function loadOrders() {
+  const box = document.getElementById("orders-box");
+  const searchEl = document.getElementById("search");
+  if (searchEl) SEARCH = searchEl.value.trim();
+  box.textContent = "Caricamento ordini…";
+  let data;
+  try {
+    data = await api(`/orders?page=${PAGE}&page_size=${PAGE_SIZE}${SEARCH ? "&search=" + encodeURIComponent(SEARCH) : ""}`);
+  } catch (e) {
+    if (e.message === "AUTH") return authMessage();
+    box.innerHTML = `<p>⚠️ ${esc(e.message)}</p><p class="muted">Se non hai ancora inserito l'API key SkyFi, vai nel tab <b>Configurazione</b>.</p>`;
+    return;
+  }
+
+  TOTAL = data.total ?? 0;
+  document.getElementById("total-box").textContent = TOTAL ? `${TOTAL} ordini` : "";
+  const orders = data.orders || [];
+  if (!orders.length) {
+    box.innerHTML = "<p>Nessun ordine trovato.</p>";
+    return;
+  }
+
+  const pages = Math.max(1, Math.ceil(TOTAL / PAGE_SIZE));
+  box.innerHTML = `
+    <div class="orders-grid">${orders.map(orderCard).join("")}</div>
+    <div class="pager">
+      <button class="btn" onclick="PAGE--; loadOrders();" ${PAGE <= 0 ? "disabled" : ""}>← Precedente</button>
+      <span class="muted">pagina ${PAGE + 1} di ${pages}</span>
+      <button class="btn" onclick="PAGE++; loadOrders();" ${PAGE >= pages - 1 ? "disabled" : ""}>Successiva →</button>
+    </div>`;
+  loadPreviews(orders);
+}
+
+function orderCard(o) {
+  const uid = o.id || o.orderId;
+  const title = o.orderLabel || o.label || o.orderCode;
+  const dls = deliverables(o);
+  const meta = [
+    [o.geocodeLocation, o.resolution].filter(Boolean).join(" · "),
+    [o.orderType, o.productType].filter(Boolean).join(" · "),
+    [o.aoiSqkm ? o.aoiSqkm.toFixed(1) + " km²" : null, fmtCost(o.orderCost), fmtDT(o.createdAt)].filter(Boolean).join(" · "),
+  ].filter(Boolean).map(esc).join("<br>");
+
+  return `
+  <div class="order-card">
+    <div class="order-preview" id="preview-${esc(uid)}">anteprima…</div>
+    <div class="order-body">
+      <div class="order-head">
+        <strong>${esc(title)}</strong>
+        <span class="muted">${esc(o.orderCode)}</span>
+        ${statusPill(o.status)}
+      </div>
+      <div class="order-meta">${meta}</div>
+      <div class="order-actions">
+        ${dls.map(d => `<button class="btn" onclick="downloadDeliverable('${esc(uid)}', '${d.type}')"
+            title="Scarica il deliverable ${d.label}">⬇ ${d.label}${d.size ? " (" + fmtBytes(d.size) + ")" : ""}</button>`).join("")}
+        ${o.tilesUrl ? `<button class="btn primary" onclick="dataPackage(this, '${esc(uid)}')"
+            title="Crea un data package con i tile per ATAK/EUD">📦 Data package ATAK</button>` : ""}
+        ${!dls.length && !o.tilesUrl ? '<span class="muted">nessun asset scaricabile (delivery non completata)</span>' : ""}
+      </div>
+    </div>
+  </div>`;
+}
+
+// Le anteprime passano dal backend (CORS) come data-URI: le carico in sequenza
+// per non aprire troppe richieste verso SkyFi in parallelo
+async function loadPreviews(orders) {
+  for (const o of orders) {
+    const uid = o.id || o.orderId;
+    const el = document.getElementById(`preview-${uid}`);
+    if (!el) continue; // cambio pagina nel frattempo
+    try {
+      const res = await fetch(`${API}/orders/${encodeURIComponent(uid)}/image`);
+      if (!res.ok) throw new Error(res.status);
+      const dataUri = await res.text();
+      const current = document.getElementById(`preview-${uid}`);
+      if (current) current.innerHTML = `<img src="${dataUri}" alt="anteprima ${esc(o.orderCode)}">`;
+    } catch (e) {
+      const current = document.getElementById(`preview-${uid}`);
+      if (current) current.textContent = "anteprima non disponibile";
+    }
+  }
+}
+
+function downloadDeliverable(uid, type) {
+  toast("Download avviato: il file arriva dal proxy del server, può richiedere un po'…");
+  const a = document.createElement("a");
+  a.href = `${API}/orders/${encodeURIComponent(uid)}/download/${type}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function dataPackage(btn, uid) {
+  btn.disabled = true;
+  try {
+    const res = await api(`/orders/${encodeURIComponent(uid)}/data_package`, { method: "POST" });
+    toast(`Data package "${res.name}" creato: ora è tra i data package di OTS, scaricabile dagli EUD.`);
+  } catch (e) {
+    if (e.message === "AUTH") return authMessage();
+    toast("Errore data package: " + e.message, false);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ---------------- Configurazione ---------------- */
+async function renderConfig() {
+  const el = document.getElementById("content");
+  let cfg = {};
+  try {
+    cfg = await api("/config");
+  } catch (e) {
+    if (e.message === "AUTH") return authMessage();
+    el.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
+    return;
+  }
+  el.innerHTML = `
+    <h2>Configurazione SkyFi</h2>
+    <p class="muted">L'API key si genera su <b>app.skyfi.com</b> → Profile → API Key (richiede un account SkyFi Pro).
+       Viene salvata in <code>config.yml</code> sul server e non lascia mai il backend.</p>
+    <form class="inline" onsubmit="event.preventDefault(); saveConfig();">
+      <label>API key
+        <input id="api-key" type="password" size="42" value="${esc(cfg.OTS_SKYFI_PLUGIN_API_KEY || "")}" autocomplete="off">
+      </label>
+      <button class="btn" type="button" onclick="const k = document.getElementById('api-key'); k.type = k.type === 'password' ? 'text' : 'password';">👁</button>
+      <button class="btn primary">Salva</button>
+      <button class="btn" type="button" onclick="testConnection(this)">Prova connessione</button>
+    </form>
+    <p id="test-result" class="muted"></p>`;
+}
+
+async function saveConfig() {
+  try {
+    await api("/config", { method: "POST", body: { OTS_SKYFI_PLUGIN_API_KEY: document.getElementById("api-key").value.trim() } });
+    toast("Configurazione salvata.");
+  } catch (e) {
+    if (e.message === "AUTH") return authMessage();
+    toast("Errore salvataggio: " + e.message, false);
+  }
+}
+
+async function testConnection(btn) {
+  const out = document.getElementById("test-result");
+  btn.disabled = true;
+  out.textContent = "Verifica in corso…";
+  try {
+    const data = await api("/orders?page=0&page_size=1");
+    out.textContent = `✅ Connessione OK: ${data.total ?? 0} ordini sull'account.`;
+  } catch (e) {
+    if (e.message === "AUTH") return authMessage();
+    out.textContent = "❌ " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ---------------- Avvio ---------------- */
+renderTabs();
+renderOrders();
+</script>
+</body>
+</html>
