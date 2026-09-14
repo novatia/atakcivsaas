@@ -67,6 +67,12 @@
   .order-meta { font-size: 12px; color: var(--muted); line-height: 1.5; }
   .order-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 8px; }
   .pager { display: flex; align-items: center; gap: 10px; justify-content: center; margin-top: 16px; }
+  table.contents { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  table.contents th, table.contents td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
+  table.contents th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  table.contents td.actions { white-space: nowrap; text-align: right; }
+  .filename { word-break: break-all; font-weight: 600; }
+  .kw { display: inline-block; background: var(--tab); border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px; font-size: 11px; color: var(--muted); margin-right: 4px; }
   #modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 20; }
   #modal-backdrop.hidden { display: none; }
   .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; width: min(420px, 92vw); display: flex; flex-direction: column; gap: 12px; }
@@ -191,6 +197,7 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", upd
 /* ---------------- Tabs ---------------- */
 const TABS = [
   { id: "orders", label: "Ordini", render: renderOrders },
+  { id: "missions", label: "Missioni", render: renderMissions },
   { id: "config", label: "Configurazione", render: renderConfig },
 ];
 let currentTab = "orders";
@@ -423,6 +430,116 @@ async function assignToMission() {
     toast("Errore assegnazione: " + e.message, false);
     btn.disabled = false;
     btn.textContent = "Assegna";
+  }
+}
+
+/* ---------------- Missioni: contenuti condivisi ---------------- */
+// La web UI di OTS non mostra i contenuti (dataset) delle missioni Data Sync:
+// questo tab li elenca e permette download e rimozione, qualunque sia la
+// fonte del contenuto (plugin, ATAK, web UI).
+let MISSIONS = [];
+let CURRENT_MISSION = null;
+
+async function renderMissions() {
+  const el = document.getElementById("content");
+  el.innerHTML = "Caricamento missioni…";
+  try {
+    MISSIONS = await api("/missions");
+  } catch (e) {
+    if (e.message === "AUTH") return authMessage();
+    el.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
+    return;
+  }
+  if (!MISSIONS.length) {
+    el.innerHTML = "<p>Nessuna missione sul server: creane una dalla web UI di OTS o da ATAK (Data Sync).</p>";
+    return;
+  }
+  if (!CURRENT_MISSION || !MISSIONS.some(m => m.name === CURRENT_MISSION)) {
+    CURRENT_MISSION = MISSIONS[0].name;
+  }
+  el.innerHTML = `
+    <form class="inline" onsubmit="event.preventDefault();">
+      <label>Missione (Data Sync)
+        <select id="mission-view-select" onchange="CURRENT_MISSION = this.value; loadMissionContents();">
+          ${MISSIONS.map(m => `<option value="${esc(m.name)}" ${m.name === CURRENT_MISSION ? "selected" : ""}>
+            ${esc(m.name)}${m.password_protected ? " 🔒" : ""} (${m.content_count ?? 0} contenuti)</option>`).join("")}
+        </select>
+      </label>
+      <button class="btn" type="button" onclick="renderMissions()">↻ Aggiorna</button>
+    </form>
+    <div id="mission-desc" class="muted"></div>
+    <div id="mission-contents">Caricamento…</div>`;
+  loadMissionContents();
+}
+
+async function loadMissionContents() {
+  const mission = MISSIONS.find(m => m.name === CURRENT_MISSION);
+  const descEl = document.getElementById("mission-desc");
+  if (descEl) descEl.textContent = mission && mission.description ? mission.description : "";
+  const box = document.getElementById("mission-contents");
+  box.textContent = "Caricamento contenuti…";
+  let contents;
+  try {
+    contents = await api(`/missions/${encodeURIComponent(CURRENT_MISSION)}/contents`);
+  } catch (e) {
+    if (e.message === "AUTH") return authMessage();
+    box.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
+    return;
+  }
+  if (!contents.length) {
+    box.innerHTML = '<p class="muted" style="margin-top:12px">Nessun dataset condiviso su questa missione.</p>';
+    return;
+  }
+  box.innerHTML = `
+    <table class="contents">
+      <thead><tr>
+        <th>Nome file</th><th>Tipo</th><th>Dimensione</th><th>Caricato da</th><th>Data</th><th></th>
+      </tr></thead>
+      <tbody>${contents.map(c => `
+        <tr>
+          <td><span class="filename">${esc(c.filename)}</span><br>
+            ${(c.keywords || []).map(k => `<span class="kw">${esc(k)}</span>`).join("")}
+            ${c.on_disk ? "" : '<span class="pill err" title="Il file non è più presente su disco: il download fallirà">file mancante</span>'}
+          </td>
+          <td class="muted">${esc(c.mime_type || "")}</td>
+          <td>${fmtBytes(c.size)}</td>
+          <td>${esc(c.submitter || "")}</td>
+          <td>${fmtDT(c.submission_time)}</td>
+          <td class="actions">
+            <button class="btn" ${c.on_disk ? "" : "disabled"} title="Scarica il file sul tuo PC"
+              onclick="downloadMissionContent('${esc(c.hash)}')">⬇ Scarica</button>
+            <button class="btn" title="Rimuove il dataset dalla missione (gli EUD iscritti vengono notificati); il file resta sul server"
+              onclick="removeMissionContent('${esc(c.hash)}', '${esc(c.filename).replace(/'/g, "\\'")}', this)">🗑 Rimuovi</button>
+          </td>
+        </tr>`).join("")}
+      </tbody>
+    </table>
+    <p class="muted">La rimozione toglie il dataset dalla missione e notifica gli EUD iscritti con un
+      CoT di mission change, come farebbe ATAK; il file resta sul server e nello storico della missione.</p>`;
+}
+
+function downloadMissionContent(hash) {
+  toast("Download avviato…");
+  const a = document.createElement("a");
+  a.href = `${API}/missions/${encodeURIComponent(CURRENT_MISSION)}/contents/${encodeURIComponent(hash)}/download`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function removeMissionContent(hash, filename, btn) {
+  if (!confirm(`Rimuovere "${filename}" dalla missione "${CURRENT_MISSION}"?\n\nGli EUD iscritti riceveranno la notifica di rimozione. Il file resta sul server.`)) return;
+  btn.disabled = true;
+  try {
+    const res = await api(`/missions/${encodeURIComponent(CURRENT_MISSION)}/contents/${encodeURIComponent(hash)}`, { method: "DELETE" });
+    toast(`"${res.filename}" rimosso dalla missione "${res.mission}".`);
+    const mission = MISSIONS.find(m => m.name === CURRENT_MISSION);
+    if (mission && mission.content_count > 0) mission.content_count--;
+    loadMissionContents();
+  } catch (e) {
+    if (e.message === "AUTH") return authMessage();
+    toast("Errore rimozione: " + e.message, false);
+    btn.disabled = false;
   }
 }
 

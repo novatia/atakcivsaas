@@ -30,6 +30,7 @@ from flask import (
 )
 from flask_security import current_user, roles_accepted
 from sqlalchemy import insert
+from werkzeug.utils import secure_filename
 
 from opentakserver.blueprints.marti_api.data_package_marti_api import create_data_package_zip
 from opentakserver.extensions import db, logger
@@ -74,6 +75,44 @@ def _deliverable_filename(response: requests.Response, order: dict, uid: str, de
 
     ext = mimetypes.guess_extension(response.headers.get("Content-Type", "").split(";")[0]) or ""
     return _safe_name(f"SkyFi-{order.get('orderCode', uid)}-{deliverable_type}{ext}")
+
+
+def _mission_content_location(content: MissionContent) -> tuple[str, str] | None:
+    """(cartella, nome file) del contenuto su disco, cercando negli stessi due
+    posti di /Marti/sync/content: UPLOAD_FOLDER per hash (upload da ATAK/web UI)
+    e la cartella missions per nome file (upload di questo plugin)."""
+    _, extension = os.path.splitext(secure_filename(content.filename or ""))
+    upload_folder = app.config.get("UPLOAD_FOLDER")
+    if upload_folder and os.path.exists(os.path.join(upload_folder, f"{content.hash}{extension}")):
+        return upload_folder, f"{content.hash}{extension}"
+    missions_folder = os.path.join(app.config.get("OTS_DATA_FOLDER"), "missions")
+    if content.filename and os.path.exists(os.path.join(missions_folder, content.filename)):
+        return missions_folder, content.filename
+    return None
+
+
+def _notify_mission_change(mission_name: str, mission: Mission, mission_change: MissionChange, content: MissionContent) -> None:
+    """Pubblica il CoT t-x-m-c sull'exchange RabbitMQ `missions` per notificare
+    gli EUD iscritti; se il broker non risponde la modifica resta comunque nel
+    DB (gli EUD la vedono alla prossima sincronizzazione)."""
+    try:
+        event = generate_mission_change_cot(mission_name, mission, mission_change, content=content)
+        message = json.dumps({"uid": mission_change.creator_uid, "cot": tostring(event).decode("utf-8")})
+        rabbit_credentials = pika.PlainCredentials(
+            app.config.get("OTS_RABBITMQ_USERNAME"), app.config.get("OTS_RABBITMQ_PASSWORD")
+        )
+        rabbit_connection = pika.BlockingConnection(
+            pika.ConnectionParameters(
+                host=app.config.get("OTS_RABBITMQ_SERVER_ADDRESS"),
+                credentials=rabbit_credentials,
+            )
+        )
+        channel = rabbit_connection.channel()
+        channel.basic_publish("missions", routing_key=f"missions.{mission_name}", body=message)
+        channel.close()
+        rabbit_connection.close()
+    except BaseException as e:
+        logger.warning(f"SkyFi: modifica missione salvata ma notifica agli EUD fallita: {e}")
 
 
 class SkyFiPlugin(Plugin):
@@ -362,6 +401,12 @@ class SkyFiPlugin(Plugin):
     def get_missions():
         try:
             missions = db.session.execute(db.session.query(Mission)).scalars().all()
+            content_counts = dict(
+                db.session.execute(
+                    db.session.query(MissionContentMission.mission_name, db.func.count())
+                    .group_by(MissionContentMission.mission_name)
+                ).all()
+            )
             return jsonify(
                 [
                     {
@@ -369,12 +414,139 @@ class SkyFiPlugin(Plugin):
                         "guid": m.guid,
                         "description": m.description,
                         "password_protected": bool(m.password_protected),
+                        "content_count": content_counts.get(m.name, 0),
                     }
                     for m in missions
                 ]
             )
         except BaseException as e:
             logger.error(f"Failed to get missions: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/missions/<mission_name>/contents", methods=["GET"])
+    def get_mission_contents(mission_name: str):
+        """Elenca i contenuti (dataset) condivisi su una missione Data Sync,
+        qualunque sia la fonte (questo plugin, ATAK, web UI): la web UI di OTS
+        non li mostra, quindi questa è la vista amministrativa per gestirli."""
+        try:
+            mission = db.session.execute(
+                db.session.query(Mission).filter_by(name=mission_name)
+            ).scalar()
+            if not mission:
+                return jsonify({"success": False, "error": f"Missione non trovata: {mission_name}"}), 404
+
+            contents = (
+                db.session.execute(
+                    db.session.query(MissionContent)
+                    .join(MissionContentMission, MissionContentMission.mission_content_id == MissionContent.id)
+                    .filter(MissionContentMission.mission_name == mission_name)
+                    .order_by(MissionContent.submission_time.desc())
+                )
+                .scalars()
+                .all()
+            )
+            return jsonify(
+                [
+                    {
+                        "filename": c.filename,
+                        "hash": c.hash,
+                        "uid": c.uid,
+                        "size": c.size,
+                        "mime_type": c.mime_type,
+                        "submitter": c.submitter,
+                        "submission_time": c.submission_time.isoformat() if c.submission_time else None,
+                        "keywords": c.keywords or [],
+                        "on_disk": _mission_content_location(c) is not None,
+                    }
+                    for c in contents
+                ]
+            )
+        except BaseException as e:
+            logger.error(f"Failed to get contents for mission {mission_name}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/missions/<mission_name>/contents/<file_hash>/download", methods=["GET"])
+    def download_mission_content(mission_name: str, file_hash: str):
+        """Scarica dal browser un contenuto missione, cercando il file negli
+        stessi posti di /Marti/sync/content (che però è raggiungibile solo
+        dagli EUD con certificato, non dalla web UI)."""
+        try:
+            content = db.session.execute(
+                db.session.query(MissionContent).filter_by(hash=file_hash)
+            ).scalar()
+            if not content:
+                return jsonify({"success": False, "error": f"Nessun contenuto con hash {file_hash}"}), 404
+
+            location = _mission_content_location(content)
+            if not location:
+                return jsonify({"success": False, "error": f"File non trovato sul server: {content.filename}"}), 404
+
+            folder, name = location
+            return send_from_directory(folder, name, as_attachment=True, download_name=content.filename)
+        except BaseException as e:
+            logger.error(f"Failed to download mission content {file_hash}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/missions/<mission_name>/contents/<file_hash>", methods=["DELETE"])
+    def remove_mission_content(mission_name: str, file_hash: str):
+        """Rimuove un contenuto dalla missione replicando il flusso di
+        DELETE /Marti/api/missions/<name>/contents: si cancella solo il link
+        contenuto↔missione e si registra un MissionChange REMOVE_CONTENT; il
+        file resta su disco e nel DB così lo storico della missione rimane
+        corretto e il contenuto può essere riassegnato."""
+        try:
+            mission = db.session.execute(
+                db.session.query(Mission).filter_by(name=mission_name)
+            ).scalar()
+            if not mission:
+                return jsonify({"success": False, "error": f"Missione non trovata: {mission_name}"}), 404
+
+            content = db.session.execute(
+                db.session.query(MissionContent).filter_by(hash=file_hash)
+            ).scalar()
+            if not content:
+                return jsonify({"success": False, "error": f"Nessun contenuto con hash {file_hash}"}), 404
+
+            mission_content_mission = db.session.execute(
+                db.session.query(MissionContentMission).filter_by(
+                    mission_name=mission_name, mission_content_id=content.id
+                )
+            ).scalar()
+            if not mission_content_mission:
+                return jsonify(
+                    {"success": False, "error": f"Il contenuto non è assegnato alla missione {mission_name}"}
+                ), 404
+
+            username = current_user.username if current_user else "SkyFi-Plugin"
+
+            db.session.delete(mission_content_mission)
+
+            mission_change = MissionChange()
+            mission_change.isFederatedChange = False
+            mission_change.change_type = MissionChange.REMOVE_CONTENT
+            mission_change.content_uid = content.uid
+            mission_change.mission_name = mission_name
+            mission_change.timestamp = datetime.datetime.now(datetime.timezone.utc)
+            mission_change.creator_uid = username
+            mission_change.server_time = datetime.datetime.now(datetime.timezone.utc)
+            db.session.add(mission_change)
+            db.session.commit()
+
+            _notify_mission_change(mission_name, mission, mission_change, content)
+
+            logger.info(f"SkyFi: {content.filename} rimosso dalla missione {mission_name} da {username}")
+            return jsonify({"success": True, "filename": content.filename, "mission": mission_name})
+        except BaseException as e:
+            logger.error(f"Failed to remove content {file_hash} from mission {mission_name}: {e}")
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 500
 
@@ -496,27 +668,7 @@ class SkyFiPlugin(Plugin):
             db.session.add(mission_change)
             db.session.commit()
 
-            # Notifica gli EUD iscritti col CoT di mission change; se RabbitMQ non
-            # risponde il contenuto resta comunque associato (gli EUD lo vedono
-            # alla prossima sincronizzazione)
-            try:
-                event = generate_mission_change_cot(mission_name, mission, mission_change, content=content)
-                message = json.dumps({"uid": username, "cot": tostring(event).decode("utf-8")})
-                rabbit_credentials = pika.PlainCredentials(
-                    app.config.get("OTS_RABBITMQ_USERNAME"), app.config.get("OTS_RABBITMQ_PASSWORD")
-                )
-                rabbit_connection = pika.BlockingConnection(
-                    pika.ConnectionParameters(
-                        host=app.config.get("OTS_RABBITMQ_SERVER_ADDRESS"),
-                        credentials=rabbit_credentials,
-                    )
-                )
-                channel = rabbit_connection.channel()
-                channel.basic_publish("missions", routing_key=f"missions.{mission_name}", body=message)
-                channel.close()
-                rabbit_connection.close()
-            except BaseException as e:
-                logger.warning(f"SkyFi: contenuto assegnato ma notifica missione fallita: {e}")
+            _notify_mission_change(mission_name, mission, mission_change, content)
 
             logger.info(f"SkyFi: {filename} ({size} bytes) assegnato alla missione {mission_name} da {username}")
             return jsonify(

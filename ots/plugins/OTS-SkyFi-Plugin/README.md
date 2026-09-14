@@ -24,6 +24,13 @@ richiesto.
   da SkyFi sul server e aggiunto ai contenuti di una missione Data Sync — gli
   EUD iscritti ricevono il CoT di mission change e scaricano il file da
   `/Marti/sync/content`, come se fosse stato caricato da ATAK.
+- **Contenuti missione** (tab *Missioni*): la web UI di OTS non mostra i
+  dataset condivisi sulle missioni Data Sync; questo tab li elenca per
+  missione (qualunque sia la fonte: plugin, ATAK, web UI) con download dal
+  browser e rimozione dalla missione. La rimozione replica il flusso di
+  `DELETE /Marti/api/missions/<name>/contents`: toglie solo il link
+  contenuto↔missione, registra un `MissionChange` `REMOVE_CONTENT` e notifica
+  gli EUD iscritti; il file resta sul server e nello storico della missione.
 - **Configurazione**: API key modificabile dalla UI, salvata in `config.yml`.
 
 ## Configurazione
