@@ -560,10 +560,14 @@ async function renderPlayers() {
       <option value="" ${p.user_id ? "" : "selected"}>— nessun account —</option>${options}</select>`;
   };
 
+  const active = players.filter(p => p.active);
+  const inactive = players.filter(p => !p.active);
+
   document.getElementById("pl").innerHTML = `
     <p class="muted">Questa è l'anagrafica a cui fanno riferimento presenze, classifica e gradi.
        L'associazione a un account OTS è opzionale: serve solo per permettere al giocatore di
-       dichiarare da solo la propria presenza dal link dell'evento.</p>
+       dichiarare da solo la propria presenza dal link dell'evento. Disattivare un giocatore
+       non tocca l'account OTS: login e ATAK continuano a funzionare.</p>
     <h3>Nuovo giocatore</h3>
     <form class="inline" id="player-form">
       <label>Nome <input name="first_name"></label>
@@ -571,18 +575,34 @@ async function renderPlayers() {
       <label>Callsign <input name="callsign"></label>
       <button class="btn primary" type="submit">Aggiungi</button>
     </form>
-    <table><thead><tr><th>Nome</th><th>Cognome</th><th>Callsign</th><th>Account OTS</th><th>Attivo</th><th></th></tr></thead><tbody>
-    ${players.map(p => `<tr>
+    <table><thead><tr><th>Nome</th><th>Cognome</th><th>Callsign</th><th>Account OTS</th><th></th></tr></thead><tbody>
+    ${active.map(p => `<tr>
       <td><input value="${esc(p.first_name)}" onchange="updatePlayer(${p.id}, {first_name: this.value})"></td>
       <td><input value="${esc(p.last_name)}" onchange="updatePlayer(${p.id}, {last_name: this.value})"></td>
       <td><input value="${esc(p.callsign || "")}" onchange="updatePlayer(${p.id}, {callsign: this.value})"></td>
       <td>${accountSelect(p)}</td>
-      <td><input type="checkbox" ${p.active ? "checked" : ""} onchange="updatePlayer(${p.id}, {active: this.checked})"></td>
-      <td><button class="btn small danger" onclick="delPlayer(${p.id})">Elimina</button></td>
+      <td>
+        <button class="btn small" onclick="updatePlayer(${p.id}, {active: false}, true)">Disattiva</button>
+        <button class="btn small danger" onclick="delPlayer(${p.id})">Elimina</button>
+      </td>
     </tr>`).join("")}
     </tbody></table>
-    <p class="muted">I giocatori disattivi non compaiono in classifica né nella lista presenze.
-       Un giocatore con presenze registrate non si può eliminare: disattivalo.</p>`;
+    <p class="muted">I giocatori disattivati non compaiono in classifica né nella lista presenze.
+       Un giocatore con presenze registrate non si può eliminare: disattivalo.</p>
+    ${inactive.length ? `
+    <details style="margin-top:14px">
+      <summary style="cursor:pointer"><strong>Giocatori disattivati (${inactive.length})</strong></summary>
+      <table style="margin-top:8px"><thead><tr><th>Giocatore</th><th>Account OTS</th><th></th></tr></thead><tbody>
+      ${inactive.map(p => `<tr>
+        <td class="muted">${esc(p.display_name)}</td>
+        <td class="muted">${esc(p.username || "—")}</td>
+        <td>
+          <button class="btn small primary" onclick="updatePlayer(${p.id}, {active: true}, true)">↩ Ripristina</button>
+          <button class="btn small danger" onclick="delPlayer(${p.id})">Elimina</button>
+        </td>
+      </tr>`).join("")}
+      </tbody></table>
+    </details>` : ""}`;
 
   document.getElementById("player-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -593,9 +613,12 @@ async function renderPlayers() {
     } catch (err) { toast(err.message, false); }
   };
 }
-async function updatePlayer(id, body) {
-  try { await api(`/players/${id}`, { method: "PUT", body }); toast("Giocatore aggiornato"); }
-  catch (err) { toast(err.message, false); renderPlayers(); }
+async function updatePlayer(id, body, reload) {
+  try {
+    await api(`/players/${id}`, { method: "PUT", body });
+    toast("Giocatore aggiornato");
+    if (reload) renderPlayers();
+  } catch (err) { toast(err.message, false); renderPlayers(); }
 }
 async function linkPlayer(id, userId) {
   try {
