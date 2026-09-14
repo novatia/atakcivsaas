@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<customWmsMapSource>
+    <name>PCN IGM 100.000 (Italia)</name>
+    <minZoom>11</minZoom>
+    <maxZoom>14</maxZoom>
+    <tileType>jpg</tileType>
+    <version>1.1.1</version>
+    <layers>MB.IGM100000.32,MB.IGM100000.33</layers>
+    <url><![CDATA[http://wms.pcn.minambiente.it/ogc?map=/ms_ogc/WMS_v1.3/raster/IGM_100000.map&]]></url>
+    <coordinatesystem>EPSG:3857</coordinatesystem>
+    <aditionalparameters><![CDATA[&STYLES=]]></aditionalparameters>
+    <backgroundColor>#000000</backgroundColor>
+</customWmsMapSource>

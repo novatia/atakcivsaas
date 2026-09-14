@@ -1,0 +1,14 @@
+<MissionPackageManifest version="2">
+   <Configuration>
+      <Parameter name="uid" value="ed9bb9dd-5247-49ad-b6e5-547c284654d8"/>
+      <Parameter name="name" value="PCN Geoportale Italia - Mappe WMS"/>
+      <Parameter name="onReceiveDelete" value="false"/>
+   </Configuration>
+   <Contents>
+      <Content ignore="false" zipEntry="PCN_Ortofoto_2012.xml"/>
+      <Content ignore="false" zipEntry="PCN_Ortofoto_2006.xml"/>
+      <Content ignore="false" zipEntry="PCN_IGM_25000.xml"/>
+      <Content ignore="false" zipEntry="PCN_IGM_100000.xml"/>
+      <Content ignore="false" zipEntry="PCN_IGM_250000.xml"/>
+   </Contents>
+</MissionPackageManifest>
