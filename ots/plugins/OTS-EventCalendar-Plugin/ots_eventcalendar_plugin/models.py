@@ -71,6 +71,13 @@ class Player(db.Model):
             return f"{self.callsign} ({full})"
         return self.callsign or full or f"Giocatore {self.id}"
 
+    def formal_name(self):
+        """Nome Cognome (CALLSIGN) — usato nella lista presenze."""
+        full = f"{self.first_name} {self.last_name}".strip()
+        if full and self.callsign:
+            return f"{full} ({self.callsign})"
+        return full or self.callsign or f"Giocatore {self.id}"
+
     def serialize(self):
         return {
             "id": self.id,

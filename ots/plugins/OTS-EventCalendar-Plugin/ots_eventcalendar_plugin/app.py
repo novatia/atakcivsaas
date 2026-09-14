@@ -909,7 +909,7 @@ class EventCalendarPlugin(Plugin):
                 results.append(
                     {
                         "player_id": player.id,
-                        "display_name": player.display_name(),
+                        "display_name": player.formal_name(),
                         "rsvp_status": attendance.rsvp_status if attendance else "not_configured",
                         "confirmed": attendance.confirmed if attendance else False,
                     }
