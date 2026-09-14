@@ -204,7 +204,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MO-TAK-001 · Rev 3 · 2026-09-09</span><span>Server: n3test002</span></div>
+    <div class="doc-meta"><span>MO-TAK-001 · Rev 4 · 2026-09-15</span><span>Server: n3test002</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Operatore TAK</h1>
@@ -222,10 +222,11 @@
       <li><a href="#s3"><span class="n">3</span> Vedersi in mappa</a></li>
       <li><a href="#s4"><span class="n">4</span> Missioni (Data Sync)</a></li>
       <li><a href="#s5"><span class="n">5</span> Meshtastic: la radio quando manca la rete</a></li>
-      <li><a href="#s6"><span class="n">6</span> Telemetria del dispositivo</a></li>
-      <li><a href="#s7"><span class="n">7</span> Amministrazione del server</a></li>
-      <li><a href="#s8"><span class="n">8</span> Troubleshooting rapido</a></li>
-      <li><a href="#s9"><span class="n">9</span> Riferimenti</a></li>
+      <li><a href="#s6"><span class="n">6</span> Radio Baofeng: CHIRP e piano canali</a></li>
+      <li><a href="#s7"><span class="n">7</span> Telemetria del dispositivo</a></li>
+      <li><a href="#s8"><span class="n">8</span> Amministrazione del server</a></li>
+      <li><a href="#s9"><span class="n">9</span> Troubleshooting rapido</a></li>
+      <li><a href="#s10"><span class="n">10</span> Riferimenti</a></li>
     </ol>
   </nav>
 
@@ -236,7 +237,7 @@
                                         │                          │
                                         ▼                          ▼
                                  altri client                 mappa web</pre>
-    <p>Se un anello della catena è fermo, i client risultano «connessi» ma i dati non circolano (vedi sez. 7).</p>
+    <p>Se un anello della catena è fermo, i client risultano «connessi» ma i dati non circolano (vedi sez. 8).</p>
     <h3>Porte del server</h3>
     <div class="tblwrap"><table>
       <tr><th>Porta</th><th>Servizio</th><th>Uso</th></tr>
@@ -266,7 +267,7 @@
       <li><strong>Fix GPS sul telefono</strong> — in ATAK il proprio marker è ancorato alla posizione reale e in basso compaiono coordinate e precisione (es. <code>+/- 21 m</code>). Se vedi «NO GPS», esci all'aperto o verifica i permessi di localizzazione.</li>
       <li><strong>Location reporting attivo</strong> — Settings → Reporting Preferences → strategia <em>Dynamic</em> o <em>Constant</em>. Da fermi gli invii si diradano (≈1/min): è normale.</li>
       <li><strong>Connessione verde</strong> — icona server in basso a destra.</li>
-      <li><strong>Catena server sana</strong> — in particolare il servizio <code>opentakserver-cot-parser</code> (sez. 6 e 7).</li>
+      <li><strong>Catena server sana</strong> — in particolare il servizio <code>opentakserver-cot-parser</code> (sez. 7 e 8).</li>
     </ol>
     <h3>Test del marker</h3>
     <p>Distingue in un colpo i problemi di trasporto da quelli di GPS: piazza un marker dalla mappa ATAK (pressione prolungata → punto). Se il marker compare sulla mappa web, tutto il canale funziona e il problema è solo il reporting di posizione del telefono.</p>
@@ -311,7 +312,39 @@
   </section>
 
   <section id="s6">
-    <h2><span class="n">6</span> Telemetria del dispositivo</h2>
+    <h2><span class="n">6</span> Radio Baofeng: CHIRP e piano canali</h2>
+    <p>Le radio Baofeng del gruppo (famiglia UV-5R) usano un piano canali comune: <strong>128 memorie</strong> con i 16 canali <strong>PMR446</strong> e i 69 <strong>LPD433</strong>, prima «aperti» e poi ripetuti con subtono <strong>CTCSS 203.5&nbsp;Hz</strong> per filtrare il traffico degli altri team. Tutte le memorie sono in FM stretta (<em>Narrow</em>). Il piano completo è nel bigino in fondo alla sezione; la versione stampabile tascabile (15×10&nbsp;cm, fronte/retro) è nel repo insieme al CSV per CHIRP: <code>ots/radio/</code>.</p>
+
+    <h3>Installare CHIRP</h3>
+    <ol>
+      <li>Scarica <strong>CHIRP</strong> (versione «CHIRP-next») da <a href="https://chirpmyradio.com">chirpmyradio.com</a> — gratuito, per Windows, macOS e Linux.</li>
+      <li>Serve il <strong>cavo di programmazione USB</strong> con doppio spinotto tipo K (Kenwood). Molti cavi economici montano chip Prolific contraffatti senza driver funzionanti su Windows: preferisci un cavo dichiarato <strong>FTDI</strong> o <strong>CH340</strong>.</li>
+      <li>Collega il cavo al PC e verifica in <strong>Gestione Dispositivi</strong> la porta COM assegnata (se c'è un punto esclamativo, installa il driver del chip del cavo).</li>
+    </ol>
+
+    <h3>Caricare i canali</h3>
+    <ol>
+      <li>Radio <strong>spenta</strong>, inserisci lo spinotto <strong>a fondo</strong> (è duro: se resta mezzo fuori, il clone fallisce), poi accendi la radio.</li>
+      <li>In CHIRP: <strong>Radio → Download from radio</strong> → porta COM, marca e modello. <strong>Scarica sempre prima</strong> l'immagine dalla radio e lavora su quella, mai su un file creato da zero.</li>
+      <li><strong>File → Import from → file…</strong> → seleziona <code>baofeng_pmr_lpd_chirp.csv</code> (repo, cartella <code>ots/radio/</code>): le 128 memorie si compilano da sole come da bigino.</li>
+      <li><strong>Radio → Upload to radio</strong>. Al termine la radio si riavvia: mettila in modalità <strong>MR</strong> (memorie) e verifica qualche canale a campione con la tabella.</li>
+    </ol>
+    <div class="note"><span class="tag">Nota</span><p>Nelle memorie con subtono (085–127) il CTCSS è attivo <strong>sia in trasmissione che in ricezione</strong>: due radio si sentono solo se entrambe sono sul canale col tono. Per parlare con chi sta sul canale «aperto» usa le memorie 000–084 corrispondenti.</p></div>
+    <div class="warn"><span class="tag">Attenzione</span><p>Il Baofeng non è un apparato omologato per l'uso libero PMR446/LPD (potenza e antenna fuori specifica): usa la <strong>potenza bassa</strong> e ricorda che la conformità normativa è responsabilità di chi trasmette.</p></div>
+
+    <h3>Piano canali (bigino)</h3>
+    <div class="tblwrap"><table>
+      <tr><th>Memorie</th><th>Canali</th><th>Frequenze</th><th>CTCSS</th></tr>
+      <tr><td>000–015</td><td>PMR01–PMR16</td><td>446.00625–446.19375 MHz (passo 12.5 kHz)</td><td>—</td></tr>
+      <tr><td>016–084</td><td>LPD01–LPD69</td><td>433.075–434.775 MHz (passo 25 kHz)</td><td>—</td></tr>
+      <tr><td>085–100</td><td>PMR01–PMR16</td><td>come 000–015</td><td>203.5 Hz</td></tr>
+      <tr><td>101–127</td><td>LPD01–LPD27</td><td>433.075–433.725 MHz (passo 25 kHz)</td><td>203.5 Hz</td></tr>
+    </table></div>
+    <div class="tblwrap"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:0 1.5rem"><table style="font-size:.82rem"><tr><th>MEM</th><th>CH</th><th>MHz</th><th>CT</th></tr><tr><td>000</td><td>PMR01</td><td>446.00625</td><td>—</td></tr><tr><td>001</td><td>PMR02</td><td>446.01875</td><td>—</td></tr><tr><td>002</td><td>PMR03</td><td>446.03125</td><td>—</td></tr><tr><td>003</td><td>PMR04</td><td>446.04375</td><td>—</td></tr><tr><td>004</td><td>PMR05</td><td>446.05625</td><td>—</td></tr><tr><td>005</td><td>PMR06</td><td>446.06875</td><td>—</td></tr><tr><td>006</td><td>PMR07</td><td>446.08125</td><td>—</td></tr><tr><td>007</td><td>PMR08</td><td>446.09375</td><td>—</td></tr><tr><td>008</td><td>PMR09</td><td>446.10625</td><td>—</td></tr><tr><td>009</td><td>PMR10</td><td>446.11875</td><td>—</td></tr><tr><td>010</td><td>PMR11</td><td>446.13125</td><td>—</td></tr><tr><td>011</td><td>PMR12</td><td>446.14375</td><td>—</td></tr><tr><td>012</td><td>PMR13</td><td>446.15625</td><td>—</td></tr><tr><td>013</td><td>PMR14</td><td>446.16875</td><td>—</td></tr><tr><td>014</td><td>PMR15</td><td>446.18125</td><td>—</td></tr><tr><td>015</td><td>PMR16</td><td>446.19375</td><td>—</td></tr><tr><td>016</td><td>LPD01</td><td>433.07500</td><td>—</td></tr><tr><td>017</td><td>LPD02</td><td>433.10000</td><td>—</td></tr><tr><td>018</td><td>LPD03</td><td>433.12500</td><td>—</td></tr><tr><td>019</td><td>LPD04</td><td>433.15000</td><td>—</td></tr><tr><td>020</td><td>LPD05</td><td>433.17500</td><td>—</td></tr><tr><td>021</td><td>LPD06</td><td>433.20000</td><td>—</td></tr><tr><td>022</td><td>LPD07</td><td>433.22500</td><td>—</td></tr><tr><td>023</td><td>LPD08</td><td>433.25000</td><td>—</td></tr><tr><td>024</td><td>LPD09</td><td>433.27500</td><td>—</td></tr><tr><td>025</td><td>LPD10</td><td>433.30000</td><td>—</td></tr><tr><td>026</td><td>LPD11</td><td>433.32500</td><td>—</td></tr><tr><td>027</td><td>LPD12</td><td>433.35000</td><td>—</td></tr><tr><td>028</td><td>LPD13</td><td>433.37500</td><td>—</td></tr><tr><td>029</td><td>LPD14</td><td>433.40000</td><td>—</td></tr><tr><td>030</td><td>LPD15</td><td>433.42500</td><td>—</td></tr><tr><td>031</td><td>LPD16</td><td>433.45000</td><td>—</td></tr></table><table style="font-size:.82rem"><tr><th>MEM</th><th>CH</th><th>MHz</th><th>CT</th></tr><tr><td>032</td><td>LPD17</td><td>433.47500</td><td>—</td></tr><tr><td>033</td><td>LPD18</td><td>433.50000</td><td>—</td></tr><tr><td>034</td><td>LPD19</td><td>433.52500</td><td>—</td></tr><tr><td>035</td><td>LPD20</td><td>433.55000</td><td>—</td></tr><tr><td>036</td><td>LPD21</td><td>433.57500</td><td>—</td></tr><tr><td>037</td><td>LPD22</td><td>433.60000</td><td>—</td></tr><tr><td>038</td><td>LPD23</td><td>433.62500</td><td>—</td></tr><tr><td>039</td><td>LPD24</td><td>433.65000</td><td>—</td></tr><tr><td>040</td><td>LPD25</td><td>433.67500</td><td>—</td></tr><tr><td>041</td><td>LPD26</td><td>433.70000</td><td>—</td></tr><tr><td>042</td><td>LPD27</td><td>433.72500</td><td>—</td></tr><tr><td>043</td><td>LPD28</td><td>433.75000</td><td>—</td></tr><tr><td>044</td><td>LPD29</td><td>433.77500</td><td>—</td></tr><tr><td>045</td><td>LPD30</td><td>433.80000</td><td>—</td></tr><tr><td>046</td><td>LPD31</td><td>433.82500</td><td>—</td></tr><tr><td>047</td><td>LPD32</td><td>433.85000</td><td>—</td></tr><tr><td>048</td><td>LPD33</td><td>433.87500</td><td>—</td></tr><tr><td>049</td><td>LPD34</td><td>433.90000</td><td>—</td></tr><tr><td>050</td><td>LPD35</td><td>433.92500</td><td>—</td></tr><tr><td>051</td><td>LPD36</td><td>433.95000</td><td>—</td></tr><tr><td>052</td><td>LPD37</td><td>433.97500</td><td>—</td></tr><tr><td>053</td><td>LPD38</td><td>434.00000</td><td>—</td></tr><tr><td>054</td><td>LPD39</td><td>434.02500</td><td>—</td></tr><tr><td>055</td><td>LPD40</td><td>434.05000</td><td>—</td></tr><tr><td>056</td><td>LPD41</td><td>434.07500</td><td>—</td></tr><tr><td>057</td><td>LPD42</td><td>434.10000</td><td>—</td></tr><tr><td>058</td><td>LPD43</td><td>434.12500</td><td>—</td></tr><tr><td>059</td><td>LPD44</td><td>434.15000</td><td>—</td></tr><tr><td>060</td><td>LPD45</td><td>434.17500</td><td>—</td></tr><tr><td>061</td><td>LPD46</td><td>434.20000</td><td>—</td></tr><tr><td>062</td><td>LPD47</td><td>434.22500</td><td>—</td></tr><tr><td>063</td><td>LPD48</td><td>434.25000</td><td>—</td></tr></table><table style="font-size:.82rem"><tr><th>MEM</th><th>CH</th><th>MHz</th><th>CT</th></tr><tr><td>064</td><td>LPD49</td><td>434.27500</td><td>—</td></tr><tr><td>065</td><td>LPD50</td><td>434.30000</td><td>—</td></tr><tr><td>066</td><td>LPD51</td><td>434.32500</td><td>—</td></tr><tr><td>067</td><td>LPD52</td><td>434.35000</td><td>—</td></tr><tr><td>068</td><td>LPD53</td><td>434.37500</td><td>—</td></tr><tr><td>069</td><td>LPD54</td><td>434.40000</td><td>—</td></tr><tr><td>070</td><td>LPD55</td><td>434.42500</td><td>—</td></tr><tr><td>071</td><td>LPD56</td><td>434.45000</td><td>—</td></tr><tr><td>072</td><td>LPD57</td><td>434.47500</td><td>—</td></tr><tr><td>073</td><td>LPD58</td><td>434.50000</td><td>—</td></tr><tr><td>074</td><td>LPD59</td><td>434.52500</td><td>—</td></tr><tr><td>075</td><td>LPD60</td><td>434.55000</td><td>—</td></tr><tr><td>076</td><td>LPD61</td><td>434.57500</td><td>—</td></tr><tr><td>077</td><td>LPD62</td><td>434.60000</td><td>—</td></tr><tr><td>078</td><td>LPD63</td><td>434.62500</td><td>—</td></tr><tr><td>079</td><td>LPD64</td><td>434.65000</td><td>—</td></tr><tr><td>080</td><td>LPD65</td><td>434.67500</td><td>—</td></tr><tr><td>081</td><td>LPD66</td><td>434.70000</td><td>—</td></tr><tr><td>082</td><td>LPD67</td><td>434.72500</td><td>—</td></tr><tr><td>083</td><td>LPD68</td><td>434.75000</td><td>—</td></tr><tr><td>084</td><td>LPD69</td><td>434.77500</td><td>—</td></tr><tr><td>085</td><td>PMR01</td><td>446.00625</td><td>203.5</td></tr><tr><td>086</td><td>PMR02</td><td>446.01875</td><td>203.5</td></tr><tr><td>087</td><td>PMR03</td><td>446.03125</td><td>203.5</td></tr><tr><td>088</td><td>PMR04</td><td>446.04375</td><td>203.5</td></tr><tr><td>089</td><td>PMR05</td><td>446.05625</td><td>203.5</td></tr><tr><td>090</td><td>PMR06</td><td>446.06875</td><td>203.5</td></tr><tr><td>091</td><td>PMR07</td><td>446.08125</td><td>203.5</td></tr><tr><td>092</td><td>PMR08</td><td>446.09375</td><td>203.5</td></tr><tr><td>093</td><td>PMR09</td><td>446.10625</td><td>203.5</td></tr><tr><td>094</td><td>PMR10</td><td>446.11875</td><td>203.5</td></tr><tr><td>095</td><td>PMR11</td><td>446.13125</td><td>203.5</td></tr></table><table style="font-size:.82rem"><tr><th>MEM</th><th>CH</th><th>MHz</th><th>CT</th></tr><tr><td>096</td><td>PMR12</td><td>446.14375</td><td>203.5</td></tr><tr><td>097</td><td>PMR13</td><td>446.15625</td><td>203.5</td></tr><tr><td>098</td><td>PMR14</td><td>446.16875</td><td>203.5</td></tr><tr><td>099</td><td>PMR15</td><td>446.18125</td><td>203.5</td></tr><tr><td>100</td><td>PMR16</td><td>446.19375</td><td>203.5</td></tr><tr><td>101</td><td>LPD01</td><td>433.07500</td><td>203.5</td></tr><tr><td>102</td><td>LPD02</td><td>433.10000</td><td>203.5</td></tr><tr><td>103</td><td>LPD03</td><td>433.12500</td><td>203.5</td></tr><tr><td>104</td><td>LPD04</td><td>433.15000</td><td>203.5</td></tr><tr><td>105</td><td>LPD05</td><td>433.17500</td><td>203.5</td></tr><tr><td>106</td><td>LPD06</td><td>433.20000</td><td>203.5</td></tr><tr><td>107</td><td>LPD07</td><td>433.22500</td><td>203.5</td></tr><tr><td>108</td><td>LPD08</td><td>433.25000</td><td>203.5</td></tr><tr><td>109</td><td>LPD09</td><td>433.27500</td><td>203.5</td></tr><tr><td>110</td><td>LPD10</td><td>433.30000</td><td>203.5</td></tr><tr><td>111</td><td>LPD11</td><td>433.32500</td><td>203.5</td></tr><tr><td>112</td><td>LPD12</td><td>433.35000</td><td>203.5</td></tr><tr><td>113</td><td>LPD13</td><td>433.37500</td><td>203.5</td></tr><tr><td>114</td><td>LPD14</td><td>433.40000</td><td>203.5</td></tr><tr><td>115</td><td>LPD15</td><td>433.42500</td><td>203.5</td></tr><tr><td>116</td><td>LPD16</td><td>433.45000</td><td>203.5</td></tr><tr><td>117</td><td>LPD17</td><td>433.47500</td><td>203.5</td></tr><tr><td>118</td><td>LPD18</td><td>433.50000</td><td>203.5</td></tr><tr><td>119</td><td>LPD19</td><td>433.52500</td><td>203.5</td></tr><tr><td>120</td><td>LPD20</td><td>433.55000</td><td>203.5</td></tr><tr><td>121</td><td>LPD21</td><td>433.57500</td><td>203.5</td></tr><tr><td>122</td><td>LPD22</td><td>433.60000</td><td>203.5</td></tr><tr><td>123</td><td>LPD23</td><td>433.62500</td><td>203.5</td></tr><tr><td>124</td><td>LPD24</td><td>433.65000</td><td>203.5</td></tr><tr><td>125</td><td>LPD25</td><td>433.67500</td><td>203.5</td></tr><tr><td>126</td><td>LPD26</td><td>433.70000</td><td>203.5</td></tr><tr><td>127</td><td>LPD27</td><td>433.72500</td><td>203.5</td></tr></table></div></div>
+  </section>
+
+  <section id="s7">
+    <h2><span class="n">7</span> Telemetria del dispositivo</h2>
     <p>La scheda di ogni EUD nella web UI ha quattro grafici (traffico dati, batteria, heap, storage). Il server li popola solo se il client invia un elemento <code>&lt;stats&gt;</code> nei propri CoT — e <strong>ATAK-CIV (la versione del Play Store) non lo invia</strong>: con i client del gruppo quei grafici restano vuoti. Non è un guasto.</p>
     <ul>
       <li>Il dato utile c'è comunque: la <strong>batteria</strong> viaggia dentro il normale CoT di posizione ed è visibile nel popup del marker (e nella tabella <code>points</code> del database, colonna <code>battery</code>).</li>
@@ -319,8 +352,8 @@
     </ul>
   </section>
 
-  <section id="s7">
-    <h2><span class="n">7</span> Amministrazione del server</h2>
+  <section id="s8">
+    <h2><span class="n">8</span> Amministrazione del server</h2>
     <h3>Dove sta cosa</h3>
     <div class="tblwrap"><table>
       <tr><th>Cosa</th><th>Dove</th></tr>
@@ -351,8 +384,8 @@ ss -tlnp | grep -E '8080|8089|8443'
 tail -20 /home/ots/ots/logs/opentakserver.log</pre>
   </section>
 
-  <section id="s8">
-    <h2><span class="n">8</span> Troubleshooting rapido</h2>
+  <section id="s9">
+    <h2><span class="n">9</span> Troubleshooting rapido</h2>
     <div class="tblwrap"><table>
       <tr><th>Sintomo</th><th>Causa probabile</th><th>Azione</th></tr>
       <tr>
@@ -395,8 +428,8 @@ sudo -u postgres psql -d ots -c "SELECT device_uid, battery, timestamp FROM poin
     <p>Ogni client connesso ha una coda di consegna col suo nome/UID. Code con messaggi accumulati e zero consumer indicano un consumer morto.</p>
   </section>
 
-  <section id="s9">
-    <h2><span class="n">9</span> Riferimenti</h2>
+  <section id="s10">
+    <h2><span class="n">10</span> Riferimenti</h2>
     <ul>
       <li>Repo operativo: <a href="https://github.com/novatia/atakcivsaas">github.com/novatia/atakcivsaas</a> (script <code>update-ots.sh</code>, unit systemd, questo manuale in <code>docs/</code>)</li>
       <li>OpenTAKServer: <a href="https://github.com/brian7704/OpenTAKServer">github.com/brian7704/OpenTAKServer</a> · documentazione: <a href="https://docs.opentakserver.io">docs.opentakserver.io</a></li>
@@ -405,7 +438,7 @@ sudo -u postgres psql -d ots -c "SELECT device_uid, battery, timestamp FROM poin
   </section>
 
   <footer>
-    <span>MO-TAK-001 · Rev 3</span>
+    <span>MO-TAK-001 · Rev 4</span>
     <span>Aggiornato al troubleshooting del 2026-09-09</span>
   </footer>
 </div>
