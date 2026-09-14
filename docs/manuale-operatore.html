@@ -185,7 +185,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MO-TAK-002 · Rev 8 · 2026-09-15</span><span>Per operatori da smartphone</span></div>
+    <div class="doc-meta"><span>MO-TAK-002 · Rev 9 · 2026-09-15</span><span>Per operatori da smartphone</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Operatore<br>Tactical Scout Codogno</h1>
@@ -340,10 +340,12 @@
       <li>Radio <strong>spenta</strong>, inserisci lo spinotto <strong>a fondo</strong> (è duro: se resta mezzo fuori, il clone fallisce), poi accendi la radio.</li>
       <li>In CHIRP: <strong>Radio → Download from radio</strong> → porta COM, marca e modello. <strong>Scarica sempre prima</strong> l'immagine dalla radio e lavora su quella, mai su un file creato da zero.</li>
       <li><strong>File → Import from → file…</strong> → seleziona <code>baofeng_pmr_lpd_chirp.csv</code> (chiedilo all'amministratore): le 128 memorie si compilano da sole come da bigino.</li>
+      <li>Imposta la <strong>potenza</strong>: il CSV non la contiene, va messa a mano nella griglia di CHIRP. Seleziona tutte le righe → colonna <strong>Power → Low</strong> (vedi il riquadro sotto per il perché).</li>
       <li><strong>Radio → Upload to radio</strong>. Al termine la radio si riavvia: mettila in modalità <strong>MR</strong> (memorie) e verifica qualche canale a campione con la tabella.</li>
     </ol>
     <div class="note"><span class="tag">Nota</span><p>Nelle memorie con subtono (085–127) il CTCSS è attivo <strong>sia in trasmissione che in ricezione</strong>: due radio si sentono solo se entrambe sono sul canale col tono. Per parlare con chi sta sul canale «aperto» usa le memorie 000–084 corrispondenti.</p></div>
-    <div class="warn"><span class="tag">Attenzione</span><p>Il Baofeng non è un apparato omologato per l'uso libero PMR446/LPD (potenza e antenna fuori specifica): usa la <strong>potenza bassa</strong> e ricorda che la conformità normativa è responsabilità di chi trasmette.</p></div>
+    <div class="note"><span class="tag">Potenza e Narrow</span><p><strong>Potenza: Low su tutti i canali.</strong> I limiti di legge sono 10&nbsp;mW ERP per gli LPD433 e 500&nbsp;mW ERP per i PMR446: sul Baofeng anche la posizione Low (~1&nbsp;W) li supera, e High (4–5&nbsp;W) supera il limite PMR di dieci volte. In pratica High regala pochissima portata in più (a 400&nbsp;MHz contano molto di più antenna e posizione), consuma il quadruplo e scalda la radio: non ne vale la pena.</p><p><strong>Narrow: sempre, su tutti i 128 canali.</strong> Sul PMR446 è obbligatorio (canalizzazione a 12,5&nbsp;kHz); sugli LPD serve a tenere la flotta uniforme — chi trasmette Wide viene sentito distorto da chi è in Narrow. Il CSV imposta già <code>NFM</code> ovunque: non toccarlo.</p></div>
+    <div class="warn"><span class="tag">Attenzione</span><p>Il Baofeng non è un apparato omologato per l'uso libero PMR446/LPD (potenza e antenna fuori specifica): la conformità normativa è responsabilità di chi trasmette.</p></div>
 
     <h3>Piano canali (bigino)</h3>
     <div class="tblwrap"><table>
@@ -393,7 +395,7 @@
   </section>
 
   <footer>
-    <span>MO-TAK-002 · Rev 8</span>
+    <span>MO-TAK-002 · Rev 9</span>
     <span>Compagno del Manuale Operatore TAK (MO-TAK-001)</span>
   </footer>
 </div>
