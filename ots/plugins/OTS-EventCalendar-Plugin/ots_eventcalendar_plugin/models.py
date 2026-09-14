@@ -44,6 +44,46 @@ class GameField(db.Model):
         }
 
 
+class Player(db.Model):
+    """Anagrafica giocatori della squadra, parallela agli account OTS.
+
+    Un giocatore puo' essere associato (o no) a un account OpenTAKServer:
+    presenze, punteggi e gradi fanno sempre riferimento al giocatore.
+    """
+
+    __tablename__ = "ec_players"
+
+    id = db.Column(Integer, primary_key=True)
+    first_name = db.Column(String(255), nullable=False, default="")
+    last_name = db.Column(String(255), nullable=False, default="")
+    callsign = db.Column(String(255), nullable=True)
+    user_id = db.Column(Integer, ForeignKey("user.id"), nullable=True, unique=True)
+    active = db.Column(Boolean, nullable=False, default=True)
+    notes = db.Column(Text, nullable=True)
+    created_at = db.Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    attendances = relationship("EventAttendance", back_populates="player", cascade="all, delete-orphan")
+    score_row = relationship("PlayerScore", back_populates="player", uselist=False, cascade="all, delete-orphan")
+
+    def display_name(self):
+        full = f"{self.first_name} {self.last_name}".strip()
+        if self.callsign and full:
+            return f"{self.callsign} ({full})"
+        return self.callsign or full or f"Giocatore {self.id}"
+
+    def serialize(self):
+        return {
+            "id": self.id,
+            "first_name": self.first_name,
+            "last_name": self.last_name,
+            "callsign": self.callsign,
+            "user_id": self.user_id,
+            "active": self.active,
+            "notes": self.notes,
+            "display_name": self.display_name(),
+        }
+
+
 class CalendarEvent(db.Model):
     """Evento di calendario: sede, inizio, fine, descrizione."""
 
@@ -77,14 +117,14 @@ class CalendarEvent(db.Model):
 
 
 class EventAttendance(db.Model):
-    """RSVP dell'utente + conferma presenza da parte dell'amministratore sul campo."""
+    """RSVP del giocatore + conferma presenza da parte dell'amministratore sul campo."""
 
     __tablename__ = "ec_attendances"
-    __table_args__ = (UniqueConstraint("event_id", "user_id", name="uq_ec_attendance_event_user"),)
+    __table_args__ = (UniqueConstraint("event_id", "player_id", name="uq_ec_attendance_event_player"),)
 
     id = db.Column(Integer, primary_key=True)
     event_id = db.Column(Integer, ForeignKey("ec_events.id"), nullable=False)
-    user_id = db.Column(Integer, ForeignKey("user.id"), nullable=False)
+    player_id = db.Column(Integer, ForeignKey("ec_players.id"), nullable=False)
     rsvp_status = db.Column(String(32), nullable=False, default="not_configured")
     confirmed = db.Column(Boolean, nullable=False, default=False)
     confirmed_by = db.Column(Integer, ForeignKey("user.id"), nullable=True)
@@ -92,12 +132,13 @@ class EventAttendance(db.Model):
     points_awarded = db.Column(Integer, nullable=False, default=0)
 
     event = relationship("CalendarEvent", back_populates="attendances")
+    player = relationship("Player", back_populates="attendances")
 
     def serialize(self):
         return {
             "id": self.id,
             "event_id": self.event_id,
-            "user_id": self.user_id,
+            "player_id": self.player_id,
             "rsvp_status": self.rsvp_status,
             "confirmed": self.confirmed,
             "confirmed_at": self.confirmed_at.isoformat() if self.confirmed_at else None,
@@ -153,22 +194,23 @@ class Rank(db.Model):
         }
 
 
-class UserScore(db.Model):
-    """Punteggio accumulato da un utente ed eventuale grado assegnato manualmente."""
+class PlayerScore(db.Model):
+    """Punteggio accumulato da un giocatore ed eventuale grado assegnato manualmente."""
 
-    __tablename__ = "ec_user_scores"
+    __tablename__ = "ec_player_scores"
 
     id = db.Column(Integer, primary_key=True)
-    user_id = db.Column(Integer, ForeignKey("user.id"), nullable=False, unique=True)
+    player_id = db.Column(Integer, ForeignKey("ec_players.id"), nullable=False, unique=True)
     score = db.Column(Integer, nullable=False, default=0)
     manual_rank_id = db.Column(Integer, ForeignKey("ec_ranks.id"), nullable=True)
 
+    player = relationship("Player", back_populates="score_row")
     manual_rank = relationship("Rank")
 
     def serialize(self):
         return {
             "id": self.id,
-            "user_id": self.user_id,
+            "player_id": self.player_id,
             "score": self.score,
             "manual_rank_id": self.manual_rank_id,
         }
@@ -176,9 +218,10 @@ class UserScore(db.Model):
 
 PLUGIN_TABLES = [
     GameField.__table__,
+    Player.__table__,
     CalendarEvent.__table__,
     EventAttendance.__table__,
     EventGuest.__table__,
     Rank.__table__,
-    UserScore.__table__,
+    PlayerScore.__table__,
 ]

@@ -31,8 +31,9 @@ from .models import (
     EventAttendance,
     EventGuest,
     GameField,
+    Player,
+    PlayerScore,
     Rank,
-    UserScore,
 )
 
 import importlib.metadata
@@ -75,13 +76,53 @@ def _parse_datetime(value: str) -> datetime:
     return dt
 
 
-def _get_or_create_score(user_id: int) -> UserScore:
-    score = db.session.query(UserScore).filter_by(user_id=user_id).first()
+def _get_or_create_score(player_id: int) -> PlayerScore:
+    score = db.session.query(PlayerScore).filter_by(player_id=player_id).first()
     if not score:
-        score = UserScore(user_id=user_id, score=0)
+        score = PlayerScore(player_id=player_id, score=0)
         db.session.add(score)
         db.session.flush()
     return score
+
+
+def _current_player() -> Player | None:
+    """Il giocatore dell'anagrafica associato all'account OTS loggato, se esiste."""
+    return db.session.query(Player).filter_by(user_id=current_user.id).first()
+
+
+def _set_confirmation(event_id: int, player_id: int, confirmed: bool) -> bool:
+    """Conferma/revoca la presenza di un giocatore assegnando o togliendo i punti.
+
+    Ritorna True se lo stato è cambiato. Non fa commit: lo fa il chiamante.
+    """
+    attendance = (
+        db.session.query(EventAttendance)
+        .filter_by(event_id=event_id, player_id=player_id)
+        .first()
+    )
+    if not attendance:
+        attendance = EventAttendance(event_id=event_id, player_id=player_id)
+        db.session.add(attendance)
+        db.session.flush()
+
+    points = int(app.config.get("OTS_EVENTCALENDAR_POINTS_PER_PRESENCE", 10))
+    score = _get_or_create_score(player_id)
+
+    if confirmed and not attendance.confirmed:
+        attendance.confirmed = True
+        attendance.confirmed_by = current_user.id
+        attendance.confirmed_at = datetime.utcnow()
+        attendance.points_awarded = points
+        score.score += points
+        return True
+    if not confirmed and attendance.confirmed:
+        attendance.confirmed = False
+        attendance.confirmed_by = None
+        attendance.confirmed_at = None
+        score.score = max(0, score.score - attendance.points_awarded)
+        attendance.points_awarded = 0
+        return True
+    return False
 
 
 def _rank_for_score(score_value: int, ranks: list) -> dict | None:
@@ -92,7 +133,7 @@ def _rank_for_score(score_value: int, ranks: list) -> dict | None:
     return best.serialize() if best else None
 
 
-def _resolve_rank(score_row: UserScore | None, ranks: list) -> dict | None:
+def _resolve_rank(score_row: PlayerScore | None, ranks: list) -> dict | None:
     score_value = score_row.score if score_row else 0
     if score_row and score_row.manual_rank_id:
         manual = next((r for r in ranks if r.id == score_row.manual_rank_id), None)
@@ -239,8 +280,77 @@ class EventCalendarPlugin(Plugin):
 
         try:
             with app.app_context():
+                # Migrazione v1 -> v2: presenze/punteggi passano da user_id a player_id
+                # (anagrafica giocatori). Salva i vecchi dati, ricrea le tabelle e
+                # reimporta mappando ogni utente su un giocatore creato automaticamente.
+                from sqlalchemy import inspect as sqla_inspect, text
+
+                inspector = sqla_inspect(db.engine)
+                legacy_attendance, legacy_scores = [], []
+                legacy = inspector.has_table("ec_attendances") and "user_id" in [
+                    c["name"] for c in inspector.get_columns("ec_attendances")
+                ]
+                if legacy:
+                    logger.info("EventCalendar: migrating attendance/scores from users to players")
+                    legacy_attendance = db.session.execute(
+                        text(
+                            "SELECT event_id, user_id, rsvp_status, confirmed, confirmed_by,"
+                            " confirmed_at, points_awarded FROM ec_attendances"
+                        )
+                    ).fetchall()
+                    if inspector.has_table("ec_user_scores"):
+                        legacy_scores = db.session.execute(
+                            text("SELECT user_id, score, manual_rank_id FROM ec_user_scores")
+                        ).fetchall()
+                    db.session.execute(text("DROP TABLE ec_attendances"))
+                    db.session.execute(text("DROP TABLE IF EXISTS ec_user_scores"))
+                    db.session.commit()
+
                 # Crea le tabelle del plugin se non esistono (non tocca le tabelle di OTS)
                 db.metadata.create_all(bind=db.engine, tables=PLUGIN_TABLES, checkfirst=True)
+
+                if legacy:
+                    # Un giocatore per ogni account OTS esistente, già associato
+                    linked = {p.user_id for p in db.session.query(Player).all() if p.user_id}
+                    for user in db.session.query(User).all():
+                        if user.id not in linked:
+                            db.session.add(
+                                Player(callsign=user.username, user_id=user.id, active=user.active)
+                            )
+                    db.session.commit()
+
+                    players_by_user = {
+                        p.user_id: p.id for p in db.session.query(Player).all() if p.user_id
+                    }
+                    for row in legacy_attendance:
+                        player_id = players_by_user.get(row.user_id)
+                        if player_id:
+                            db.session.add(
+                                EventAttendance(
+                                    event_id=row.event_id,
+                                    player_id=player_id,
+                                    rsvp_status=row.rsvp_status,
+                                    confirmed=row.confirmed,
+                                    confirmed_by=row.confirmed_by,
+                                    confirmed_at=row.confirmed_at,
+                                    points_awarded=row.points_awarded,
+                                )
+                            )
+                    for row in legacy_scores:
+                        player_id = players_by_user.get(row.user_id)
+                        if player_id:
+                            db.session.add(
+                                PlayerScore(
+                                    player_id=player_id,
+                                    score=row.score,
+                                    manual_rank_id=row.manual_rank_id,
+                                )
+                            )
+                    db.session.commit()
+                    logger.info(
+                        f"EventCalendar: migrated {len(legacy_attendance)} attendance rows and "
+                        f"{len(legacy_scores)} score rows to players"
+                    )
 
                 # Seed dei gradi di default alla prima attivazione
                 if not db.session.query(Rank).first():
@@ -377,12 +487,14 @@ class EventCalendarPlugin(Plugin):
     def me():
         try:
             ranks = db.session.query(Rank).order_by(Rank.min_score).all()
-            score_row = db.session.query(UserScore).filter_by(user_id=current_user.id).first()
+            player = _current_player()
+            score_row = player.score_row if player else None
             return jsonify(
                 {
                     "user_id": current_user.id,
                     "username": current_user.username,
                     "roles": [role.name for role in current_user.roles],
+                    "player": player.serialize() if player else None,
                     "score": score_row.score if score_row else 0,
                     "rank": _resolve_rank(score_row, ranks),
                 }
@@ -495,6 +607,7 @@ class EventCalendarPlugin(Plugin):
                 query = query.filter(CalendarEvent.start_time <= _parse_datetime(request.args["to"]))
             events = query.order_by(CalendarEvent.start_time).all()
 
+            player = _current_player()
             results = []
             for event in events:
                 data = event.serialize()
@@ -505,7 +618,7 @@ class EventCalendarPlugin(Plugin):
                         counts[attendance.rsvp_status] += 1
                     if attendance.confirmed:
                         counts["confirmed"] += 1
-                    if attendance.user_id == current_user.id:
+                    if player and attendance.player_id == player.id:
                         my_rsvp = attendance.rsvp_status
                 data["counts"] = counts
                 data["my_rsvp"] = my_rsvp
@@ -525,6 +638,7 @@ class EventCalendarPlugin(Plugin):
             if not event:
                 return jsonify({"success": False, "error": "Evento non trovato"}), 404
 
+            player = _current_player()
             data = event.serialize()
             counts = {"present": 0, "absent": 0, "maybe": 0, "confirmed": 0}
             my_rsvp = "not_configured"
@@ -533,10 +647,11 @@ class EventCalendarPlugin(Plugin):
                     counts[attendance.rsvp_status] += 1
                 if attendance.confirmed:
                     counts["confirmed"] += 1
-                if attendance.user_id == current_user.id:
+                if player and attendance.player_id == player.id:
                     my_rsvp = attendance.rsvp_status
             data["counts"] = counts
             data["my_rsvp"] = my_rsvp
+            data["has_player"] = player is not None
             data["guests"] = _serialize_guests(event)
             return jsonify(data)
         except BaseException as e:
@@ -622,7 +737,7 @@ class EventCalendarPlugin(Plugin):
             # Riallinea i punteggi delle presenze già confermate
             for attendance in event.attendances:
                 if attendance.confirmed and attendance.points_awarded:
-                    score = _get_or_create_score(attendance.user_id)
+                    score = _get_or_create_score(attendance.player_id)
                     score.score = max(0, score.score - attendance.points_awarded)
 
             db.session.delete(event)
@@ -653,13 +768,26 @@ class EventCalendarPlugin(Plugin):
             if not event:
                 return jsonify({"success": False, "error": "Evento non trovato"}), 404
 
+            player = _current_player()
+            if not player:
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": "Il tuo account non è associato a nessun giocatore: "
+                            "chiedi a un amministratore di associarti nell'anagrafica Giocatori.",
+                        }
+                    ),
+                    400,
+                )
+
             attendance = (
                 db.session.query(EventAttendance)
-                .filter_by(event_id=event_id, user_id=current_user.id)
+                .filter_by(event_id=event_id, player_id=player.id)
                 .first()
             )
             if not attendance:
-                attendance = EventAttendance(event_id=event_id, user_id=current_user.id)
+                attendance = EventAttendance(event_id=event_id, player_id=player.id)
                 db.session.add(attendance)
             attendance.rsvp_status = status
             db.session.commit()
@@ -767,16 +895,21 @@ class EventCalendarPlugin(Plugin):
             if not event:
                 return jsonify({"success": False, "error": "Evento non trovato"}), 404
 
-            attendance_by_user = {a.user_id: a for a in event.attendances}
-            users = db.session.query(User).filter_by(active=True).order_by(User.username).all()
+            attendance_by_player = {a.player_id: a for a in event.attendances}
+            players = (
+                db.session.query(Player)
+                .filter_by(active=True)
+                .order_by(Player.last_name, Player.first_name, Player.callsign)
+                .all()
+            )
 
             results = []
-            for user in users:
-                attendance = attendance_by_user.get(user.id)
+            for player in players:
+                attendance = attendance_by_player.get(player.id)
                 results.append(
                     {
-                        "user_id": user.id,
-                        "username": user.username,
+                        "player_id": player.id,
+                        "display_name": player.display_name(),
                         "rsvp_status": attendance.rsvp_status if attendance else "not_configured",
                         "confirmed": attendance.confirmed if attendance else False,
                     }
@@ -798,47 +931,48 @@ class EventCalendarPlugin(Plugin):
     def confirm_attendance(event_id):
         try:
             data = request.json or {}
-            user_id = data.get("user_id")
+            player_id = data.get("player_id")
             confirmed = bool(data.get("confirmed"))
-            if not user_id:
-                return jsonify({"success": False, "error": "user_id è obbligatorio"}), 400
+            if not player_id:
+                return jsonify({"success": False, "error": "player_id è obbligatorio"}), 400
 
             event = db.session.get(CalendarEvent, event_id)
             if not event:
                 return jsonify({"success": False, "error": "Evento non trovato"}), 404
-            if not db.session.get(User, int(user_id)):
-                return jsonify({"success": False, "error": "Utente non trovato"}), 404
+            if not db.session.get(Player, int(player_id)):
+                return jsonify({"success": False, "error": "Giocatore non trovato"}), 404
 
-            attendance = (
-                db.session.query(EventAttendance)
-                .filter_by(event_id=event_id, user_id=int(user_id))
-                .first()
-            )
-            if not attendance:
-                attendance = EventAttendance(event_id=event_id, user_id=int(user_id))
-                db.session.add(attendance)
-                db.session.flush()
-
-            points = int(app.config.get("OTS_EVENTCALENDAR_POINTS_PER_PRESENCE", 10))
-            score = _get_or_create_score(int(user_id))
-
-            if confirmed and not attendance.confirmed:
-                attendance.confirmed = True
-                attendance.confirmed_by = current_user.id
-                attendance.confirmed_at = datetime.utcnow()
-                attendance.points_awarded = points
-                score.score += points
-            elif not confirmed and attendance.confirmed:
-                attendance.confirmed = False
-                attendance.confirmed_by = None
-                attendance.confirmed_at = None
-                score.score = max(0, score.score - attendance.points_awarded)
-                attendance.points_awarded = 0
-
+            _set_confirmation(event_id, int(player_id), confirmed)
             db.session.commit()
-            return jsonify(
-                {"success": True, "attendance": attendance.serialize(), "score": score.score}
+            score = db.session.query(PlayerScore).filter_by(player_id=int(player_id)).first()
+            return jsonify({"success": True, "score": score.score if score else 0})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    # Segna tutta la squadra (giocatori attivi) come presente sull'evento
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/events/<int:event_id>/attendance/all", methods=["POST"])
+    def confirm_all_attendance(event_id):
+        try:
+            confirmed = bool((request.json or {}).get("confirmed", True))
+            event = db.session.get(CalendarEvent, event_id)
+            if not event:
+                return jsonify({"success": False, "error": "Evento non trovato"}), 404
+
+            players = db.session.query(Player).filter_by(active=True).all()
+            changed = 0
+            for player in players:
+                if _set_confirmation(event_id, player.id, confirmed):
+                    changed += 1
+            db.session.commit()
+            logger.info(
+                f"EventCalendar: {current_user.username} set confirmed={confirmed} "
+                f"for {changed} players on event {event_id}"
             )
+            return jsonify({"success": True, "changed": changed})
         except BaseException as e:
             db.session.rollback()
             logger.error(traceback.format_exc())
@@ -1026,7 +1160,7 @@ class EventCalendarPlugin(Plugin):
             if not rank:
                 return jsonify({"success": False, "error": "Grado non trovato"}), 404
 
-            db.session.query(UserScore).filter_by(manual_rank_id=rank_id).update({"manual_rank_id": None})
+            db.session.query(PlayerScore).filter_by(manual_rank_id=rank_id).update({"manual_rank_id": None})
             if rank.badge_filename:
                 badge_path = os.path.join(_badges_folder(), rank.badge_filename)
                 if os.path.exists(badge_path):
@@ -1160,7 +1294,149 @@ class EventCalendarPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     # ------------------------------------------------------------------
-    # Classifica e gestione punteggi/gradi utente
+    # Anagrafica giocatori
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/players")
+    def get_players():
+        try:
+            players = (
+                db.session.query(Player)
+                .order_by(Player.last_name, Player.first_name, Player.callsign)
+                .all()
+            )
+            usernames = {u.id: u.username for u in db.session.query(User).all()}
+            results = []
+            for player in players:
+                data = player.serialize()
+                data["username"] = usernames.get(player.user_id)
+                results.append(data)
+            return jsonify(results)
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/players", methods=["POST"])
+    def create_player():
+        try:
+            data = request.json or {}
+            first_name = (data.get("first_name") or "").strip()
+            last_name = (data.get("last_name") or "").strip()
+            callsign = (data.get("callsign") or "").strip() or None
+            if not (first_name or last_name or callsign):
+                return jsonify({"success": False, "error": "Indica almeno nome/cognome o callsign"}), 400
+
+            player = Player(
+                first_name=first_name,
+                last_name=last_name,
+                callsign=callsign,
+                notes=data.get("notes"),
+                active=data.get("active", True),
+            )
+            db.session.add(player)
+            db.session.commit()
+            return jsonify({"success": True, "player": player.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/players/<int:player_id>", methods=["PUT"])
+    def update_player(player_id):
+        try:
+            player = db.session.get(Player, player_id)
+            if not player:
+                return jsonify({"success": False, "error": "Giocatore non trovato"}), 404
+
+            data = request.json or {}
+            for attr in ("first_name", "last_name", "callsign", "notes", "active"):
+                if attr in data:
+                    setattr(player, attr, data[attr])
+
+            # Associazione account OTS <-> giocatore (user_id null = scollega)
+            if "user_id" in data:
+                user_id = data["user_id"]
+                if user_id is not None:
+                    user_id = int(user_id)
+                    if not db.session.get(User, user_id):
+                        return jsonify({"success": False, "error": "Account OTS non trovato"}), 404
+                    already = db.session.query(Player).filter_by(user_id=user_id).first()
+                    if already and already.id != player.id:
+                        return (
+                            jsonify(
+                                {
+                                    "success": False,
+                                    "error": f"Account già associato a {already.display_name()}",
+                                }
+                            ),
+                            400,
+                        )
+                player.user_id = user_id
+
+            db.session.commit()
+            return jsonify({"success": True, "player": player.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/players/<int:player_id>", methods=["DELETE"])
+    def delete_player(player_id):
+        try:
+            player = db.session.get(Player, player_id)
+            if not player:
+                return jsonify({"success": False, "error": "Giocatore non trovato"}), 404
+            if player.attendances:
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": "Il giocatore ha presenze registrate: disattivalo invece di eliminarlo",
+                        }
+                    ),
+                    400,
+                )
+            db.session.delete(player)
+            db.session.commit()
+            return jsonify({"success": True})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    # Account OTS disponibili per l'associazione a un giocatore
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/ots-users")
+    def ots_users():
+        try:
+            linked = {p.user_id: p.id for p in db.session.query(Player).all() if p.user_id}
+            users = db.session.query(User).order_by(User.username).all()
+            return jsonify(
+                [
+                    {
+                        "id": u.id,
+                        "username": u.username,
+                        "active": u.active,
+                        "linked_player_id": linked.get(u.id),
+                    }
+                    for u in users
+                ]
+            )
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # Classifica e gestione punteggi/gradi giocatore
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -1169,16 +1445,21 @@ class EventCalendarPlugin(Plugin):
     def leaderboard():
         try:
             ranks = db.session.query(Rank).order_by(Rank.min_score).all()
-            users = db.session.query(User).filter_by(active=True).order_by(User.username).all()
-            scores = {s.user_id: s for s in db.session.query(UserScore).all()}
+            players = (
+                db.session.query(Player)
+                .filter_by(active=True)
+                .order_by(Player.last_name, Player.first_name, Player.callsign)
+                .all()
+            )
+            scores = {s.player_id: s for s in db.session.query(PlayerScore).all()}
 
             results = []
-            for user in users:
-                score_row = scores.get(user.id)
+            for player in players:
+                score_row = scores.get(player.id)
                 results.append(
                     {
-                        "user_id": user.id,
-                        "username": user.username,
+                        "player_id": player.id,
+                        "display_name": player.display_name(),
                         "score": score_row.score if score_row else 0,
                         "rank": _resolve_rank(score_row, ranks),
                         "manual_rank_id": score_row.manual_rank_id if score_row else None,
@@ -1192,21 +1473,21 @@ class EventCalendarPlugin(Plugin):
 
     @staticmethod
     @roles_accepted("administrator")
-    @blueprint.route("/users/<int:user_id>/rank", methods=["POST"])
-    def set_user_rank(user_id):
-        """Assegna manualmente un grado a un utente (rank_id null = torna al calcolo per punteggio)."""
+    @blueprint.route("/players/<int:player_id>/rank", methods=["POST"])
+    def set_player_rank(player_id):
+        """Assegna manualmente un grado a un giocatore (rank_id null = torna al calcolo per punteggio)."""
         try:
-            if not db.session.get(User, user_id):
-                return jsonify({"success": False, "error": "Utente non trovato"}), 404
+            if not db.session.get(Player, player_id):
+                return jsonify({"success": False, "error": "Giocatore non trovato"}), 404
 
             rank_id = (request.json or {}).get("rank_id")
             if rank_id is not None and not db.session.get(Rank, int(rank_id)):
                 return jsonify({"success": False, "error": "Grado non trovato"}), 404
 
-            score = _get_or_create_score(user_id)
+            score = _get_or_create_score(player_id)
             score.manual_rank_id = int(rank_id) if rank_id is not None else None
             db.session.commit()
-            return jsonify({"success": True, "user_score": score.serialize()})
+            return jsonify({"success": True, "player_score": score.serialize()})
         except BaseException as e:
             db.session.rollback()
             logger.error(traceback.format_exc())
@@ -1214,21 +1495,21 @@ class EventCalendarPlugin(Plugin):
 
     @staticmethod
     @roles_accepted("administrator")
-    @blueprint.route("/users/<int:user_id>/score", methods=["POST"])
-    def set_user_score(user_id):
-        """Corregge manualmente il punteggio di un utente."""
+    @blueprint.route("/players/<int:player_id>/score", methods=["POST"])
+    def set_player_score(player_id):
+        """Corregge manualmente il punteggio di un giocatore."""
         try:
-            if not db.session.get(User, user_id):
-                return jsonify({"success": False, "error": "Utente non trovato"}), 404
+            if not db.session.get(Player, player_id):
+                return jsonify({"success": False, "error": "Giocatore non trovato"}), 404
 
             value = (request.json or {}).get("score")
             if not isinstance(value, int) or value < 0:
                 return jsonify({"success": False, "error": "score deve essere un intero >= 0"}), 400
 
-            score = _get_or_create_score(user_id)
+            score = _get_or_create_score(player_id)
             score.score = value
             db.session.commit()
-            return jsonify({"success": True, "user_score": score.serialize()})
+            return jsonify({"success": True, "player_score": score.serialize()})
         except BaseException as e:
             db.session.rollback()
             logger.error(traceback.format_exc())

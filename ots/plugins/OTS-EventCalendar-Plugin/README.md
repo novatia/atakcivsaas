@@ -14,11 +14,22 @@ gestione presenze, punteggi e gradi militari. Usa il login e gli utenti di OpenT
   rilanciare per sincronizzare) o da **file CSV**
   (`title,description,field,start,end`, date ISO, separatore `,` o `;`).
 
+### Anagrafica giocatori
+- Presenze, classifica, punti e gradi fanno riferimento all'**anagrafica giocatori**
+  (tab "Giocatori", admin), parallela agli account OTS: si registrano i giocatori con
+  nome/cognome/callsign anche se non hanno un account.
+- Un giocatore può essere **associato a un account OTS** (opzionale, un account per
+  giocatore): serve solo a permettergli di dichiarare da solo la propria presenza dal
+  link dell'evento.
+
 ### Presenze
 - Il calendario completo è visibile **solo agli admin**: gli operatori ricevono il link
   del singolo evento (es. sul gruppo WhatsApp) e vedono una **pagina dedicata a quell'evento**.
-- Lì l'operatore dichiara: **Presente / Non presente / In dubbio**; il default è
-  **Non configurato**.
+- Lì il giocatore con account associato dichiara: **Presente / Non presente / In dubbio**;
+  il default è **Non configurato**.
+- Nella tab Presenze l'admin vede **tutta la squadra** (giocatori attivi) e può confermare
+  chiunque, anche chi non ha dichiarato nulla; il bottone **"Tutta la squadra presente"**
+  conferma tutti in un colpo (e c'è l'annulla-tutto simmetrico).
 - Chiunque sia loggato può registrare sull'evento un **ospite "in prova"** con nome e
   cognome (senza account): compare nella lista presenze dell'admin, che può confermarne
   la presenza (senza punti). L'ospite può essere rimosso da chi l'ha registrato o da un admin.

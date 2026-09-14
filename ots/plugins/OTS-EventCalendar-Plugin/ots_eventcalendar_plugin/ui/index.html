@@ -166,6 +166,7 @@ const TABS = [
   { id: "events", label: "Eventi", admin: true, render: () => { clearEventHash(); renderEvents(); } },
   { id: "leaderboard", label: "Classifica", admin: false, render: () => { clearEventHash(); renderLeaderboard(); } },
   { id: "attendance", label: "Presenze", admin: true, render: renderAttendance },
+  { id: "players", label: "Giocatori", admin: true, render: renderPlayers },
   { id: "fields", label: "Campi da gioco", admin: true, render: renderFields },
   { id: "ranks", label: "Gradi e badge", admin: true, render: renderRanks },
   { id: "import", label: "Import", admin: true, render: renderImport },
@@ -192,8 +193,9 @@ async function refreshMe() {
   ME = await api("/me");
   const box = document.getElementById("me-box");
   const rank = ME.rank;
+  const name = ME.player ? ME.player.display_name : ME.username;
   box.innerHTML = `${rank ? badgeImg(rank, 32) : ""}
-    <span><strong>${esc(ME.username)}</strong>${rank ? " · " + esc(rank.name) : ""} · ${ME.score} punti</span>`;
+    <span><strong>${esc(name)}</strong>${rank ? " · " + esc(rank.name) : ""} · ${ME.score} punti</span>`;
 }
 
 /* ---------------- Eventi ---------------- */
@@ -321,13 +323,15 @@ async function renderEventDetail(id) {
       <div class="event-meta">🕓 ${fmtDT(ev.start_time)} → ${fmtDT(ev.end_time)}</div>
       ${ev.description ? `<div class="event-desc">${esc(ev.description)}</div>` : ""}
       <div class="counts">✅ ${ev.counts.present} presenti · ❌ ${ev.counts.absent} assenti · ❔ ${ev.counts.maybe} in dubbio · 🏅 ${ev.counts.confirmed} confermati sul campo</div>
-      ${past ? "<p class='muted'>Evento concluso.</p>" : `
+      ${past ? "<p class='muted'>Evento concluso.</p>" : ev.has_player ? `
       <p style="margin:10px 0 4px"><strong>La tua presenza:</strong></p>
       <div class="rsvp-group">
         <button class="btn ${st === "present" ? "on-present" : ""}" onclick="rsvp(${ev.id},'present')">Presente</button>
         <button class="btn ${st === "absent" ? "on-absent" : ""}" onclick="rsvp(${ev.id},'absent')">Non presente</button>
         <button class="btn ${st === "maybe" ? "on-maybe" : ""}" onclick="rsvp(${ev.id},'maybe')">In dubbio</button>
-      </div>`}
+      </div>` : `
+      <p class="muted">⚠️ Il tuo account non è ancora associato a un giocatore della squadra:
+      chiedi a un amministratore di associarti dall'anagrafica Giocatori per poter dichiarare la presenza.</p>`}
     </div>
     <h3>Ospiti in prova (${ev.guests.length})</h3>
     ${ev.guests.length ? `<table><thead><tr><th>Nome</th><th>Registrato da</th><th></th></tr></thead><tbody>
@@ -440,33 +444,33 @@ async function renderLeaderboard() {
   const rows = await api("/leaderboard");
   const admin = isAdmin();
   document.getElementById("lb").innerHTML = `<table><thead><tr>
-      <th>#</th><th>Operatore</th><th>Grado</th><th>Punti</th>${admin ? "<th>Assegna grado</th><th>Punteggio</th>" : ""}
+      <th>#</th><th>Giocatore</th><th>Grado</th><th>Punti</th>${admin ? "<th>Assegna grado</th><th>Punteggio</th>" : ""}
     </tr></thead><tbody>
     ${rows.map((r, i) => `<tr>
       <td>${i + 1}</td>
-      <td>${esc(r.username)}</td>
+      <td>${esc(r.display_name)}</td>
       <td><span class="badge-chip">${badgeImg(r.rank, 26)} ${r.rank ? esc(r.rank.name) : "<span class='muted'>—</span>"}${r.manual_rank_id ? " <span class='muted'>(manuale)</span>" : ""}</span></td>
       <td><strong>${r.score}</strong></td>
       ${admin ? `<td>
-        <select onchange="setRank(${r.user_id}, this.value)">
+        <select onchange="setRank(${r.player_id}, this.value)">
           <option value="">Automatico (da punti)</option>
           ${RANKS.map(k => `<option value="${k.id}" ${r.manual_rank_id === k.id ? "selected" : ""}>${esc(k.name)}</option>`).join("")}
         </select></td>
-        <td><button class="btn small" onclick="editScore(${r.user_id}, ${r.score})">Modifica</button></td>` : ""}
+        <td><button class="btn small" onclick="editScore(${r.player_id}, ${r.score})">Modifica</button></td>` : ""}
     </tr>`).join("")}
     </tbody></table>`;
 }
-async function setRank(userId, rankId) {
+async function setRank(playerId, rankId) {
   try {
-    await api(`/users/${userId}/rank`, { method: "POST", body: { rank_id: rankId ? parseInt(rankId) : null } });
+    await api(`/players/${playerId}/rank`, { method: "POST", body: { rank_id: rankId ? parseInt(rankId) : null } });
     toast("Grado aggiornato"); renderLeaderboard(); refreshMe();
   } catch (err) { toast(err.message, false); }
 }
-async function editScore(userId, current) {
+async function editScore(playerId, current) {
   const value = prompt("Nuovo punteggio:", current);
   if (value === null) return;
   try {
-    await api(`/users/${userId}/score`, { method: "POST", body: { score: parseInt(value, 10) } });
+    await api(`/players/${playerId}/score`, { method: "POST", body: { score: parseInt(value, 10) } });
     toast("Punteggio aggiornato"); renderLeaderboard(); refreshMe();
   } catch (err) { toast(err.message, false); }
 }
@@ -491,16 +495,22 @@ async function renderAttendance() {
 
   async function loadAttendance() {
     const data = await api(`/events/${select.value}/attendance`);
-    document.getElementById("att-list").innerHTML = `<table><thead><tr>
-      <th>Operatore</th><th>Dichiarazione</th><th>Presenza confermata</th></tr></thead><tbody>
+    document.getElementById("att-list").innerHTML = `
+      <p>
+        <button class="btn primary" onclick="confirmAll(${data.event.id}, true)">✅ Tutta la squadra presente</button>
+        <button class="btn" onclick="confirmAll(${data.event.id}, false)">Annulla tutte le conferme</button>
+      </p>
+      <table><thead><tr>
+      <th>Giocatore</th><th>Dichiarazione</th><th>Presenza confermata</th></tr></thead><tbody>
       ${data.attendance.map(a => `<tr>
-        <td>${esc(a.username)}</td>
+        <td>${esc(a.display_name)}</td>
         <td><span class="pill ${a.rsvp_status}">${{present:"Presente",absent:"Non presente",maybe:"In dubbio",not_configured:"Non configurato"}[a.rsvp_status]}</span></td>
         <td><input type="checkbox" ${a.confirmed ? "checked" : ""}
-             onchange="confirmAttendance(${data.event.id}, ${a.user_id}, this.checked)"></td>
+             onchange="confirmAttendance(${data.event.id}, ${a.player_id}, this.checked)"></td>
       </tr>`).join("")}
       </tbody></table>
-      <p class="muted">Spuntando la casella l'operatore riceve i punti presenza; togliendo la spunta i punti vengono revocati.</p>
+      <p class="muted">La conferma vale anche per chi non ha dichiarato nulla: spuntando la casella il giocatore
+      riceve i punti presenza; togliendo la spunta i punti vengono revocati.</p>
       ${data.guests.length ? `<h3>Ospiti in prova (${data.guests.length})</h3>
       <table><thead><tr><th>Nome</th><th>Registrato da</th><th>Presenza confermata</th><th></th></tr></thead><tbody>
         ${data.guests.map(g => `<tr>
@@ -514,12 +524,90 @@ async function renderAttendance() {
   }
   window._reloadAttendance = loadAttendance;
 }
-async function confirmAttendance(eventId, userId, confirmed) {
+async function confirmAttendance(eventId, playerId, confirmed) {
   try {
-    await api(`/events/${eventId}/attendance`, { method: "POST", body: { user_id: userId, confirmed } });
+    await api(`/events/${eventId}/attendance`, { method: "POST", body: { player_id: playerId, confirmed } });
     toast(confirmed ? "Presenza confermata (+punti)" : "Presenza revocata");
     refreshMe();
   } catch (err) { toast(err.message, false); window._reloadAttendance && window._reloadAttendance(); }
+}
+async function confirmAll(eventId, confirmed) {
+  const msg = confirmed
+    ? "Segnare PRESENTE tutta la squadra (tutti i giocatori attivi)?"
+    : "Annullare TUTTE le conferme di presenza per questo evento (i punti verranno revocati)?";
+  if (!confirm(msg)) return;
+  try {
+    const result = await api(`/events/${eventId}/attendance/all`, { method: "POST", body: { confirmed } });
+    toast(`${result.changed} giocatori aggiornati`);
+    refreshMe();
+    window._reloadAttendance && window._reloadAttendance();
+  } catch (err) { toast(err.message, false); }
+}
+
+/* ---------------- Anagrafica giocatori (admin) ---------------- */
+async function renderPlayers() {
+  const el = document.getElementById("content");
+  el.innerHTML = "<h2>Anagrafica giocatori</h2><div id='pl'>Caricamento…</div>";
+  const [players, users] = await Promise.all([api("/players"), api("/ots-users")]);
+
+  const accountSelect = (p) => {
+    const options = users.map(u => {
+      const takenByOther = u.linked_player_id && u.linked_player_id !== p.id;
+      return `<option value="${u.id}" ${p.user_id === u.id ? "selected" : ""} ${takenByOther ? "disabled" : ""}>
+        ${esc(u.username)}${takenByOther ? " (già associato)" : ""}${u.active ? "" : " (disattivo)"}</option>`;
+    }).join("");
+    return `<select onchange="linkPlayer(${p.id}, this.value)">
+      <option value="" ${p.user_id ? "" : "selected"}>— nessun account —</option>${options}</select>`;
+  };
+
+  document.getElementById("pl").innerHTML = `
+    <p class="muted">Questa è l'anagrafica a cui fanno riferimento presenze, classifica e gradi.
+       L'associazione a un account OTS è opzionale: serve solo per permettere al giocatore di
+       dichiarare da solo la propria presenza dal link dell'evento.</p>
+    <h3>Nuovo giocatore</h3>
+    <form class="inline" id="player-form">
+      <label>Nome <input name="first_name"></label>
+      <label>Cognome <input name="last_name"></label>
+      <label>Callsign <input name="callsign"></label>
+      <button class="btn primary" type="submit">Aggiungi</button>
+    </form>
+    <table><thead><tr><th>Nome</th><th>Cognome</th><th>Callsign</th><th>Account OTS</th><th>Attivo</th><th></th></tr></thead><tbody>
+    ${players.map(p => `<tr>
+      <td><input value="${esc(p.first_name)}" onchange="updatePlayer(${p.id}, {first_name: this.value})"></td>
+      <td><input value="${esc(p.last_name)}" onchange="updatePlayer(${p.id}, {last_name: this.value})"></td>
+      <td><input value="${esc(p.callsign || "")}" onchange="updatePlayer(${p.id}, {callsign: this.value})"></td>
+      <td>${accountSelect(p)}</td>
+      <td><input type="checkbox" ${p.active ? "checked" : ""} onchange="updatePlayer(${p.id}, {active: this.checked})"></td>
+      <td><button class="btn small danger" onclick="delPlayer(${p.id})">Elimina</button></td>
+    </tr>`).join("")}
+    </tbody></table>
+    <p class="muted">I giocatori disattivi non compaiono in classifica né nella lista presenze.
+       Un giocatore con presenze registrate non si può eliminare: disattivalo.</p>`;
+
+  document.getElementById("player-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api("/players", { method: "POST", body: Object.fromEntries(new FormData(e.target).entries()) });
+      toast("Giocatore aggiunto");
+      renderPlayers();
+    } catch (err) { toast(err.message, false); }
+  };
+}
+async function updatePlayer(id, body) {
+  try { await api(`/players/${id}`, { method: "PUT", body }); toast("Giocatore aggiornato"); }
+  catch (err) { toast(err.message, false); renderPlayers(); }
+}
+async function linkPlayer(id, userId) {
+  try {
+    await api(`/players/${id}`, { method: "PUT", body: { user_id: userId ? parseInt(userId, 10) : null } });
+    toast(userId ? "Account associato" : "Account scollegato");
+    renderPlayers();
+  } catch (err) { toast(err.message, false); renderPlayers(); }
+}
+async function delPlayer(id) {
+  if (!confirm("Eliminare questo giocatore?")) return;
+  try { await api(`/players/${id}`, { method: "DELETE" }); toast("Giocatore eliminato"); renderPlayers(); }
+  catch (err) { toast(err.message, false); }
 }
 
 /* ---------------- Campi da gioco (admin) ---------------- */
