@@ -186,7 +186,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MO-TAK-002 · Rev 15 · 2026-09-15</span><span>Per operatori da smartphone</span></div>
+    <div class="doc-meta"><span>MO-TAK-002 · Rev 16 · 2026-09-15</span><span>Per operatori da smartphone</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Operatore<br>Tactical Scout Codogno</h1>
@@ -320,6 +320,16 @@
     </ol>
     <div class="warn"><span class="tag">Enrollment: solo su una connessione nuova</span><p>Attiva l'enrollment <strong>nel momento in cui crei la connessione</strong>, non dopo. Aggiungerlo a una connessione già esistente spesso <strong>non lo fa ripartire</strong>: il pallino può essere verde (il canale mappa funziona) ma le funzioni «di servizio» — lista dei data package, missioni, upload — restano mute, perché manca il certificato client e il server rifiuta le chiamate senza mostrare alcun errore. Sintomo classico: la lista di download dei pacchetti resta vuota. Soluzione: <strong>cancella la connessione e ricreala da zero</strong> con l'enrollment attivo (caso reale del gruppo, risolto così a settembre 2026).</p></div>
     <div class="note"><span class="tag">Nota</span><p>La lista «dal server» mostra solo i data package <strong>pubblici</strong>: un pacchetto inviato a un destinatario specifico esiste sul server ma non compare. Il Data Package tool invece crea i pacchetti <strong>in locale</strong> e funziona anche senza server: la connessione serve solo quando li invii al gruppo.</p></div>
+    <h3>Installare le mappe da un data package</h3>
+    <p>Il gruppo distribuisce le mappe aggiuntive come data package: uno zip con dentro i file <code>.xml</code> delle sorgenti mappa. Esempio reale: <strong>PCN Geoportale Italia</strong> (IGM 25.000 / 100.000 / 250.000 e ortofoto 2006/2012, servizi WMS del Ministero dell'Ambiente).</p>
+    <ol>
+      <li>Procurati lo zip del pacchetto (te lo invia l'amministratore, o lo scarichi da <strong>Data Package → Download</strong> se è pubblico sul server).</li>
+      <li>In WinTAK: <strong>File → Import Manager → Import Files</strong>, seleziona lo zip e conferma.</li>
+      <li>Verifica: apri il selettore delle sorgenti mappa (icona del mappamondo) e cerca le nuove voci, es. <strong>«PCN IGM 25.000 (Italia)»</strong>.</li>
+    </ol>
+    <div class="warn"><span class="tag">Le mappe non compaiono nel selettore?</span><p>Succede in due casi: l'import non ha smistato gli XML, oppure <strong>il pacchetto l'hai creato tu</strong> col Data Package tool — che confeziona e invia, ma <strong>non installa</strong> nulla sul tuo WinTAK. La soluzione è la stessa: chiudi WinTAK e copia i file <code>.xml</code> delle mappe in <code>C:\ProgramData\WinTAK\Imagery</code> (cartella nascosta: attiva «Elementi nascosti» in Esplora file), poi riavvia. Se non hai più gli XML sciolti, WinTAK li tiene in <code>%APPDATA%\WinTAK\Data Packages\files\&lt;uid&gt;\</code>, e lo zip pronto da distribuire in <code>%APPDATA%\WinTAK\Data Packages\</code> (caso reale del gruppo, risolto così a settembre 2026).</p></div>
+    <div class="note"><span class="tag">Zoom limitato = normale</span><p>Le sorgenti PCN coprono solo certi livelli di zoom (es. la IGM 25.000 rende tra zoom 13 e 16): se a zoom più larghi o più stretti vedi la mappa nera o vuota non è un guasto, sei solo fuori dal range della sorgente — cambia scala o sorgente.</p></div>
+    <div class="note"><span class="tag">Se lo zip lo prepari a mano</span><p>La struttura conta: al primo livello dello zip devono esserci direttamente gli <code>.xml</code> e la cartella <code>MANIFEST\manifest.xml</code> — <strong>non</strong> una cartella che li contiene. Se zippi la cartella intera invece del suo contenuto, l'import fallisce senza spiegazioni.</p></div>
   </section>
 
   <section id="s8">
@@ -465,7 +475,7 @@
   </section>
 
   <footer>
-    <span>MO-TAK-002 · Rev 15</span>
+    <span>MO-TAK-002 · Rev 16</span>
     <span>Compagno del Manuale Operatore TAK (MO-TAK-001)</span>
   </footer>
 </div>
