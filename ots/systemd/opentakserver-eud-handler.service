@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenTAKServer EUD Handler (CoT SSL 8089)
+Wants=network.target rabbitmq-server.service
+After=network.target rabbitmq-server.service opentakserver.service
+PartOf=opentakserver.service
+
+[Service]
+User=ots
+WorkingDirectory=/home/ots/ots
+ExecStart=/home/ots/.opentakserver_venv/bin/eud_handler --ssl
+Restart=always
+RestartSec=5s
+StandardOutput=append:/home/ots/ots/logs/opentakserver.log
+StandardError=append:/home/ots/ots/logs/opentakserver.log
+
+[Install]
+WantedBy=multi-user.target
