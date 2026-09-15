@@ -204,7 +204,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MA-TAK-001 · Rev 9 · 2026-09-15</span><span>Server: n3test002</span></div>
+    <div class="doc-meta"><span>MA-TAK-001 · Rev 10 · 2026-09-15</span><span>Server: n3test002</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Amministratore<br>Tactical Scout Codogno</h1>
@@ -358,6 +358,28 @@ sudo systemctl enable --now opentakserver-eud-handler.service</pre>
 ss -tlnp | grep 8089
 pgrep -af 'bin/eud_handler'   <span class="c"># deve mostrare UNA sola riga</span></pre>
     <div class="note"><span class="tag">Istanza singola</span><p>Dell'<code>eud_handler</code> deve girare <strong>una sola istanza</strong>: con più copie attive i messaggi RabbitMQ vengono smistati a rotazione tra gli handler e i client perdono traffico («socket is closed» su ATAK, missioni che non si sincronizzano). Se <code>pgrep</code> mostra più righe, <code>sudo systemctl restart opentakserver-eud-handler</code>: la unit ripulisce le orfane da sola all'avvio. Per il <code>cot_parser</code> invece <strong>due processi sono normali</strong> (padre + worker).</p></div>
+    <h3>Certificati: le due catene di fiducia</h3>
+    <p>Sul server convivono <strong>due mondi TLS separati</strong>, con CA diverse — e i loro certificati <strong>non sono intercambiabili</strong>:</p>
+    <div class="tblwrap"><table>
+      <tr><th>Porta</th><th>Chi si collega</th><th>CA di cui il client si fida</th><th>Certificato da servire</th></tr>
+      <tr><td><strong>443</strong> (web UI del dominio)</td><td>Browser</td><td>Le CA pubbliche mondiali (Let's Encrypt inclusa)</td><td><code>/etc/letsencrypt/live/tacticalscout.3utilities.com/fullchain.pem</code></td></tr>
+      <tr><td><strong>8443</strong> (API Marti, mTLS) e <strong>8089</strong> (CoT)</td><td>Solo ATAK/iTAK del gruppo</td><td><strong>Solo</strong> la <code>OpenTAKServer-CA</code> privata (nel truststore del data package)</td><td><code>/home/ots/ots/ca/certs/opentakserver/opentakserver.pem</code></td></tr>
+    </table></div>
+    <div class="warn"><span class="tag">Regola d'oro</span><p>Sul blocco nginx della <strong>8443</strong> va <strong>solo</strong> il certificato firmato dalla CA di OTS — mai quello del dominio. ATAK ignora deliberatamente le CA pubbliche: si fida solo della CA privata del data package. <strong>Caso reale (2026-09-15):</strong> con il certificato Let's Encrypt sulla 8443, gli ATAK rifiutavano l'handshake TLS e missioni, data package e foto GeoCam non si sincronizzavano da mesi — con la CoT (8089) perfettamente verde, <em>nessuna</em> riga negli access log (la richiesta HTTP non parte mai) e su ATAK al più un «Failed to parse response». Nei client non va toccato nulla: la catena privata resta valida, il fix è solo nella config nginx.</p></div>
+    <p>Verifica al volo di che cosa serve ogni porta (issuer atteso: <code>OpenTAKServer-CA</code> sulla 8443/8089, Let's Encrypt sulla 443):</p>
+    <pre>echo | openssl s_client -connect 127.0.0.1:8443 2>/dev/null | openssl x509 -noout -subject -issuer -dates
+echo | openssl s_client -connect 127.0.0.1:8089 2>/dev/null | openssl x509 -noout -subject -issuer -dates</pre>
+    <p>I certificati sono nel blocco <code>listen 8443</code> di <code>/etc/nginx/sites-available/ots_https</code> (direttive <code>ssl_certificate</code>/<code>ssl_certificate_key</code>); dopo ogni modifica: <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code>.</p>
+
+    <h3>Monitoraggio e rinnovo automatico dei certificati</h3>
+    <p>Un timer systemd (<code>ots-cert-check.timer</code>, ogni giorno alle 6:15) esegue <code>ots/scripts/check-certs.sh</code>: rinnova Let's Encrypt con certbot (e ricarica nginx), poi controlla le scadenze di entrambi i certificati e <strong>avvisa su Telegram</strong> (bot <code>@n3_n8n_bot</code>) se il rinnovo fallisce o se un certificato è sotto i 14 giorni o scaduto. Installazione:</p>
+    <pre>cd /home/ots/atakcivsaas &amp;&amp; sudo git pull
+sudo chmod +x ots/scripts/check-certs.sh
+sudo cp ots/systemd/ots-cert-check.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload &amp;&amp; sudo systemctl enable --now ots-cert-check.timer</pre>
+    <p>Le credenziali del bot vivono <strong>solo sul server</strong> in <code>/etc/ots-notify.env</code> (chmod 600, mai nel repo): due righe, <code>TELEGRAM_TOKEN=…</code> e <code>TELEGRAM_CHAT_ID=…</code>. Test della notifica:</p>
+    <pre>sudo /home/ots/atakcivsaas/ots/scripts/check-certs.sh --test</pre>
+
     <h3>Verifica rapida di salute</h3>
     <pre>systemctl status opentakserver opentakserver-cot-parser opentakserver-eud-handler --no-pager | grep -E "●|Active"
 ss -tlnp | grep -E '8080|8089|8443'
@@ -470,6 +492,11 @@ sudo /home/ots/atakcivsaas/ots/scripts/install-eventcalendar-plugin.sh --check</
         <td><code>sudo rabbitmqctl list_queues name messages consumers</code>: ogni EUD connesso deve avere <strong>1</strong> consumer; se di più, riavvia <code>opentakserver-eud-handler</code></td>
       </tr>
       <tr>
+        <td>CoT verde ma missioni, data package e GeoCam non sincronizzano; nessuna riga <code>/Marti</code> in access.log; su ATAK «Failed to parse response»</td>
+        <td>Certificato sbagliato sul blocco nginx 8443: il client rifiuta l'handshake TLS</td>
+        <td><code>openssl s_client -connect 127.0.0.1:8443</code> deve dare issuer <code>OpenTAKServer-CA</code> — vedi «Certificati» in sez. 7</td>
+      </tr>
+      <tr>
         <td>Un plugin ATAK (es. <strong>GeoCam</strong>) dà «errore server» e non sincronizza</td>
         <td>Limite upload di nginx (413), endpoint Marti non implementato da OTS (404) o traceback (500)</td>
         <td>Procedura «Debug di un plugin ATAK» qui sotto</td>
@@ -512,7 +539,7 @@ curl -vk --cert /tmp/eud.pem -F "assetfile=@/tmp/test.jpg" \
   "https://127.0.0.1:8443/Marti/sync/upload?name=test.jpg"
 rm /tmp/eud.pem   <span class="c"># pulizia: contiene la chiave privata</span></pre>
     <p><strong>4 · Se la foto viene caricata ma non appare agli altri EUD</strong>, il problema è a valle (notifica CoT): verifica <code>cot_parser</code> e le code RabbitMQ come nelle sottosezioni qui sopra.</p>
-    <div class="note"><span class="tag">GeoCam — stato</span><p>GeoCam carica le foto georeferenziate via Enterprise Sync (<code>/Marti/sync/…</code>), che OTS implementa solo in parte: al momento sul nostro server la sincronizzazione <strong>dà errore</strong> ed è in corso di debug con questa procedura. Aggiornare questa nota con l'esito.</p></div>
+    <div class="note"><span class="tag">GeoCam — risolto (2026-09-15)</span><p>Il caso che ha originato questa procedura è chiuso: la causa era il <strong>certificato del dominio (Let's Encrypt, per giunta scaduto) sul blocco nginx della 8443</strong> — gli ATAK rifiutavano l'handshake TLS e nessun upload arrivava al server (vedi «Certificati» in sez. 7). Hanno contribuito al quadro anche le istanze orfane di <code>eud_handler</code> (sez. 7) e le code RabbitMQ intasate dei dispositivi offline. La procedura qui sopra resta il percorso di diagnosi consigliato; il tassello in più imparato sul campo: se in nginx <em>non compare nulla</em>, verificare l'handshake con <code>tcpdump</code> sulla 8443 — un client che chiude subito dopo il certificato del server è un problema di fiducia TLS, non di API.</p></div>
   </section>
 
   <section id="s10">
@@ -525,7 +552,7 @@ rm /tmp/eud.pem   <span class="c"># pulizia: contiene la chiave privata</span></
   </section>
 
   <footer>
-    <span>MA-TAK-001 · Rev 9</span>
-    <span>Aggiornato il 2026-09-15: unit dedicata eud-handler (8089), check istanza singola, troubleshooting socket is closed</span>
+    <span>MA-TAK-001 · Rev 10</span>
+    <span>Aggiornato il 2026-09-15: le due catene di certificati (443 vs 8443), monitoraggio con notifiche Telegram, caso GeoCam risolto</span>
   </footer>
 </div>
