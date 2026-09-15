@@ -185,7 +185,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MO-TAK-002 · Rev 10 · 2026-09-15</span><span>Per operatori da smartphone</span></div>
+    <div class="doc-meta"><span>MO-TAK-002 · Rev 11 · 2026-09-15</span><span>Per operatori da smartphone</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Operatore<br>Tactical Scout Codogno</h1>
@@ -207,7 +207,8 @@
       <li><a href="#s7"><span class="n">7</span> Primi passi sulla mappa</a></li>
       <li><a href="#s8"><span class="n">8</span> Video dal telefono (OpenTAK ICU) <span class="chip android">Android</span></a></li>
       <li><a href="#s9"><span class="n">9</span> Radio Baofeng: CHIRP e piano canali</a></li>
-      <li><a href="#s10"><span class="n">10</span> Problemi comuni</a></li>
+      <li><a href="#s10"><span class="n">10</span> Tag Meshtastic: hardware</a></li>
+      <li><a href="#s11"><span class="n">11</span> Problemi comuni</a></li>
     </ol>
   </nav>
 
@@ -367,7 +368,24 @@
   </section>
 
   <section id="s10">
-    <h2><span class="n">10</span> Problemi comuni</h2>
+    <h2><span class="n">10</span> Tag Meshtastic: hardware</h2>
+    <p>I tag del gruppo sono schede <strong>LILYGO TTGO T-Beam 868 MHz</strong> in case stampato in 3D. Caratteristiche:</p>
+    <div class="tblwrap"><table>
+      <tr><th>Componente</th><th>Dettaglio</th></tr>
+      <tr><td>Scheda</td><td>LILYGO TTGO T-Beam, banda <strong>868 MHz</strong> (regione EU_868)</td></tr>
+      <tr><td>Processore</td><td>ESP32 (WiFi + Bluetooth), chip USB CH9102F</td></tr>
+      <tr><td>GPS</td><td>modulo u-blox <strong>integrato</strong> con antenna ceramica: i tag funzionano da tracker autonomi</td></tr>
+      <tr><td>Display</td><td>OLED 0,96&Prime; saldato (pulsante utente: pressione breve = naviga, lunga = seleziona)</td></tr>
+      <tr><td>Batteria</td><td>cella <strong>18650</strong> nel portabatteria a bordo, ricarica via USB</td></tr>
+      <tr><td>Firmware</td><td>Meshtastic — versione validata nella tabella della sez. 4</td></tr>
+      <tr><td>Case</td><td>stampato in 3D — modello <a href="https://www.printables.com/model/127253-t-beam-v1x-case-for-meshtastic">«T-Beam V1.x case for Meshtastic» su Printables</a></td></tr>
+    </table></div>
+    <div class="warn"><span class="tag">Attenzione</span><p><strong>Mai accendere la scheda senza l'antenna LoRa collegata</strong>: trasmettere senza antenna può danneggiare in modo permanente il modulo radio. Alla stessa maniera, se apri il case controlla che i connettori delle antenne (LoRa e GPS) siano ben agganciati — il connettore u.FL del GPS si stacca facilmente, e senza antenna il tag non prende mai il fix.</p></div>
+    <div class="note"><span class="tag">Nota</span><p>Il primo fix GPS di un modulo nuovo (o rimasto spento a lungo) può richiedere <strong>15–30 minuti</strong> all'aperto con cielo libero. I fix successivi arrivano in secondi. Un tag senza fix compare nella mesh ma <strong>non genera nessun marker su ATAK</strong>.</p></div>
+  </section>
+
+  <section id="s11">
+    <h2><span class="n">11</span> Problemi comuni</h2>
     <div class="tblwrap"><table>
       <tr><th>Problema</th><th>Soluzione</th></tr>
       <tr>
@@ -403,7 +421,7 @@
   </section>
 
   <footer>
-    <span>MO-TAK-002 · Rev 10</span>
+    <span>MO-TAK-002 · Rev 11</span>
     <span>Compagno del Manuale Operatore TAK (MO-TAK-001)</span>
   </footer>
 </div>
