@@ -31,6 +31,9 @@ richiesto.
   `DELETE /Marti/api/missions/<name>/contents`: toglie solo il link
   contenuto↔missione, registra un `MissionChange` `REMOVE_CONTENT` e notifica
   gli EUD iscritti; il file resta sul server e nello storico della missione.
+  Dalla 1.3.0 i contenuti immagine (foto GeoCam incluse) hanno l'**anteprima**
+  in tabella: miniatura servita inline da `/missions/<name>/contents/<hash>/preview`,
+  clic per aprirla a dimensione piena.
 - **Configurazione**: API key modificabile dalla UI, salvata in `config.yml`.
 
 ## Configurazione

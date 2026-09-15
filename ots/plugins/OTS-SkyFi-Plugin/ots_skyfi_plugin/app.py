@@ -496,6 +496,38 @@ class SkyFiPlugin(Plugin):
 
     @staticmethod
     @roles_accepted("administrator")
+    @blueprint.route("/missions/<mission_name>/contents/<file_hash>/preview", methods=["GET"])
+    def preview_mission_content(mission_name: str, file_hash: str):
+        """Serve inline (non come download) un contenuto immagine, per le
+        anteprime nella tabella del tab Missioni."""
+        try:
+            content = db.session.execute(
+                db.session.query(MissionContent).filter_by(hash=file_hash)
+            ).scalar()
+            if not content:
+                return jsonify({"success": False, "error": f"Nessun contenuto con hash {file_hash}"}), 404
+
+            mime = (content.mime_type or "").lower()
+            if not mime.startswith("image/"):
+                guessed, _ = mimetypes.guess_type(content.filename or "")
+                if guessed and guessed.startswith("image/"):
+                    mime = guessed
+                else:
+                    return jsonify({"success": False, "error": "Anteprima disponibile solo per le immagini"}), 415
+
+            location = _mission_content_location(content)
+            if not location:
+                return jsonify({"success": False, "error": f"File non trovato sul server: {content.filename}"}), 404
+
+            folder, name = location
+            return send_from_directory(folder, name, as_attachment=False, mimetype=mime, max_age=3600)
+        except BaseException as e:
+            logger.error(f"Failed to preview mission content {file_hash}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
     @blueprint.route("/missions/<mission_name>/contents/<file_hash>", methods=["DELETE"])
     def remove_mission_content(mission_name: str, file_hash: str):
         """Rimuove un contenuto dalla missione replicando il flusso di

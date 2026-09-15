@@ -71,6 +71,8 @@
   table.contents th, table.contents td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
   table.contents th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
   table.contents td.actions { white-space: nowrap; text-align: right; }
+  img.thumb { width: 72px; height: 54px; object-fit: cover; border-radius: 4px;
+    border: 1px solid var(--border); cursor: zoom-in; display: block; background: #0003; }
   .filename { word-break: break-all; font-weight: 600; }
   .kw { display: inline-block; background: var(--tab); border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px; font-size: 11px; color: var(--muted); margin-right: 4px; }
   #modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 20; }
@@ -493,10 +495,17 @@ async function loadMissionContents() {
   box.innerHTML = `
     <table class="contents">
       <thead><tr>
-        <th>Nome file</th><th>Tipo</th><th>Dimensione</th><th>Caricato da</th><th>Data</th><th></th>
+        <th></th><th>Nome file</th><th>Tipo</th><th>Dimensione</th><th>Caricato da</th><th>Data</th><th></th>
       </tr></thead>
       <tbody>${contents.map(c => `
         <tr>
+          <td>${isImageContent(c) && c.on_disk ? `
+            <img class="thumb" loading="lazy" alt="anteprima ${esc(c.filename)}"
+              title="Clic per aprire a dimensione piena"
+              src="${API}/missions/${encodeURIComponent(CURRENT_MISSION)}/contents/${encodeURIComponent(c.hash)}/preview"
+              onclick="window.open(this.src, '_blank')"
+              onerror="this.remove()">` : ""}
+          </td>
           <td><span class="filename">${esc(c.filename)}</span><br>
             ${(c.keywords || []).map(k => `<span class="kw">${esc(k)}</span>`).join("")}
             ${c.on_disk ? "" : '<span class="pill err" title="Il file non è più presente su disco: il download fallirà">file mancante</span>'}
@@ -516,6 +525,11 @@ async function loadMissionContents() {
     </table>
     <p class="muted">La rimozione toglie il dataset dalla missione e notifica gli EUD iscritti con un
       CoT di mission change, come farebbe ATAK; il file resta sul server e nello storico della missione.</p>`;
+}
+
+function isImageContent(c) {
+  return (c.mime_type || "").toLowerCase().startsWith("image/")
+    || /\.(jpe?g|png|gif|webp|bmp|avif)$/i.test(c.filename || "");
 }
 
 function downloadMissionContent(hash) {
