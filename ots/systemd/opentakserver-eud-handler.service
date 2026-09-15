@@ -7,6 +7,10 @@ PartOf=opentakserver.service
 [Service]
 User=ots
 WorkingDirectory=/home/ots/ots
+# Il main di OTS a volte spawna copie orfane dell'handler: prima di partire
+# eliminiamo ogni istanza estranea, così l'unica attiva è quella di questa unit
+ExecStartPre=-/usr/bin/pkill -f [.]opentakserver_venv/bin/eud_handler
+ExecStartPre=/bin/sleep 2
 ExecStart=/home/ots/.opentakserver_venv/bin/eud_handler --ssl
 Restart=always
 RestartSec=5s
