@@ -204,7 +204,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MA-TAK-001 · Rev 6 · 2026-09-15</span><span>Server: n3test002</span></div>
+    <div class="doc-meta"><span>MA-TAK-001 · Rev 7 · 2026-09-15</span><span>Server: n3test002</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Amministratore<br>Tactical Scout Codogno</h1>
@@ -452,8 +452,8 @@ sudo /home/ots/atakcivsaas/ots/scripts/install-eventcalendar-plugin.sh --check</
 sudo -u postgres psql -d ots -c "SELECT device_uid, battery, timestamp FROM points ORDER BY id DESC LIMIT 5;"</pre>
     <p>Contatori che crescono mentre un client trasmette = catena sana. Fermi a zero = riparti dalla prima riga della tabella qui sopra.</p>
     <h3>Verificare lo smistamento (RabbitMQ)</h3>
-    <pre>rabbitmqctl list_queues name messages consumers</pre>
-    <p>Ogni client connesso ha una coda di consegna col suo nome/UID. Code con messaggi accumulati e zero consumer indicano un consumer morto.</p>
+    <pre>sudo rabbitmqctl list_queues name messages consumers</pre>
+    <p>Serve <code>sudo</code>: lanciato dall'utente <code>ots</code> il comando non legge il cookie Erlang e stampa solo la pagina di aiuto («Only root or rabbitmq should run rabbitmqctl»). Ogni client connesso ha una coda di consegna col suo nome/UID. Code con messaggi accumulati e zero consumer indicano un consumer morto.</p>
   </section>
 
   <section id="s10">
@@ -466,7 +466,7 @@ sudo -u postgres psql -d ots -c "SELECT device_uid, battery, timestamp FROM poin
   </section>
 
   <footer>
-    <span>MA-TAK-001 · Rev 6</span>
-    <span>Aggiornato con le procedure di aggiornamento plugin del 2026-09-15</span>
+    <span>MA-TAK-001 · Rev 7</span>
+    <span>Aggiornato il 2026-09-15: sudo per rabbitmqctl nella verifica dello smistamento</span>
   </footer>
 </div>
