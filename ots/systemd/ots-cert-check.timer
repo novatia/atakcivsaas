@@ -1,0 +1,10 @@
+[Unit]
+Description=Controllo giornaliero certificati OTS
+
+[Timer]
+OnCalendar=*-*-* 06:15:00
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
