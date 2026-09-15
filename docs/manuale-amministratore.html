@@ -204,7 +204,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MA-TAK-001 · Rev 12 · 2026-09-15</span><span>Server: n3test002</span></div>
+    <div class="doc-meta"><span>MA-TAK-001 · Rev 13 · 2026-09-15</span><span>Server: n3test002</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Amministratore<br>Tactical Scout Codogno</h1>
@@ -382,6 +382,11 @@ sudo cp ots/systemd/ots-cert-check.{service,timer} /etc/systemd/system/
 sudo systemctl daemon-reload &amp;&amp; sudo systemctl enable --now ots-cert-check.timer</pre>
     <p>Le credenziali del bot vivono <strong>solo sul server</strong> in <code>/etc/ots-notify.env</code> (chmod 600, mai nel repo): due righe, <code>TELEGRAM_TOKEN=…</code> e <code>TELEGRAM_CHAT_ID=…</code>. Test della notifica:</p>
     <pre>sudo /home/ots/atakcivsaas/ots/scripts/check-certs.sh --test</pre>
+    <div class="warn"><span class="tag">Authenticator = nginx</span><p>Il metodo di validazione con cui certbot rinnova è scritto in <code>/etc/letsencrypt/renewal/tacticalscout.3utilities.com.conf</code> e deve essere <code>authenticator = nginx</code>: la sfida HTTP-01 passa attraverso nginx già in ascolto sulla 80. <strong>Caso reale (2026-09-15):</strong> il certificato era stato emesso in origine con <code>--standalone</code> (certbot apre un proprio server sulla porta 80) e ogni rinnovo falliva con «Could not bind TCP port 80 because it is already in use» — il certificato è rimasto scaduto per mesi. Fix, una tantum:</p>
+    <pre>sudo apt-get install -y python3-certbot-nginx
+sudo certbot certonly --nginx -d tacticalscout.3utilities.com --deploy-hook "systemctl reload nginx"
+sudo certbot renew --dry-run   <span class="c"># deve chiudere con "all simulated renewals succeeded"</span></pre>
+    <p><code>certbot certonly</code> installa solo i file in <code>/etc/letsencrypt/live/</code> e <strong>non tocca la configurazione nginx</strong> (la regola d'oro sulla 8443 resta al sicuro). Se la validazione fallisce con timeout o «unauthorized», verificare che la regola firewall GCP per la porta 80 sia aperta verso internet.</p></div>
 
     <h3>Verifica rapida di salute</h3>
     <pre>systemctl status opentakserver opentakserver-cot-parser opentakserver-eud-handler --no-pager | grep -E "●|Active"
@@ -560,7 +565,7 @@ rm /tmp/eud.pem   <span class="c"># pulizia: contiene la chiave privata</span></
   </section>
 
   <footer>
-    <span>MA-TAK-001 · Rev 12</span>
+    <span>MA-TAK-001 · Rev 13</span>
     <span>Aggiornato il 2026-09-15: mai ricreare una missione (token stantii → 401 su Upload All), invito vs QR</span>
   </footer>
 </div>
