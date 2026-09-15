@@ -204,7 +204,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MA-TAK-001 · Rev 10 · 2026-09-15</span><span>Server: n3test002</span></div>
+    <div class="doc-meta"><span>MA-TAK-001 · Rev 11 · 2026-09-15</span><span>Server: n3test002</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Amministratore<br>Tactical Scout Codogno</h1>
@@ -328,6 +328,7 @@
       <tr><td>Programma (venv Python)</td><td><code>/home/ots/.opentakserver_venv/</code></td></tr>
       <tr><td>Dati, config, certificati, log</td><td><code>/home/ots/ots/</code> (<code>config.yml</code>, <code>ca/</code>, <code>logs/</code>)</td></tr>
       <tr><td>Repo operativo (script, unit, docs)</td><td><code>/home/ots/atakcivsaas/</code> — <a href="https://github.com/novatia/atakcivsaas">github.com/novatia/atakcivsaas</a></td></tr>
+      <tr><td>File caricati (data package e contenuti missione, foto GeoCam incluse)</td><td><code>/home/ots/ots/uploads/</code> — zip nominati con l'hash SHA-256 del contenuto (lo stesso hash delle URL <code>/Marti/sync/content</code>); vista comoda: tab «Missioni» della UI del plugin SkyFi</td></tr>
       <tr><td>Backup</td><td><code>/root/ots-backups/</code> (rotazione: ultimi 5)</td></tr>
       <tr><td>Database</td><td>PostgreSQL, db <code>ots</code></td></tr>
     </table></div>
@@ -552,7 +553,7 @@ rm /tmp/eud.pem   <span class="c"># pulizia: contiene la chiave privata</span></
   </section>
 
   <footer>
-    <span>MA-TAK-001 · Rev 10</span>
-    <span>Aggiornato il 2026-09-15: le due catene di certificati (443 vs 8443), monitoraggio con notifiche Telegram, caso GeoCam risolto</span>
+    <span>MA-TAK-001 · Rev 11</span>
+    <span>Aggiornato il 2026-09-15: catene certificati 443/8443, monitoraggio Telegram, GeoCam risolto, posizione file caricati</span>
   </footer>
 </div>
