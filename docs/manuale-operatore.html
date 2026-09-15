@@ -186,7 +186,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MO-TAK-002 · Rev 14 · 2026-09-15</span><span>Per operatori da smartphone</span></div>
+    <div class="doc-meta"><span>MO-TAK-002 · Rev 15 · 2026-09-15</span><span>Per operatori da smartphone</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Operatore<br>Tactical Scout Codogno</h1>
@@ -415,6 +415,13 @@
     </table></div>
     <div class="warn"><span class="tag">Attenzione</span><p><strong>Mai accendere la scheda senza l'antenna LoRa collegata</strong>: trasmettere senza antenna può danneggiare in modo permanente il modulo radio. Alla stessa maniera, se apri il case controlla che i connettori delle antenne (LoRa e GPS) siano ben agganciati — il connettore u.FL del GPS si stacca facilmente, e senza antenna il tag non prende mai il fix.</p></div>
     <div class="note"><span class="tag">Nota</span><p>Il primo fix GPS di un modulo nuovo (o rimasto spento a lungo) può richiedere <strong>15–30 minuti</strong> all'aperto con cielo libero. I fix successivi arrivano in secondi. Un tag senza fix compare nella mesh ma <strong>non genera nessun marker su ATAK</strong>.</p></div>
+    <h3>Accensione e spegnimento</h3>
+    <p>Il T-Beam ha tre pulsanti: <strong>PWR</strong> (alimentazione), il <strong>pulsante utente</strong> (naviga il menu del display) e <strong>RST</strong> (riavvia soltanto — non spegne).</p>
+    <ul>
+      <li><strong>Accendere</strong>: pressione breve di <strong>PWR</strong> (o basta inserire la batteria/collegare l'USB).</li>
+      <li><strong>Spegnere</strong>: tieni premuto <strong>PWR</strong> per circa <strong>6 secondi</strong> finché il display si spegne. In alternativa, dall'app Meshtastic connessa via Bluetooth: menu del dispositivo → <strong>Spegni (Shutdown)</strong>.</li>
+    </ul>
+    <div class="note"><span class="tag">Nota</span><p>Con il <strong>cavo USB collegato</strong> il tag resta alimentato e può riaccendersi da solo: per lo stoccaggio spegnilo col pulsante PWR <em>e</em> stacca il cavo. Un tag spento non fa da ripetitore per gli altri: se la squadra contava su di lui per la copertura, la mesh si accorcia.</p></div>
   </section>
 
   <section id="s12">
@@ -458,7 +465,7 @@
   </section>
 
   <footer>
-    <span>MO-TAK-002 · Rev 14</span>
+    <span>MO-TAK-002 · Rev 15</span>
     <span>Compagno del Manuale Operatore TAK (MO-TAK-001)</span>
   </footer>
 </div>
