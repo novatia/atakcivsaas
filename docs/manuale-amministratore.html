@@ -204,7 +204,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MA-TAK-001 · Rev 7 · 2026-09-15</span><span>Server: n3test002</span></div>
+    <div class="doc-meta"><span>MA-TAK-001 · Rev 8 · 2026-09-15</span><span>Server: n3test002</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Amministratore<br>Tactical Scout Codogno</h1>
@@ -446,6 +446,11 @@ sudo /home/ots/atakcivsaas/ots/scripts/install-eventcalendar-plugin.sh --check</
         <td>La disabilitazione ha effetto al riavvio</td>
         <td><code>systemctl restart opentakserver</code></td>
       </tr>
+      <tr>
+        <td>Un plugin ATAK (es. <strong>GeoCam</strong>) dà «errore server» e non sincronizza</td>
+        <td>Limite upload di nginx (413), endpoint Marti non implementato da OTS (404) o traceback (500)</td>
+        <td>Procedura «Debug di un plugin ATAK» qui sotto</td>
+      </tr>
     </table></div>
     <h3>Verificare i dati sul database</h3>
     <pre>sudo -u postgres psql -d ots -c "SELECT COUNT(*) FROM cot;"
@@ -454,6 +459,37 @@ sudo -u postgres psql -d ots -c "SELECT device_uid, battery, timestamp FROM poin
     <h3>Verificare lo smistamento (RabbitMQ)</h3>
     <pre>sudo rabbitmqctl list_queues name messages consumers</pre>
     <p>Serve <code>sudo</code>: lanciato dall'utente <code>ots</code> il comando non legge il cookie Erlang e stampa solo la pagina di aiuto («Only root or rabbitmq should run rabbitmqctl»). Ogni client connesso ha una coda di consegna col suo nome/UID. Code con messaggi accumulati e zero consumer indicano un consumer morto.</p>
+
+    <h3 id="debug-plugin-atak">Debug di un plugin ATAK che dà errore lato server (caso GeoCam)</h3>
+    <p>Vale per ogni plugin ATAK che parla col server via HTTPS (GeoCam, Data Sync, allegati immagine…). L'idea: i plugin passano tutti dal reverse proxy nginx sulla 8443, quindi <strong>l'access log di nginx dice esattamente quale endpoint chiama il plugin e con quale codice HTTP</strong> — da lì la diagnosi è quasi automatica.</p>
+    <p><strong>1 · Osserva in diretta mentre riproduci il problema.</strong> Tre terminali sul server, poi dal telefono ripeti l'azione che fallisce (per GeoCam: scatta e condividi una foto):</p>
+    <pre><span class="c"># T1 — log applicativo OTS (tracebacks Python)</span>
+tail -f /home/ots/ots/logs/opentakserver.log
+<span class="c"># T2 — journal del servizio (errori che non finiscono nel file)</span>
+sudo journalctl -u opentakserver -f
+<span class="c"># T3 — nginx: QUI si vede l'endpoint chiamato e il codice HTTP</span>
+sudo tail -f /var/log/nginx/access.log /var/log/nginx/error.log</pre>
+    <p>Poi isola le righe del telefono: <code>sudo grep &lt;ip-del-telefono&gt; /var/log/nginx/access.log | tail -30</code></p>
+    <p><strong>2 · Classifica il codice HTTP</strong> della richiesta fallita:</p>
+    <div class="tblwrap"><table>
+      <tr><th>Codice</th><th>Significato</th><th>Azione</th></tr>
+      <tr><td><strong>413</strong></td><td>Foto più grande del limite upload di nginx (default 1&nbsp;MB) — in <code>error.log</code>: «client intended to send too large body»</td><td><code>client_max_body_size 50M;</code> nel server block della 8443, poi <code>sudo nginx -t &amp;&amp; sudo systemctl reload nginx</code></td></tr>
+      <tr><td><strong>404</strong></td><td>Endpoint Marti non implementato da OTS (l'API Marti è coperta solo in parte)</td><td>Confronta con <a href="https://docs.opentakserver.io/marti_api.html">docs.opentakserver.io/marti_api.html</a>; se manca, issue upstream — il plugin non è (ancora) supportato</td></tr>
+      <tr><td><strong>500</strong></td><td>Bug in OTS</td><td><code>grep -B5 -A30 "Traceback" /home/ots/ots/logs/opentakserver.log | tail -80</code> e issue upstream col traceback</td></tr>
+      <tr><td><strong>400/401/403</strong></td><td>Certificato client o payload</td><td>In <code>error.log</code> cerca errori SSL; reimporta il data package sull'EUD</td></tr>
+      <tr><td><em>nessuna riga</em></td><td>La richiesta non arriva a nginx (TLS fallito a monte, o il plugin usa un'altra porta)</td><td><code>sudo tail -f /var/log/nginx/error.log</code> durante la riproduzione; <code>ss -tnp | grep &lt;ip-del-telefono&gt;</code></td></tr>
+    </table></div>
+    <p><strong>3 · Riproduci la chiamata a mano</strong> con un certificato client (i <code>.p12</code> degli utenti sono sotto <code>/home/ots/ots/ca/certs/&lt;utente&gt;/</code>, password di default <code>atakatak</code>):</p>
+    <pre><span class="c"># estrai cert+chiave in PEM</span>
+openssl pkcs12 -in /home/ots/ots/ca/certs/&lt;utente&gt;/&lt;utente&gt;.p12 \
+  -out /tmp/eud.pem -nodes -passin pass:atakatak
+<span class="c"># replica l'endpoint visto nell'access log, es.:</span>
+curl -vk --cert /tmp/eud.pem "https://127.0.0.1:8443/Marti/api/version"
+curl -vk --cert /tmp/eud.pem -F "assetfile=@/tmp/test.jpg" \
+  "https://127.0.0.1:8443/Marti/sync/upload?name=test.jpg"
+rm /tmp/eud.pem   <span class="c"># pulizia: contiene la chiave privata</span></pre>
+    <p><strong>4 · Se la foto viene caricata ma non appare agli altri EUD</strong>, il problema è a valle (notifica CoT): verifica <code>cot_parser</code> e le code RabbitMQ come nelle sottosezioni qui sopra.</p>
+    <div class="note"><span class="tag">GeoCam — stato</span><p>GeoCam carica le foto georeferenziate via Enterprise Sync (<code>/Marti/sync/…</code>), che OTS implementa solo in parte: al momento sul nostro server la sincronizzazione <strong>dà errore</strong> ed è in corso di debug con questa procedura. Aggiornare questa nota con l'esito.</p></div>
   </section>
 
   <section id="s10">
@@ -466,7 +502,7 @@ sudo -u postgres psql -d ots -c "SELECT device_uid, battery, timestamp FROM poin
   </section>
 
   <footer>
-    <span>MA-TAK-001 · Rev 7</span>
-    <span>Aggiornato il 2026-09-15: sudo per rabbitmqctl nella verifica dello smistamento</span>
+    <span>MA-TAK-001 · Rev 8</span>
+    <span>Aggiornato il 2026-09-15: procedura di debug plugin ATAK lato server (caso GeoCam)</span>
   </footer>
 </div>
