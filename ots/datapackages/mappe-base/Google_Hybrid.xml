@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<customMapSource>
+    <name>Google Hybrid (satellite + nomi)</name>
+    <minZoom>0</minZoom>
+    <maxZoom>20</maxZoom>
+    <tileType>jpg</tileType>
+    <tileUpdate>None</tileUpdate>
+    <url>https://mt{$serverpart}.google.com/vt/lyrs=y&amp;x={$x}&amp;y={$y}&amp;z={$z}</url>
+    <backgroundColor>#000000</backgroundColor>
+    <ignoreErrors>false</ignoreErrors>
+    <serverParts>0 1 2 3</serverParts>
+</customMapSource>

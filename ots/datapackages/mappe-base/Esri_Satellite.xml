@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<customMapSource>
+    <name>Esri Satellite (World Imagery)</name>
+    <minZoom>0</minZoom>
+    <maxZoom>19</maxZoom>
+    <tileType>jpg</tileType>
+    <tileUpdate>None</tileUpdate>
+    <url>https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{$z}/{$y}/{$x}</url>
+    <backgroundColor>#000000</backgroundColor>
+    <ignoreErrors>false</ignoreErrors>
+    <serverParts></serverParts>
+</customMapSource>
