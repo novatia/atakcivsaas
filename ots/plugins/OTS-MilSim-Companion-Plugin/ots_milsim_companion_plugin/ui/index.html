@@ -1746,8 +1746,9 @@ async function renderMatches() {
         return `<tr><td>${esc(m.title)}</td><td>${esc(mode.name)}</td>
           <td>${fmtDT(m.started_at) || "<span class='muted'>mai iniziata</span>"}</td><td>${fmtDT(m.ended_at || m.ends_at)}</td>
           <td>${esito || "<span class='muted'>—</span>"}</td>
-          <td>${m.started_at ? `<button class="btn small" onclick="location.hash='#mreplay-${m.id}'"
-            title="Rigioca su mappa i movimenti degli EUD tra luce verde e fine partita">▶ Replay</button>` : ""}</td></tr>`;
+          <td style="white-space:nowrap; text-align:right">${m.started_at ? `<button class="btn small" onclick="location.hash='#mreplay-${m.id}'"
+            title="Rigioca su mappa i movimenti degli EUD tra luce verde e fine partita">▶ Replay</button> ` : ""}<button class="btn small danger"
+            onclick="deleteMatch(${m.id}, '${safeTitle(m)}', this)" title="Elimina la sessione dallo storico (anche il replay non sarà più disponibile)">🗑</button></td></tr>`;
       }).join("")}</tbody>
     </table>` : "";
 
@@ -1807,6 +1808,19 @@ async function matchEvent(id, key, label, ends, btn) {
     toast(`${label}: annunciato a tutti gli EUD.` + (res.warning ? " ⚠️ " + res.warning : ""), !res.warning);
     if (res.ended) renderMatches();
     else btn.disabled = false;
+  } catch (e) {
+    toast("Errore: " + e.message, false);
+    btn.disabled = false;
+  }
+}
+
+async function deleteMatch(id, title, btn) {
+  if (!confirm(`Eliminare la sessione "${title}" dallo storico?\n\nAnche il replay di questa partita non sarà più disponibile.`)) return;
+  btn.disabled = true;
+  try {
+    await api(`/matches/${id}`, { method: "DELETE" });
+    toast(`Sessione "${title}" eliminata.`);
+    renderMatches();
   } catch (e) {
     toast("Errore: " + e.message, false);
     btn.disabled = false;

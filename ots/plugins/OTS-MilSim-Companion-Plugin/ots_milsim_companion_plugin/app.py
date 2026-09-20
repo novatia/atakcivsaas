@@ -2494,6 +2494,32 @@ class MilSimCompanionPlugin(Plugin):
 
     @staticmethod
     @roles_accepted("administrator")
+    @blueprint.route("/matches/<int:match_id>", methods=["DELETE"])
+    def delete_match(match_id: int):
+        """Elimina una sessione dallo storico. Solo per partite terminate:
+        quelle pronte/in corso vanno prima chiuse (Annulla/Termina), che si
+        occupa anche di cancellare i marker dagli EUD."""
+        try:
+            match = db.session.get(GameMatch, match_id)
+            if not match:
+                return jsonify({"success": False, "error": "Sessione non trovata"}), 404
+            if match.status != "ended":
+                return jsonify(
+                    {"success": False, "error": "La sessione non è terminata: usa prima Annulla/Termina"}
+                ), 400
+            title = match.title
+            db.session.delete(match)
+            db.session.commit()
+            logger.info(f"MilSim: sessione '{title}' eliminata dallo storico da {current_user.username}")
+            return jsonify({"success": True})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(f"MilSim: failed to delete match {match_id}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
     @blueprint.route("/matches/<int:match_id>/replay")
     def match_replay(match_id: int):
         """Replay della partita: stesse tracce GPS del replay evento, ma la

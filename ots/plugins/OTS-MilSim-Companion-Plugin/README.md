@@ -301,6 +301,7 @@ restano invariate per compatibilità con i config esistenti.
 | `POST /matches/<id>/event` | admin | Evento arbitro (`{"event": "bomb_planted\|bomb_defused\|bomb_exploded"}`) |
 | `POST /matches/<id>/republish` | admin | Ripubblica marker/aree (stessi UID) |
 | `POST /matches/<id>/end` | admin | Termina/annulla manualmente: cancella i marker dagli EUD |
+| `DELETE /matches/<id>` | admin | Elimina una sessione terminata dallo storico (replay compreso) |
 | `GET /matches/<id>/replay` | admin | Tracce GPS nella finestra `started_at → ended_at` (`?step=N`) |
 | `GET /orders` · `GET /orders/<uid>` | admin | Ordini SkyFi (paginati, `?search=`) · dettaglio |
 | `GET /orders/<uid>/image` | admin | Anteprima ordine (data-URI, via proxy) |
