@@ -14,6 +14,9 @@ class DefaultConfig:
     OTS_EVENTCALENDAR_PLUGIN_ENABLED = True
     # Punti assegnati all'operatore per ogni presenza confermata dall'amministratore
     OTS_EVENTCALENDAR_POINTS_PER_PRESENCE = 10
+    # Fuso orario degli orari inseriti nel calendario (i punti CoT sono in UTC):
+    # serve al replay giocata per pescare la finestra giusta anche se il server e' in UTC
+    OTS_EVENTCALENDAR_TIMEZONE = "Europe/Rome"
 
     @staticmethod
     def validate(config: dict) -> dict:
@@ -25,6 +28,13 @@ class DefaultConfig:
                     return {"success": False, "error": f"{key} should be a boolean"}
                 if key == "OTS_EVENTCALENDAR_POINTS_PER_PRESENCE" and (not isinstance(value, int) or value < 0):
                     return {"success": False, "error": f"{key} should be a non-negative integer"}
+                if key == "OTS_EVENTCALENDAR_TIMEZONE":
+                    from zoneinfo import ZoneInfo
+
+                    try:
+                        ZoneInfo(str(value))
+                    except BaseException:
+                        return {"success": False, "error": f"{value} is not a valid IANA timezone"}
 
             return {"success": True, "error": ""}
         except BaseException as e:

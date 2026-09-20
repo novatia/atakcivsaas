@@ -75,7 +75,18 @@
   form.inline label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
   input, select, textarea { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; background: var(--input); color: var(--text); }
   textarea { width: 100%; min-height: 60px; }
-  #toast { position: fixed; bottom: 16px; right: 16px; background: #263238; color: #fff; padding: 10px 16px; border-radius: 8px; display: none; max-width: 380px; z-index: 10; }
+  #toast { position: fixed; bottom: 16px; right: 16px; background: #263238; color: #fff; padding: 10px 16px; border-radius: 8px; display: none; max-width: 380px; z-index: 2000; }
+  /* Replay giocata */
+  #rp-map { height: min(62vh, 560px); min-height: 340px; border: 1px solid var(--border); border-radius: 8px; margin-top: 10px; }
+  .rp-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .rp-clock { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 15px; margin-left: auto; }
+  .rp-speed.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #rp-slider { width: 100%; margin-top: 10px; accent-color: var(--accent); }
+  #rp-legend { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+  #rp-legend label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; font-size: 12.5px; }
+  .rp-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; border: 2px solid #fff; box-shadow: 0 0 3px rgba(0,0,0,.5); flex: none; }
+  .rp-marker { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .rp-name { font-size: 11px; font-weight: 600; color: #111; background: rgba(255,255,255,.85); padding: 0 4px; border-radius: 4px; }
   .muted { color: var(--muted); }
   .hidden { display: none !important; }
 </style>
@@ -256,7 +267,8 @@ async function renderEvents() {
         <span class="pill ${st}">${{present:"Presente",absent:"Non presente",maybe:"In dubbio",not_configured:"Non configurato"}[st]}</span>
         <span style="margin-left:auto">
           <button class="btn small" onclick="copyEventLink(${ev.id})" title="Copia il link all'evento per condividerlo">📋 Copia link</button>
-          ${isAdmin() ? `<button class="btn small" onclick="editEvent(${ev.id})">✏️ Modifica</button>
+          ${isAdmin() ? `<button class="btn small" onclick="location.hash='#replay-${ev.id}'" title="Rivedi su mappa i movimenti degli EUD durante l'evento">▶ Giocata</button>
+          <button class="btn small" onclick="editEvent(${ev.id})">✏️ Modifica</button>
           <button class="btn small danger" onclick="delEvent(${ev.id})">Elimina</button>` : ""}
         </span>
       </div>
@@ -317,7 +329,10 @@ async function renderEventDetail(id) {
       <div class="event-head">
         <strong style="font-size:17px">${esc(ev.title)}</strong>
         <span class="pill ${st}">${{present:"Presente",absent:"Non presente",maybe:"In dubbio",not_configured:"Non configurato"}[st]}</span>
-        <span style="margin-left:auto"><button class="btn small" onclick="copyEventLink(${ev.id})">📋 Copia link</button></span>
+        <span style="margin-left:auto">
+          ${isAdmin() ? `<button class="btn small" onclick="location.hash='#replay-${ev.id}'">▶ Giocata</button>` : ""}
+          <button class="btn small" onclick="copyEventLink(${ev.id})">📋 Copia link</button>
+        </span>
       </div>
       <div class="event-meta">📍 ${esc(ev.field ? ev.field.name : "?")}${ev.field && ev.field.address ? " — " + esc(ev.field.address) : ""}</div>
       <div class="event-meta">🕓 ${fmtDT(ev.start_time)} → ${fmtDT(ev.end_time)}</div>
@@ -434,6 +449,234 @@ async function delEvent(eventId) {
   if (!confirm("Eliminare questo evento? I punti delle presenze confermate verranno rimossi.")) return;
   try { await api(`/events/${eventId}`, { method: "DELETE" }); toast("Evento eliminato"); renderEvents(); }
   catch (err) { toast(err.message, false); }
+}
+
+/* ---------------- Replay giocata (admin) ---------------- */
+// Leaflet caricato on-demand da CDN solo quando si apre un replay
+let _leafletPromise = null;
+function loadLeaflet() {
+  if (window.L) return Promise.resolve();
+  if (_leafletPromise) return _leafletPromise;
+  _leafletPromise = new Promise((resolve, reject) => {
+    const css = document.createElement("link");
+    css.rel = "stylesheet";
+    css.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+    css.integrity = "sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=";
+    css.crossOrigin = "";
+    document.head.appendChild(css);
+    const js = document.createElement("script");
+    js.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+    js.integrity = "sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=";
+    js.crossOrigin = "";
+    js.onload = resolve;
+    js.onerror = () => { _leafletPromise = null; reject(new Error("Impossibile caricare la libreria mappa (serve la connessione internet)")); };
+    document.body.appendChild(js);
+  });
+  return _leafletPromise;
+}
+
+const RP_COLORS = ["#e6194b","#3cb44b","#4363d8","#f58231","#911eb4","#42d4f4","#f032e6","#808000","#9a6324","#469990","#800000","#000075","#fabed4","#aaffc3","#dcbeff","#bfef45"];
+const RP_SPEEDS = [1, 3, 5, 10, 100];
+let RP = null;          // stato del replay corrente
+let _rpToken = 0;       // invalida il loop di animazione dei replay precedenti
+
+function hashReplayId() {
+  const m = location.hash.match(/^#replay-(\d+)$/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+function rpClock(t) {
+  return new Date(t * 1000).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+async function renderReplay(id) {
+  document.getElementById("tabs").style.display = "none";
+  const el = document.getElementById("content");
+  el.style.borderRadius = "8px";
+  el.innerHTML = "Caricamento tracce…";
+  if (RP && RP.map) { try { RP.map.remove(); } catch (e) {} }
+  RP = null;
+
+  let data;
+  try {
+    await loadLeaflet();
+    data = await api(`/events/${id}/replay`);
+  } catch (err) {
+    el.innerHTML = `<h2>Replay non disponibile</h2><p class="muted">${esc(err.message)}</p>
+      <p><button class="btn" onclick="goCalendar()">← Torna al calendario</button></p>`;
+    return;
+  }
+
+  const ev = data.event;
+  const header = `
+    <div class="rp-bar">
+      <button class="btn" onclick="goCalendar()">← Calendario</button>
+      <strong>▶ ${esc(ev.title)}</strong>
+      <span class="muted">📍 ${esc(ev.field ? ev.field.name : "?")} · 🕓 ${fmtDT(ev.start_time)} → ${fmtDT(ev.end_time)}</span>
+    </div>`;
+
+  if (!data.tracks.length) {
+    el.innerHTML = header + `
+      <p style="margin-top:14px">Nessuna traccia GPS registrata nella finestra dell'evento.</p>
+      <p class="muted">Le tracce vengono salvate solo per gli EUD (ATAK/WinTAK) collegati al server
+         durante la giocata, e richiedono che il processo cot_parser di OpenTAKServer sia attivo.</p>`;
+    return;
+  }
+
+  el.innerHTML = header + `
+    <div class="rp-bar" style="margin-top:10px">
+      <button class="btn primary" id="rp-play" title="Riproduci/Pausa">▶</button>
+      ${RP_SPEEDS.map(s => `<button class="btn rp-speed" data-speed="${s}">${s}x</button>`).join("")}
+      <span class="rp-clock" id="rp-clock"></span>
+    </div>
+    <input type="range" id="rp-slider" min="${data.start}" max="${data.end}" step="1">
+    <div id="rp-map"></div>
+    <div id="rp-legend"></div>
+    <p class="muted" style="margin-top:6px">Vengono mostrati tutti gli EUD che hanno inviato la posizione
+       durante l'evento. Usa le caselle qui sopra per nascondere le tracce che non ti interessano.</p>`;
+
+  const map = L.map("rp-map");
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  }).addTo(map);
+
+  // Marker della sede di gioco
+  if (ev.field && ev.field.latitude != null && ev.field.longitude != null) {
+    L.marker([ev.field.latitude, ev.field.longitude], {
+      icon: L.divIcon({ className: "", html: "📍", iconSize: [20, 20], iconAnchor: [10, 18] }),
+    }).addTo(map).bindTooltip(ev.field.name);
+  }
+
+  const tracks = data.tracks.map((t, i) => {
+    const color = RP_COLORS[i % RP_COLORS.length];
+    const latlngs = t.points.map(p => [p[1], p[2]]);
+    const marker = L.marker(latlngs[0], {
+      icon: L.divIcon({
+        className: "",
+        html: `<div class="rp-marker"><span class="rp-dot" style="background:${color}"></span><span class="rp-name">${esc(t.callsign)}</span></div>`,
+        iconSize: null,
+        iconAnchor: [8, 8],
+      }),
+      zIndexOffset: 100,
+    });
+    const trail = L.polyline([], { color, weight: 3, opacity: 0.7 }).addTo(map);
+    return { ...t, color, latlngs, marker, trail, onMap: false, visible: true, lastIdx: -2 };
+  });
+
+  const bounds = L.latLngBounds(tracks.flatMap(t => t.latlngs));
+  map.fitBounds(bounds.pad(0.1));
+  // Se il contenitore non era ancora dimensionato (iframe/tab appena mostrati) rimisura e ricentra
+  setTimeout(() => { map.invalidateSize(); map.fitBounds(bounds.pad(0.1)); }, 150);
+
+  // La riproduzione parte dal primo punto registrato, non dall'inizio (magari vuoto) dell'evento
+  const firstT = Math.min(...tracks.map(t => t.points[0][0]));
+  RP = {
+    map, tracks,
+    start: data.start, end: data.end,
+    clock: Math.max(data.start, firstT),
+    speed: 1, playing: false, last: null,
+  };
+
+  document.getElementById("rp-legend").innerHTML = tracks.map((t, i) => `
+    <label><input type="checkbox" checked onchange="rpToggle(${i}, this.checked)">
+    <span class="rp-dot" style="background:${t.color}"></span>${esc(t.callsign)}
+    <span class="muted">(${t.points.length} punti)</span></label>`).join("");
+
+  document.getElementById("rp-play").onclick = () => rpSetPlaying(!RP.playing);
+  document.querySelectorAll(".rp-speed").forEach(btn => {
+    btn.onclick = () => {
+      RP.speed = parseInt(btn.dataset.speed, 10);
+      document.querySelectorAll(".rp-speed").forEach(b => b.classList.toggle("on", b === btn));
+    };
+  });
+  document.querySelector('.rp-speed[data-speed="1"]').classList.add("on");
+  const slider = document.getElementById("rp-slider");
+  slider.value = RP.clock;
+  slider.oninput = () => { RP.clock = parseFloat(slider.value); rpUpdate(false); };
+
+  rpUpdate(false);
+
+  const token = ++_rpToken;
+  requestAnimationFrame(function frame(ts) {
+    if (token !== _rpToken || !document.getElementById("rp-map")) return;
+    if (RP.playing && RP.last != null) {
+      // dt limitato: al ritorno da una scheda in background il replay non deve saltare avanti
+      const dt = Math.min(0.5, (ts - RP.last) / 1000);
+      RP.clock = Math.min(RP.end, RP.clock + dt * RP.speed);
+      if (RP.clock >= RP.end) rpSetPlaying(false);
+      rpUpdate(true);
+    }
+    RP.last = ts;
+    requestAnimationFrame(frame);
+  });
+}
+
+function rpSetPlaying(playing) {
+  if (!RP) return;
+  // Se la riproduzione è arrivata in fondo, ▶ riparte dall'inizio
+  if (playing && RP.clock >= RP.end) RP.clock = RP.start;
+  RP.playing = playing;
+  const btn = document.getElementById("rp-play");
+  if (btn) btn.textContent = playing ? "⏸" : "▶";
+}
+
+function rpToggle(index, visible) {
+  const t = RP.tracks[index];
+  t.visible = visible;
+  if (!visible) {
+    if (t.onMap) { RP.map.removeLayer(t.marker); t.onMap = false; }
+    RP.map.removeLayer(t.trail);
+  } else {
+    t.trail.addTo(RP.map);
+    t.lastIdx = -2;
+    rpUpdate(false);
+  }
+}
+
+// Ultimo indice con timestamp <= t (ricerca binaria), -1 se prima del primo punto
+function rpLocate(points, t) {
+  let lo = 0, hi = points.length - 1, ans = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid][0] <= t) { ans = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return ans;
+}
+
+function rpUpdate(fromLoop) {
+  if (!RP) return;
+  const clock = RP.clock;
+  for (const t of RP.tracks) {
+    if (!t.visible) continue;
+    const i = rpLocate(t.points, clock);
+    if (i < 0) {
+      // Prima del primo punto di questo EUD: non ancora in mappa
+      if (t.onMap) { RP.map.removeLayer(t.marker); t.onMap = false; }
+      if (t.lastIdx !== -1) { t.trail.setLatLngs([]); t.lastIdx = -1; }
+      continue;
+    }
+    if (!t.onMap) { t.marker.addTo(RP.map); t.onMap = true; }
+
+    let lat = t.points[i][1], lon = t.points[i][2];
+    if (i < t.points.length - 1) {
+      // Interpolazione lineare tra due campioni, ma non sui buchi (EUD spento/offline)
+      const a = t.points[i], b = t.points[i + 1], gap = b[0] - a[0];
+      if (gap > 0 && gap <= 120) {
+        const f = (clock - a[0]) / gap;
+        lat = a[1] + (b[1] - a[1]) * f;
+        lon = a[2] + (b[2] - a[2]) * f;
+      }
+    }
+    t.marker.setLatLng([lat, lon]);
+    if (i !== t.lastIdx) { t.trail.setLatLngs(t.latlngs.slice(0, i + 1)); t.lastIdx = i; }
+  }
+  const clockEl = document.getElementById("rp-clock");
+  if (clockEl) clockEl.textContent = rpClock(clock);
+  if (fromLoop) {
+    const slider = document.getElementById("rp-slider");
+    if (slider) slider.value = clock;
+  }
 }
 
 /* ---------------- Classifica ---------------- */
@@ -830,8 +1073,10 @@ async function clearTable(target, count) {
   try {
     await refreshMe();
     renderTabs();
+    const rid = hashReplayId();
     const id = hashEventId();
-    if (id) await renderEventDetail(id);        // link condiviso: solo quell'evento
+    if (rid) await renderReplay(rid);           // replay giocata (admin)
+    else if (id) await renderEventDetail(id);   // link condiviso: solo quell'evento
     else if (isAdmin()) await renderEvents();   // calendario completo solo per admin
     else { currentTab = "leaderboard"; renderTabs(); await renderLeaderboard(); }
   } catch (err) {
@@ -847,8 +1092,10 @@ async function clearTable(target, count) {
 })();
 // Cambio hash: apri la vista del singolo evento, o torna alla vista di default
 window.addEventListener("hashchange", () => {
+  const rid = hashReplayId();
   const id = hashEventId();
-  if (id) renderEventDetail(id);
+  if (rid) renderReplay(rid);
+  else if (id) renderEventDetail(id);
   else goCalendar();
 });
 </script>

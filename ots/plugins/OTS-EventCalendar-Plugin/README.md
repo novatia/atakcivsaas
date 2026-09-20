@@ -48,6 +48,19 @@ gestione presenze, punteggi e gradi militari. Usa il login e gli utenti di OpenT
 ### Anagrafica campi da gioco
 - CRUD dei campi (nome, indirizzo, coordinate, note, attivo/disattivo), riservato agli admin.
 
+### Replay giocata (admin)
+- Bottone **"▶ Giocata"** su ogni evento: apre un **player su mappa** (Leaflet + OpenStreetMap)
+  che rigioca i movimenti degli EUD collegati al server durante l'evento, con velocità
+  regolabile **1x / 3x / 5x / 10x / 100x**, slider temporale, scia del percorso e
+  legenda con on/off per singolo EUD.
+- Le tracce vengono lette dalle tabelle `points`/`euds` di OpenTAKServer (popolate dal
+  processo `cot_parser`): nessuna tabella aggiuntiva, funziona retroattivamente su tutti
+  i dati già registrati. Gli orari degli eventi sono interpretati nel fuso
+  `OTS_EVENTCALENDAR_TIMEZONE` (default `Europe/Rome`), i punti CoT sono in UTC.
+- Richiede la connessione internet nel browser (libreria mappa da CDN e tile OSM) e una
+  retention adeguata sul job `delete_old_data` di OTS, altrimenti le giocate vecchie
+  spariscono.
+
 ## Installazione
 
 Sul server, da root (lo stesso script fa anche l'update alle versioni successive):
@@ -95,6 +108,7 @@ OpenTAKServer (la pagina è pubblica, i dati restano protetti dalle API).
 |---|---|---|
 | `OTS_EVENTCALENDAR_PLUGIN_ENABLED` | `true` | Abilita il plugin |
 | `OTS_EVENTCALENDAR_POINTS_PER_PRESENCE` | `10` | Punti per presenza confermata |
+| `OTS_EVENTCALENDAR_TIMEZONE` | `Europe/Rome` | Fuso orario degli orari del calendario (per il replay: i punti CoT sono in UTC) |
 
 ## API (prefisso `/api/plugins/ots_eventcalendar_plugin`)
 
@@ -105,6 +119,7 @@ OpenTAKServer (la pagina è pubblica, i dati restano protetti dalle API).
 | `PUT/DELETE /events/<id>` | admin | Modifica / eliminazione evento |
 | `POST /events/<id>/rsvp` | utente | `{"status": "present\|absent\|maybe\|not_configured"}` |
 | `GET/POST /events/<id>/attendance` | admin | Elenco presenze · conferma `{"user_id", "confirmed"}` |
+| `GET /events/<id>/replay` | admin | Tracce GPS degli EUD nella finestra dell'evento (`?step=N` = max un punto ogni N s per EUD, default 5) |
 | `GET /fields` · `POST/PUT/DELETE /fields…` | utente · admin | Anagrafica campi da gioco |
 | `POST /import/ics` | admin | `{"url": "…", "default_field_id": n}` o file `.ics` |
 | `POST /import/csv` | admin | multipart `file` + `default_field_id` |

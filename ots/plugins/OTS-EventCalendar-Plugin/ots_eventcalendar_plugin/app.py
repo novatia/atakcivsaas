@@ -979,6 +979,88 @@ class EventCalendarPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     # ------------------------------------------------------------------
+    # Replay giocata: tracce GPS degli EUD durante l'evento
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/events/<int:event_id>/replay")
+    def event_replay(event_id):
+        """Tracce GPS registrate nelle tabelle points/euds di OTS nella finestra dell'evento.
+
+        Gli orari degli eventi sono in ora locale (OTS_EVENTCALENDAR_TIMEZONE, il fuso
+        del sistema puo' essere UTC), i punti CoT sono salvati in UTC: la conversione
+        avviene qui. ?step=N tiene al massimo un punto ogni N secondi per EUD (default 5).
+        """
+        try:
+            from zoneinfo import ZoneInfo
+
+            from opentakserver.models.EUD import EUD
+            from opentakserver.models.Point import Point
+
+            event = db.session.get(CalendarEvent, event_id)
+            if not event:
+                return jsonify({"success": False, "error": "Evento non trovato"}), 404
+
+            try:
+                step = max(0, int(request.args.get("step", 5)))
+            except ValueError:
+                step = 5
+
+            tz = ZoneInfo(app.config.get("OTS_EVENTCALENDAR_TIMEZONE", "Europe/Rome"))
+            start_utc = event.start_time.replace(tzinfo=tz).astimezone(timezone.utc)
+            end_utc = event.end_time.replace(tzinfo=tz).astimezone(timezone.utc)
+
+            callsigns = {e.uid: e.callsign for e in db.session.query(EUD).all()}
+
+            rows = (
+                db.session.query(Point)
+                .filter(Point.device_uid.isnot(None))
+                .filter(Point.timestamp >= start_utc.replace(tzinfo=None))
+                .filter(Point.timestamp <= end_utc.replace(tzinfo=None))
+                .filter(Point.latitude.isnot(None), Point.longitude.isnot(None))
+                .order_by(Point.device_uid, Point.timestamp)
+                .all()
+            )
+
+            tracks: dict[str, list] = {}
+            last_kept: dict[str, float] = {}
+            for row in rows:
+                if not row.latitude and not row.longitude:
+                    continue  # (0, 0) = nessun fix GPS
+                t = row.timestamp.replace(tzinfo=timezone.utc).timestamp()
+                uid = row.device_uid
+                if uid in last_kept and t - last_kept[uid] < step:
+                    continue
+                last_kept[uid] = t
+                tracks.setdefault(uid, []).append(
+                    [
+                        round(t, 1),
+                        round(row.latitude, 6),
+                        round(row.longitude, 6),
+                        round(row.speed, 1) if row.speed is not None else None,
+                    ]
+                )
+
+            return jsonify(
+                {
+                    "event": event.serialize(),
+                    "start": start_utc.timestamp(),
+                    "end": end_utc.timestamp(),
+                    "step": step,
+                    "tracks": [
+                        {"uid": uid, "callsign": callsigns.get(uid) or uid, "points": pts}
+                        for uid, pts in sorted(
+                            tracks.items(), key=lambda kv: (callsigns.get(kv[0]) or kv[0]).lower()
+                        )
+                    ],
+                }
+            )
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ------------------------------------------------------------------
     # Import: CSV e Google Calendar (iCal/ICS)
     # ------------------------------------------------------------------
 
