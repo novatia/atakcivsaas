@@ -57,18 +57,14 @@ def _point(event: Element, lat: float, lon: float) -> None:
     )
 
 
-def marker_event(
-    uid: str,
-    marker: dict,
-    stale: datetime,
-    remarks: str = "",
-    sender_uid: str = "",
-    sender_callsign: str = "",
-) -> Element:
+def marker_event(uid: str, marker: dict, stale: datetime, remarks: str = "") -> Element:
     """Marker di partita con lo stesso detail che ATAK-CIV genera per i propri
-    marker (status, archive, contact, remarks, link al mittente, usericon):
-    con un detail parziale alcuni client mostrano il marker in elenco
-    (categoria "Other") ma non disegnano il simbolo in mappa."""
+    marker (status, archive, contact, remarks, usericon).
+
+    Niente <link relation="p-p"> al Game Master: il parse_marker di OTS lo
+    salverebbe in markers.parent_uid, che è FK verso euds.uid — con un uid
+    non-EUD l'INSERT fallisce e il marker sparisce dalla web map del server.
+    """
     mtype = MARKER_TYPES[marker["type"]]
     event = _base_event(uid, mtype["cot_type"], stale)
     _point(event, marker["lat"], marker["lon"])
@@ -80,18 +76,6 @@ def marker_event(
     SubElement(detail, "archive")
     SubElement(detail, "contact", {"callsign": marker.get("label") or mtype["callsign"]})
     SubElement(detail, "remarks").text = remarks or ""
-    if sender_uid:
-        SubElement(
-            detail,
-            "link",
-            {
-                "uid": sender_uid,
-                "production_time": iso8601_string_from_datetime(datetime.now(timezone.utc)),
-                "type": "a-f-G-U-C",
-                "parent_callsign": sender_callsign or sender_uid,
-                "relation": "p-p",
-            },
-        )
     if mtype["spot"]:
         # Gli spot marker prendono il colore dall'iconsetpath e da <color>
         SubElement(detail, "color", {"argb": str(mtype["argb"])})

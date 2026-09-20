@@ -431,7 +431,7 @@ def _match_items(match: GameMatch, uids: list[dict], targets: dict | None) -> li
     for entry, item in zip(uids, items):
         kind, data = item
         if kind == "marker":
-            event = cot.marker_event(entry["uid"], data, stale, remarks, _gm_sender_uid(), _gm_callsign())
+            event = cot.marker_event(entry["uid"], data, stale, remarks)
         else:
             event = cot.zone_event(entry["uid"], data, stale, remarks)
         result.append((event, engine.audience_targets(targets, entry.get("audience", "all"))))
