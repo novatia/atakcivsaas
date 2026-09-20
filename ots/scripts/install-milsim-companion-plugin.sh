@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 #
-# install-eventcalendar-plugin.sh — Installa o aggiorna OTS-EventCalendar-Plugin
-# nel venv di OpenTAKServer a partire da questo repo.
+# install-milsim-companion-plugin.sh — Installa o aggiorna OTS-MilSim-Companion-Plugin
+# nel venv di OpenTAKServer a partire da questo repo. Disinstalla da solo i
+# pacchetti precedenti (OTS-EventCalendar-Plugin, OTS-GameMode-Plugin): i dati
+# restano perché le tabelle DB non cambiano nome.
 #
 # Uso (da root sul server, dentro il clone del repo):
-#   ./install-eventcalendar-plugin.sh            # (ri)installa il plugin + restart + verifica
-#   ./install-eventcalendar-plugin.sh --check    # mostra solo la versione installata
-#   ./install-eventcalendar-plugin.sh --pull     # prima fa git pull del repo, poi installa
+#   ./install-milsim-companion-plugin.sh            # (ri)installa il plugin + restart + verifica
+#   ./install-milsim-companion-plugin.sh --check    # mostra solo la versione installata
+#   ./install-milsim-companion-plugin.sh --pull     # prima fa git pull del repo, poi installa
 #
 # Percorsi/nomi sovrascrivibili via variabili d'ambiente, es:
-#   OTS_USER=ots OTS_SERVICE=opentakserver ./install-eventcalendar-plugin.sh
+#   OTS_USER=ots OTS_SERVICE=opentakserver ./install-milsim-companion-plugin.sh
 
 set -euo pipefail
 
@@ -19,7 +21,8 @@ OTS_VENV="${OTS_VENV:-/home/${OTS_USER}/.opentakserver_venv}"
 OTS_DATA="${OTS_DATA:-/home/${OTS_USER}/ots}"
 OTS_SERVICE="${OTS_SERVICE:-opentakserver}"
 
-PLUGIN_DISTRO="OTS-EventCalendar-Plugin"
+PLUGIN_DISTRO="OTS-MilSim-Companion-Plugin"
+LEGACY_DISTROS=("OTS-EventCalendar-Plugin" "OTS-GameMode-Plugin")
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="${PLUGIN_DIR:-${SCRIPT_DIR}/../plugins/${PLUGIN_DISTRO}}"
 
@@ -78,6 +81,17 @@ if [[ "${1:-}" == "--pull" ]]; then
     log "Repo a: $(git -C "${SCRIPT_DIR}" log -1 --format='%h %s')"
 fi
 
+# ------------------------- Rimozione pacchetti precedenti -------------------------
+# Il plugin unifica OTS-EventCalendar-Plugin e OTS-GameMode-Plugin: se sono
+# ancora installati vanno tolti, altrimenti OTS caricherebbe rotte duplicate.
+step "Rimozione plugin precedenti (se presenti)"
+for legacy in "${LEGACY_DISTROS[@]}"; do
+    if [[ -n "$("${PIP}" show "${legacy}" 2>/dev/null || true)" ]]; then
+        log "Trovato ${legacy}: lo disinstallo."
+        sudo -u "${OTS_USER}" "${PIP}" uninstall --yes "${legacy}"
+    fi
+done
+
 # ------------------------- Install / Update -------------------------
 # pip installa da directory locale ricostruendo sempre il pacchetto,
 # quindi lo stesso comando fa sia install che update.
@@ -123,10 +137,10 @@ echo ""
 
 if [[ -n "${LOADED}" ]]; then
     log "Plugin caricato correttamente:"
-    tail -n 200 "${OTS_DATA}/logs/opentakserver.log" | grep -i "EventCalendar" | tail -n 5 || true
+    tail -n 200 "${OTS_DATA}/logs/opentakserver.log" | grep -i "MilSim" | tail -n 5 || true
 else
     warn "Nessuna conferma di caricamento entro 60s. Controlla manualmente con:"
-    warn "  grep -i EventCalendar ${OTS_DATA}/logs/opentakserver.log | tail"
+    warn "  grep -i MilSim ${OTS_DATA}/logs/opentakserver.log | tail"
     warn "Ultime righe del log applicativo:"
     tail -n 30 "${OTS_DATA}/logs/opentakserver.log" 2>/dev/null || warn "Log applicativo non trovato."
 fi
@@ -141,5 +155,5 @@ for port in 8080 8443; do
 done
 
 step "Fatto"
-log "UI del plugin: https://<server>/api/plugins/ots_eventcalendar_plugin/ui"
+log "UI del plugin: https://<server>/api/plugins/ots_milsim_companion_plugin/ui"
 log "Per disinstallare: sudo -u ${OTS_USER} ${PIP} uninstall --yes ${PLUGIN_DISTRO} && systemctl restart ${OTS_SERVICE}"

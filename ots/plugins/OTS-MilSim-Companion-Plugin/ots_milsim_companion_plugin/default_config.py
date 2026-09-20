@@ -10,13 +10,20 @@ from opentakserver.extensions import logger
 
 @dataclass
 class DefaultConfig:
-    # Caricato per primo, poi sovrascritto dai valori utente in ~/ots/config.yml
+    # Caricato per primo, poi sovrascritto dai valori utente in ~/ots/config.yml.
+    # Il prefisso OTS_EVENTCALENDAR_ è storico (il plugin nasce come calendario):
+    # le chiavi restano invariate per non rompere i config.yml esistenti.
     OTS_EVENTCALENDAR_PLUGIN_ENABLED = True
     # Punti assegnati all'operatore per ogni presenza confermata dall'amministratore
     OTS_EVENTCALENDAR_POINTS_PER_PRESENCE = 10
     # Fuso orario degli orari inseriti nel calendario (i punti CoT sono in UTC):
     # serve al replay giocata per pescare la finestra giusta anche se il server e' in UTC
     OTS_EVENTCALENDAR_TIMEZONE = "Europe/Rome"
+    # Callsign con cui il Game Master firma marker, chat e invii data package al Play
+    OTS_EVENTCALENDAR_GM_CALLSIGN = "Game Master"
+    # Hostname/IP che gli EUD usano per scaricare i data package annunciati al Play
+    # (senderUrl del fileshare). Vuoto = host con cui l'admin sta aprendo la web UI.
+    OTS_EVENTCALENDAR_GM_SERVER_ADDRESS = ""
 
     @staticmethod
     def validate(config: dict) -> dict:
@@ -35,6 +42,8 @@ class DefaultConfig:
                         ZoneInfo(str(value))
                     except BaseException:
                         return {"success": False, "error": f"{value} is not a valid IANA timezone"}
+                if key in ("OTS_EVENTCALENDAR_GM_CALLSIGN", "OTS_EVENTCALENDAR_GM_SERVER_ADDRESS") and not isinstance(value, str):
+                    return {"success": False, "error": f"{key} should be a string"}
 
             return {"success": True, "error": ""}
         except BaseException as e:

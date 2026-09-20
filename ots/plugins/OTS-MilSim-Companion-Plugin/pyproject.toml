@@ -1,0 +1,25 @@
+[project]
+name = "OTS-MilSim-Companion-Plugin"
+version = "3.0.0"
+description = "MilSim Soft-Air Companion per OpenTAKServer: calendario eventi con RSVP e presenze, punteggi e gradi, modalità di gioco (CTF, Bomb Defusal, TDM) con template di missione e Play che pusha marker/aree/data package agli EUD"
+authors = [{name = "Andrea Novati", email = "email@nov41337.online"}]
+readme = "README.md"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.10, <4.0"
+dependencies = [
+    "opentakserver>=1.7.0",
+    "icalendar>=6.0",
+]
+
+[project.urls]
+repository = "https://github.com/novatia/atakcivsaas"
+
+[project.entry-points.'opentakserver.plugin']
+ots_milsim_companion_plugin = 'ots_milsim_companion_plugin.app:MilSimCompanionPlugin'
+
+[tool.poetry]
+include = [{path = "ots_milsim_companion_plugin/ui/**/*", format = ["sdist", "wheel"]}]
+
+[build-system]
+requires = ["poetry-core>=2.0.0"]
+build-backend = "poetry.core.masonry.api"

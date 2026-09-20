@@ -14,7 +14,17 @@ from sqlalchemy.orm import relationship
 
 from opentakserver.extensions import db
 
+import json
+
 RSVP_STATUSES = ("not_configured", "present", "absent", "maybe")
+MATCH_STATUSES = ("running", "ended")
+
+
+def _loads(value: str | None, fallback):
+    try:
+        return json.loads(value) if value else fallback
+    except (TypeError, ValueError):
+        return fallback
 
 
 class GameField(db.Model):
@@ -223,6 +233,88 @@ class PlayerScore(db.Model):
         }
 
 
+class GameTemplate(db.Model):
+    """Template di missione: modalità, durata, marker, aree e data package.
+
+    Marker e aree vivono come JSON sul template (niente join): l'editor della
+    UI salva sempre il template intero.
+    """
+
+    __tablename__ = "gm_templates"
+
+    id = db.Column(Integer, primary_key=True)
+    title = db.Column(String(255), nullable=False)
+    description = db.Column(Text, nullable=True)
+    mode = db.Column(String(32), nullable=False)
+    duration_minutes = db.Column(Integer, nullable=False, default=30)
+    map_lat = db.Column(Float, nullable=True)
+    map_lon = db.Column(Float, nullable=True)
+    map_zoom = db.Column(Integer, nullable=True)
+    markers_json = db.Column(Text, nullable=False, default="[]")   # [{type,label,lat,lon}]
+    zones_json = db.Column(Text, nullable=False, default="[]")     # [{type,label,points:[[lat,lon],…]}]
+    packages_json = db.Column(Text, nullable=False, default="[]")  # [hash data package OTS]
+    created_at = db.Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def serialize(self):
+        return {
+            "id": self.id,
+            "title": self.title,
+            "description": self.description,
+            "mode": self.mode,
+            "duration_minutes": self.duration_minutes,
+            "map": {"lat": self.map_lat, "lon": self.map_lon, "zoom": self.map_zoom},
+            "markers": _loads(self.markers_json, []),
+            "zones": _loads(self.zones_json, []),
+            "packages": _loads(self.packages_json, []),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class GameMatch(db.Model):
+    """Partita creata dal Play di un template.
+
+    snapshot_json congela il template al momento del Play (il template può poi
+    cambiare o sparire); cot_uids_json ricorda gli UID dei CoT pushati, per
+    ripubblicarli o cancellarli dagli EUD al termine.
+    """
+
+    __tablename__ = "gm_matches"
+
+    id = db.Column(Integer, primary_key=True)
+    template_id = db.Column(Integer, ForeignKey("gm_templates.id"), nullable=True)
+    title = db.Column(String(255), nullable=False)
+    mode = db.Column(String(32), nullable=False)
+    duration_minutes = db.Column(Integer, nullable=False)
+    started_at = db.Column(DateTime, nullable=False, default=datetime.utcnow)
+    ends_at = db.Column(DateTime, nullable=False)
+    ended_at = db.Column(DateTime, nullable=True)
+    status = db.Column(String(16), nullable=False, default="running")
+    started_by = db.Column(String(255), nullable=True)
+    snapshot_json = db.Column(Text, nullable=False, default="{}")
+    cot_uids_json = db.Column(Text, nullable=False, default="[]")  # [{uid, cot_type}]
+
+    def serialize(self):
+        now = datetime.utcnow()
+        remaining = int((self.ends_at - now).total_seconds()) if self.ends_at else 0
+        return {
+            "id": self.id,
+            "template_id": self.template_id,
+            "title": self.title,
+            "mode": self.mode,
+            "duration_minutes": self.duration_minutes,
+            "started_at": self.started_at.isoformat() + "Z" if self.started_at else None,
+            "ends_at": self.ends_at.isoformat() + "Z" if self.ends_at else None,
+            "ended_at": self.ended_at.isoformat() + "Z" if self.ended_at else None,
+            "status": self.status,
+            "started_by": self.started_by,
+            "remaining_seconds": max(0, remaining) if self.status == "running" else 0,
+            "expired": self.status == "running" and remaining <= 0,
+            "snapshot": _loads(self.snapshot_json, {}),
+        }
+
+
 PLUGIN_TABLES = [
     GameField.__table__,
     Player.__table__,
@@ -231,4 +323,6 @@ PLUGIN_TABLES = [
     EventGuest.__table__,
     Rank.__table__,
     PlayerScore.__table__,
+    GameTemplate.__table__,
+    GameMatch.__table__,
 ]

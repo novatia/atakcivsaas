@@ -37,21 +37,24 @@ Lo script fa il backup di `/home/ots/ots` in `/root/ots-backups/` (ruota gli ult
 ```
 ots/
   scripts/
-    update-ots.sh                      # aggiornamento backend + UI con backup e verifica
-    install-eventcalendar-plugin.sh    # installa/aggiorna il plugin calendario nel venv
+    update-ots.sh                        # aggiornamento backend + UI con backup e verifica
+    install-milsim-companion-plugin.sh   # installa/aggiorna il plugin MilSim Companion nel venv
   plugins/
-    OTS-EventCalendar-Plugin/   # calendario eventi, presenze, punteggi e gradi
+    OTS-MilSim-Companion-Plugin/   # calendario, presenze, punteggi/gradi + modalità di gioco
   systemd/
     opentakserver-cot-parser.service   # unit per il parser CoT (vedi Troubleshooting)
 ```
 
 ### Plugin
 
-- **[OTS-EventCalendar-Plugin](ots/plugins/OTS-EventCalendar-Plugin/README.md)** — calendario
-  eventi (sede dall'anagrafica campi da gioco, inizio/fine, descrizione), import da Google
-  Calendar (ICS) o CSV, RSVP utenti (presente / non presente / in dubbio, default non
-  configurato), conferma presenze sul campo da parte degli admin con assegnazione punti,
-  classifica e gradi militari con badge configurabili.
+- **[OTS-MilSim-Companion-Plugin](ots/plugins/OTS-MilSim-Companion-Plugin/README.md)** —
+  MilSim Soft-Air Companion (ex OTS-EventCalendar-Plugin): calendario eventi (sede
+  dall'anagrafica campi da gioco, inizio/fine, descrizione), import da Google Calendar (ICS)
+  o CSV, RSVP utenti, conferma presenze sul campo con assegnazione punti, classifica e gradi
+  militari con badge, replay giocata su mappa; più le **modalità di gioco** (Capture the
+  Flag, Bomb Defusal, Team Deathmatch): template di missione disegnati su mappa dal browser
+  (spawn point, bandiere, bomb site, aree) e **▶ Play** che crea la partita pushando marker,
+  aree e data package a tutti gli EUD collegati.
 
 ### Troubleshooting
 

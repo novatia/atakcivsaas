@@ -20,10 +20,13 @@ from flask import (
 from flask_security import auth_required, current_user, roles_accepted
 
 from opentakserver.extensions import db, logger
+from opentakserver.models.DataPackage import DataPackage
 from opentakserver.models.user import User
 from opentakserver.plugins.Plugin import Plugin
 
+from . import cot
 from .default_config import DefaultConfig
+from .game_modes import GAME_MODES, MARKER_TYPES, serialize_registry, validate_template
 from .models import (
     PLUGIN_TABLES,
     RSVP_STATUSES,
@@ -31,6 +34,8 @@ from .models import (
     EventAttendance,
     EventGuest,
     GameField,
+    GameMatch,
+    GameTemplate,
     Player,
     PlayerScore,
     Rank,
@@ -57,11 +62,19 @@ DEFAULT_RANKS = [
 
 ALLOWED_BADGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 
+# Margine sullo stale dei marker di partita oltre la fine, per non farli sparire
+# dagli EUD mentre si sta ancora annunciando il risultato
+STALE_GRACE = timedelta(minutes=2)
+
 
 def _badges_folder() -> str:
-    folder = os.path.join(
-        app.config.get("OTS_DATA_FOLDER"), "plugins", "ots_eventcalendar_plugin", "badges"
-    )
+    plugins_folder = os.path.join(app.config.get("OTS_DATA_FOLDER"), "plugins")
+    folder = os.path.join(plugins_folder, "ots_milsim_companion_plugin", "badges")
+    # Migrazione dal nome precedente del plugin: i badge caricati restano validi
+    legacy = os.path.join(plugins_folder, "ots_eventcalendar_plugin", "badges")
+    if not os.path.exists(folder) and os.path.exists(legacy):
+        os.makedirs(os.path.dirname(folder), exist_ok=True)
+        os.rename(legacy, folder)
     os.makedirs(folder, exist_ok=True)
     return folder
 
@@ -215,7 +228,7 @@ def _broadcast_marker_deletions(markers) -> bool:
         connection.close()
         return True
     except BaseException as e:
-        logger.error(f"EventCalendar maintenance: failed to broadcast marker deletions: {e}")
+        logger.error(f"MilSim maintenance: failed to broadcast marker deletions: {e}")
         logger.debug(traceback.format_exc())
         return False
 
@@ -268,10 +281,109 @@ def _import_events(rows: list[dict], source: str, default_field_id: int | None) 
     return {"success": True, "imported": imported, "skipped": skipped, "errors": errors}
 
 
-class EventCalendarPlugin(Plugin):
+# ----------------------------------------------------------------------
+# Helper modalità di gioco (template di missione e partite)
+# ----------------------------------------------------------------------
+
+
+def _utcnow() -> datetime:
+    # Naive UTC, come i DateTime delle tabelle di OTS
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _gm_sender_uid() -> str:
+    return f"GameMaster.{app.config.get('OTS_NODE_ID', 'ots')}"
+
+
+def _gm_callsign() -> str:
+    return app.config.get("OTS_EVENTCALENDAR_GM_CALLSIGN") or "Game Master"
+
+
+def _template_payload(body: dict) -> tuple[dict | None, str | None]:
+    """Valida il body JSON dell'editor e lo normalizza per il modello."""
+    title = (body.get("title") or "").strip()
+    if not title:
+        return None, "Il titolo è obbligatorio"
+
+    mode = body.get("mode")
+    if mode not in GAME_MODES:
+        return None, f"Modalità non valida: {mode}"
+
+    try:
+        duration = int(body.get("duration_minutes") or 0)
+    except (TypeError, ValueError):
+        return None, "Durata non valida"
+    if not 1 <= duration <= 24 * 60:
+        return None, "La durata deve essere tra 1 e 1440 minuti"
+
+    markers = body.get("markers") or []
+    zones = body.get("zones") or []
+    errors = validate_template(mode, markers, zones, for_play=False)
+    if errors:
+        return None, "; ".join(errors)
+
+    packages = [h for h in (body.get("packages") or []) if isinstance(h, str)]
+    map_conf = body.get("map") or {}
+
+    return {
+        "title": title,
+        "description": body.get("description"),
+        "mode": mode,
+        "duration_minutes": duration,
+        "map_lat": map_conf.get("lat"),
+        "map_lon": map_conf.get("lon"),
+        "map_zoom": map_conf.get("zoom"),
+        "markers_json": json.dumps(markers),
+        "zones_json": json.dumps(zones),
+        "packages_json": json.dumps(packages),
+    }, None
+
+
+def _match_events(match: GameMatch, uids: list[dict]) -> list:
+    """Ricostruisce i CoT di marker e aree della partita (Play e Ripubblica)."""
+    snapshot = json.loads(match.snapshot_json)
+    stale = match.ends_at.replace(tzinfo=timezone.utc) + STALE_GRACE
+    remarks = f"{snapshot.get('title', match.title)} — {GAME_MODES[match.mode]['name']}, fine {match.ends_at.strftime('%H:%M')} UTC"
+
+    events = []
+    items = [("marker", m) for m in snapshot.get("markers", [])] + [("zone", z) for z in snapshot.get("zones", [])]
+    for entry, item in zip(uids, items):
+        kind, data = item
+        if kind == "marker":
+            events.append(cot.marker_event(entry["uid"], data, stale, remarks))
+        else:
+            events.append(cot.zone_event(entry["uid"], data, stale, remarks))
+    return events
+
+
+def _package_events(hashes: list[str]) -> tuple[list, list[str]]:
+    """CoT b-f-t-r per i data package del template; ritorna (eventi, nomi non trovati)."""
+    if not hashes:
+        return [], []
+    host = app.config.get("OTS_EVENTCALENDAR_GM_SERVER_ADDRESS") or request.host.split(":")[0]
+    port = app.config.get("OTS_MARTI_HTTPS_PORT") or 8443
+    events, missing = [], []
+    for file_hash in hashes:
+        package = db.session.execute(db.session.query(DataPackage).filter_by(hash=file_hash)).scalar()
+        if not package:
+            missing.append(file_hash)
+            continue
+        sender_url = f"https://{host}:{port}/Marti/api/sync/metadata/{file_hash}/tool"
+        events.append(
+            cot.fileshare_event(
+                {"filename": package.filename, "hash": package.hash, "size": package.size},
+                sender_url,
+                _gm_sender_uid(),
+                _gm_callsign(),
+            )
+        )
+    return events, missing
+
+
+class MilSimCompanionPlugin(Plugin):
     metadata = pathlib.Path(__file__).resolve().parent.name
     url_prefix = f"/api/plugins/{metadata.lower()}"
-    blueprint = Blueprint("EventCalendarPlugin", __name__, url_prefix=url_prefix)
+    blueprint = Blueprint("MilSimCompanionPlugin", __name__, url_prefix=url_prefix)
 
     def activate(self, app: Flask, enabled: bool = True):
         self._app = app
@@ -291,7 +403,7 @@ class EventCalendarPlugin(Plugin):
                     c["name"] for c in inspector.get_columns("ec_attendances")
                 ]
                 if legacy:
-                    logger.info("EventCalendar: migrating attendance/scores from users to players")
+                    logger.info("MilSim: migrating attendance/scores from users to players")
                     legacy_attendance = db.session.execute(
                         text(
                             "SELECT event_id, user_id, rsvp_status, confirmed, confirmed_by,"
@@ -348,7 +460,7 @@ class EventCalendarPlugin(Plugin):
                             )
                     db.session.commit()
                     logger.info(
-                        f"EventCalendar: migrated {len(legacy_attendance)} attendance rows and "
+                        f"MilSim: migrated {len(legacy_attendance)} attendance rows and "
                         f"{len(legacy_scores)} score rows to players"
                     )
 
@@ -357,7 +469,7 @@ class EventCalendarPlugin(Plugin):
                     for name, min_score in DEFAULT_RANKS:
                         db.session.add(Rank(name=name, min_score=min_score))
                     db.session.commit()
-                    logger.info("EventCalendar: seeded default ranks")
+                    logger.info("MilSim: seeded default ranks")
 
             logger.info(f"Successfully Loaded {self.name}")
         except BaseException as e:
@@ -969,7 +1081,7 @@ class EventCalendarPlugin(Plugin):
                     changed += 1
             db.session.commit()
             logger.info(
-                f"EventCalendar: {current_user.username} set confirmed={confirmed} "
+                f"MilSim: {current_user.username} set confirmed={confirmed} "
                 f"for {changed} players on event {event_id}"
             )
             return jsonify({"success": True, "changed": changed})
@@ -1361,7 +1473,7 @@ class EventCalendarPlugin(Plugin):
             for row in rows:
                 db.session.delete(row)
             db.session.commit()
-            logger.info(f"EventCalendar maintenance: {current_user.username} deleted {deleted} rows from {target}")
+            logger.info(f"MilSim maintenance: {current_user.username} deleted {deleted} rows from {target}")
 
             result = {"success": True, "deleted": deleted}
             if not broadcast_ok:
@@ -1572,7 +1684,7 @@ class EventCalendarPlugin(Plugin):
 
             db.session.commit()
             logger.info(
-                f"EventCalendar: {current_user.username} imported {imported} players from CSV"
+                f"MilSim: {current_user.username} imported {imported} players from CSV"
             )
             return jsonify(
                 {"success": True, "imported": imported, "skipped": skipped, "errors": errors}
@@ -1684,3 +1796,301 @@ class EventCalendarPlugin(Plugin):
             db.session.rollback()
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 400
+
+    # ------------------------------------------------------------------
+    # Anagrafica modalità di gioco
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/modes", methods=["GET"])
+    def get_modes():
+        return jsonify(serialize_registry())
+
+    # ------------------------------------------------------------------
+    # Template di missione
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/templates", methods=["GET"])
+    def get_templates():
+        try:
+            templates = db.session.query(GameTemplate).order_by(GameTemplate.title).all()
+            result = []
+            for template in templates:
+                data = template.serialize()
+                # Il Play è possibile solo se il template è completo per la sua modalità
+                data["play_errors"] = validate_template(
+                    template.mode, data["markers"], data["zones"], for_play=True
+                )
+                result.append(data)
+            return jsonify(result)
+        except BaseException as e:
+            logger.error(f"MilSim: failed to get templates: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/templates", methods=["POST"])
+    def create_template():
+        try:
+            payload, error = _template_payload(request.json or {})
+            if error:
+                return jsonify({"success": False, "error": error}), 400
+            template = GameTemplate(**payload)
+            db.session.add(template)
+            db.session.commit()
+            logger.info(f"MilSim: template '{template.title}' creato da {current_user.username}")
+            return jsonify({"success": True, "template": template.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(f"MilSim: failed to create template: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/templates/<int:template_id>", methods=["PUT"])
+    def update_template(template_id: int):
+        try:
+            template = db.session.get(GameTemplate, template_id)
+            if not template:
+                return jsonify({"success": False, "error": "Template non trovato"}), 404
+            payload, error = _template_payload(request.json or {})
+            if error:
+                return jsonify({"success": False, "error": error}), 400
+            for key, value in payload.items():
+                setattr(template, key, value)
+            db.session.commit()
+            return jsonify({"success": True, "template": template.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(f"MilSim: failed to update template {template_id}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/templates/<int:template_id>", methods=["DELETE"])
+    def delete_template(template_id: int):
+        try:
+            template = db.session.get(GameTemplate, template_id)
+            if not template:
+                return jsonify({"success": False, "error": "Template non trovato"}), 404
+            # Le partite giocate restano (hanno lo snapshot), sganciate dal template
+            for match in db.session.query(GameMatch).filter_by(template_id=template_id).all():
+                match.template_id = None
+            title = template.title
+            db.session.delete(template)
+            db.session.commit()
+            logger.info(f"MilSim: template '{title}' eliminato da {current_user.username}")
+            return jsonify({"success": True})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(f"MilSim: failed to delete template {template_id}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/templates/<int:template_id>/duplicate", methods=["POST"])
+    def duplicate_template(template_id: int):
+        try:
+            template = db.session.get(GameTemplate, template_id)
+            if not template:
+                return jsonify({"success": False, "error": "Template non trovato"}), 404
+            copy = GameTemplate(
+                title=f"{template.title} (copia)",
+                description=template.description,
+                mode=template.mode,
+                duration_minutes=template.duration_minutes,
+                map_lat=template.map_lat,
+                map_lon=template.map_lon,
+                map_zoom=template.map_zoom,
+                markers_json=template.markers_json,
+                zones_json=template.zones_json,
+                packages_json=template.packages_json,
+            )
+            db.session.add(copy)
+            db.session.commit()
+            return jsonify({"success": True, "template": copy.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(f"MilSim: failed to duplicate template {template_id}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # Data package disponibili (per l'editor dei template)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/datapackages", methods=["GET"])
+    def get_datapackages():
+        try:
+            packages = db.session.query(DataPackage).order_by(DataPackage.filename).all()
+            return jsonify(
+                [
+                    {"filename": p.filename, "hash": p.hash, "size": p.size}
+                    for p in packages
+                ]
+            )
+        except BaseException as e:
+            logger.error(f"MilSim: failed to get data packages: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # Play: dal template alla partita
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/templates/<int:template_id>/play", methods=["POST"])
+    def play_template(template_id: int):
+        try:
+            template = db.session.get(GameTemplate, template_id)
+            if not template:
+                return jsonify({"success": False, "error": "Template non trovato"}), 404
+
+            snapshot = template.serialize()
+            errors = validate_template(template.mode, snapshot["markers"], snapshot["zones"], for_play=True)
+            if errors:
+                return jsonify({"success": False, "error": "Template incompleto: " + "; ".join(errors)}), 400
+
+            now = _utcnow()
+            match = GameMatch(
+                template_id=template.id,
+                title=template.title,
+                mode=template.mode,
+                duration_minutes=template.duration_minutes,
+                started_at=now,
+                ends_at=now + timedelta(minutes=template.duration_minutes),
+                status="running",
+                started_by=current_user.username,
+                snapshot_json=json.dumps(snapshot),
+            )
+
+            # UID stabili per marker e aree: servono per ripubblicare e cancellare
+            run = uuid.uuid4().hex[:10]
+            uids = [
+                {"uid": f"GM.{run}.m{i}", "cot_type": None}
+                for i in range(len(snapshot["markers"]) + len(snapshot["zones"]))
+            ]
+            for i, marker in enumerate(snapshot["markers"]):
+                uids[i]["cot_type"] = MARKER_TYPES[marker["type"]]["cot_type"]
+            for j in range(len(snapshot["zones"])):
+                uids[len(snapshot["markers"]) + j]["cot_type"] = "u-d-f"
+            match.cot_uids_json = json.dumps(uids)
+            events = _match_events(match, uids)
+
+            package_events, missing = _package_events(snapshot.get("packages", []))
+            events.extend(package_events)
+
+            mode_name = GAME_MODES[template.mode]["name"]
+            chat = f"🎮 Partita iniziata: {template.title} ({mode_name}), durata {template.duration_minutes} minuti."
+            if template.description:
+                chat += f" {template.description}"
+            events.append(cot.geochat_event(chat, _gm_sender_uid(), _gm_callsign()))
+
+            if not cot.broadcast(events):
+                return jsonify(
+                    {"success": False, "error": "Push agli EUD fallito (RabbitMQ non raggiungibile): partita non creata"}
+                ), 502
+
+            db.session.add(match)
+            db.session.commit()
+
+            logger.info(
+                f"MilSim: partita '{match.title}' ({mode_name}) avviata da {current_user.username}: "
+                f"{len(snapshot['markers'])} marker, {len(snapshot['zones'])} aree, "
+                f"{len(package_events)} data package annunciati"
+            )
+            result = {"success": True, "match": match.serialize()}
+            if missing:
+                result["warning"] = f"{len(missing)} data package del template non esistono più sul server"
+            return jsonify(result)
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(f"MilSim: failed to play template {template_id}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # Partite
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/matches", methods=["GET"])
+    def get_matches():
+        try:
+            matches = db.session.query(GameMatch).order_by(GameMatch.started_at.desc()).limit(100).all()
+            return jsonify([m.serialize() for m in matches])
+        except BaseException as e:
+            logger.error(f"MilSim: failed to get matches: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/matches/<int:match_id>/republish", methods=["POST"])
+    def republish_match(match_id: int):
+        """Ripubblica marker e aree con gli stessi UID: per gli EUD entrati a
+        partita in corso (il broadcast iniziale raggiunge solo i connessi)."""
+        try:
+            match = db.session.get(GameMatch, match_id)
+            if not match:
+                return jsonify({"success": False, "error": "Partita non trovata"}), 404
+            if match.status != "running":
+                return jsonify({"success": False, "error": "La partita è già terminata"}), 400
+            if match.ends_at <= _utcnow():
+                return jsonify({"success": False, "error": "La partita è scaduta: i marker non vengono ripubblicati"}), 400
+
+            uids = json.loads(match.cot_uids_json)
+            if not cot.broadcast(_match_events(match, uids)):
+                return jsonify({"success": False, "error": "Push agli EUD fallito (RabbitMQ non raggiungibile)"}), 502
+            return jsonify({"success": True, "republished": len(uids)})
+        except BaseException as e:
+            logger.error(f"MilSim: failed to republish match {match_id}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/matches/<int:match_id>/end", methods=["POST"])
+    def end_match(match_id: int):
+        try:
+            match = db.session.get(GameMatch, match_id)
+            if not match:
+                return jsonify({"success": False, "error": "Partita non trovata"}), 404
+            if match.status != "running":
+                return jsonify({"success": False, "error": "La partita è già terminata"}), 400
+
+            uids = json.loads(match.cot_uids_json)
+            events = [cot.delete_event(u["uid"], u["cot_type"] or "a-u-G") for u in uids]
+            events.append(
+                cot.geochat_event(f"🏁 Partita terminata: {match.title}.", _gm_sender_uid(), _gm_callsign())
+            )
+            broadcast_ok = cot.broadcast(events)
+
+            match.status = "ended"
+            match.ended_at = _utcnow()
+            db.session.commit()
+
+            logger.info(f"MilSim: partita '{match.title}' terminata da {current_user.username}")
+            result = {"success": True, "match": match.serialize()}
+            if not broadcast_ok:
+                result["warning"] = (
+                    "Partita chiusa, ma la cancellazione dei marker sugli EUD è fallita: "
+                    "spariranno comunque da soli allo scadere dello stale."
+                )
+            return jsonify(result)
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(f"MilSim: failed to end match {match_id}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500

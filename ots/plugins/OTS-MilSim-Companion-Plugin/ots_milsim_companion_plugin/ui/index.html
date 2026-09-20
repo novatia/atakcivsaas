@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Calendario Eventi</title>
+<title>MilSim Soft-Air Companion</title>
 <style>
   :root {
     color-scheme: light;
@@ -89,6 +89,40 @@
   .rp-name { font-size: 11px; font-weight: 600; color: #111; background: rgba(255,255,255,.85); padding: 0 4px; border-radius: 4px; }
   .muted { color: var(--muted); }
   .hidden { display: none !important; }
+  /* ---- Modalità di gioco (template missioni, partite) ---- */
+  .btn:disabled { opacity: .5; cursor: default; }
+  .pill.ok { background: var(--present); } .pill.err { background: var(--absent); }
+  .pill.warn { background: var(--maybe); } .pill.neutral { background: var(--neutral); }
+  .shape { display: inline-block; width: 13px; height: 13px; background: var(--c, #999); border: 1.5px solid rgba(0,0,0,.35); vertical-align: -2px; }
+  .shape.circle { border-radius: 50%; }
+  .shape.diamond { transform: rotate(45deg) scale(.9); }
+  .map-shape { display: block; width: 16px; height: 16px; background: var(--c, #999); border: 2px solid #fff; box-shadow: 0 0 4px rgba(0,0,0,.8); }
+  .map-shape.circle { border-radius: 50%; }
+  .map-shape.diamond { transform: rotate(45deg); }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+  .tpl-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .tpl-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .tpl-head strong { font-size: 14.5px; }
+  .tpl-meta { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+  .tpl-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 6px; }
+  .ed-grid { display: grid; grid-template-columns: 320px 1fr; gap: 14px; }
+  @media (max-width: 900px) { .ed-grid { grid-template-columns: 1fr; } }
+  .ed-side { display: flex; flex-direction: column; gap: 10px; }
+  .ed-side label.field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); width: 100%; }
+  .ed-side input, .ed-side select, .ed-side textarea { width: 100%; }
+  #gm-map { height: 520px; border: 1px solid var(--border); border-radius: 8px; min-width: 0; }
+  .palette { display: flex; flex-direction: column; gap: 6px; }
+  .palette button { display: flex; align-items: center; gap: 8px; text-align: left; }
+  .palette button.placing { outline: 2px solid var(--accent); }
+  .pkg-list { max-height: 160px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
+  .pkg-list label { display: flex; gap: 6px; align-items: center; font-size: 12.5px; }
+  .draw-hint { background: var(--tab); border: 1px dashed var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12.5px; }
+  .match-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .countdown { font-size: 20px; font-variant-numeric: tabular-nums; font-weight: 700; }
+  .mode-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+  .mode-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .mode-card ul { margin: 6px 0 0; padding-left: 18px; line-height: 1.7; }
 </style>
 <script>
   // Applica subito il tema salvato per evitare il flash chiaro/scuro al caricamento
@@ -100,7 +134,7 @@
 </head>
 <body>
 <header>
-  <h1>📅 Calendario Eventi</h1>
+  <h1>🎯 MilSim Soft-Air Companion</h1>
   <div id="me-box"></div>
   <button class="btn" id="theme-btn" onclick="toggleTheme()" title="Modalità notte/giorno">🌙</button>
 </header>
@@ -175,6 +209,9 @@ function badgeImg(rank, size) {
 /* ---------------- Tabs ---------------- */
 const TABS = [
   { id: "events", label: "Eventi", admin: true, render: () => { clearEventHash(); renderEvents(); } },
+  { id: "gm_templates", label: "Template missioni", admin: true, render: () => { clearEventHash(); renderTemplates(); } },
+  { id: "gm_matches", label: "Partite", admin: true, render: () => { clearEventHash(); renderMatches(); } },
+  { id: "gm_modes", label: "Modalità di gioco", admin: true, render: () => { clearEventHash(); renderModes(); } },
   { id: "leaderboard", label: "Classifica", admin: false, render: () => { clearEventHash(); renderLeaderboard(); } },
   { id: "attendance", label: "Presenze", admin: true, render: renderAttendance },
   { id: "players", label: "Giocatori", admin: true, render: renderPlayers },
@@ -195,9 +232,21 @@ function renderTabs() {
     const btn = document.createElement("button");
     btn.textContent = tab.label;
     btn.className = tab.id === currentTab ? "active" : "";
-    btn.onclick = () => { currentTab = tab.id; renderTabs(); tab.render(); };
+    btn.onclick = () => {
+      // Editor template aperto: chiedi conferma prima di buttare le modifiche
+      if (ED && !confirm("Stai modificando un template di missione: uscire senza salvare?")) return;
+      ED = null;
+      clearInterval(MATCH_TIMER);
+      currentTab = tab.id; renderTabs(); tab.render();
+    };
     nav.appendChild(btn);
   }
+}
+// Cambio tab programmato (es. dopo il Play si passa alle Partite)
+function gmGoTab(id) {
+  currentTab = id;
+  renderTabs();
+  TABS.find(t => t.id === id).render();
 }
 
 async function refreshMe() {
@@ -1066,6 +1115,567 @@ async function clearTable(target, count) {
     else toast(`Eliminate ${result.deleted} righe da ${target}`);
     renderMaintenance();
   } catch (err) { toast(err.message, false); }
+}
+
+/* ================= Modalità di gioco (template missioni e partite) ================= */
+
+function fmtBytes(n) {
+  if (n == null) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return n.toFixed(n >= 100 || i === 0 ? 0 : 1) + " " + units[i];
+}
+function baseLayers() {
+  const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19, attribution: "© OpenStreetMap" });
+  const sat = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+    maxZoom: 19, attribution: "Esri World Imagery" });
+  return { "Mappa (OSM)": osm, "Satellite (Esri)": sat };
+}
+
+/* ---- Anagrafica modalità (registry dal backend) ---- */
+let REGISTRY = null;
+async function ensureRegistry() {
+  if (!REGISTRY) REGISTRY = await api("/modes");
+  return REGISTRY;
+}
+function shapeHtml(mtypeKey) {
+  const mt = REGISTRY.marker_types[mtypeKey];
+  return `<span class="shape ${mt.shape}" style="--c:${mt.color}"></span>`;
+}
+
+/* ---- Tab Template missioni ---- */
+let TEMPLATES = [];
+
+async function renderTemplates() {
+  const el = document.getElementById("content");
+  el.innerHTML = "Caricamento template…";
+  try {
+    await ensureRegistry();
+    TEMPLATES = await api("/templates");
+  } catch (e) {
+    el.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
+    return;
+  }
+  const cards = TEMPLATES.map(t => {
+    const mode = REGISTRY.modes[t.mode] || { name: t.mode, icon: "❓" };
+    const playable = !t.play_errors.length;
+    const counts = {};
+    t.markers.forEach(m => counts[m.type] = (counts[m.type] || 0) + 1);
+    const legend = Object.keys(counts).map(k =>
+      `${shapeHtml(k)} ${counts[k]}`).join(" &nbsp; ");
+    return `
+    <div class="tpl-card">
+      <div class="tpl-head">
+        <strong>${mode.icon} ${esc(t.title)}</strong>
+        <span class="pill neutral">${esc(mode.name)}</span>
+      </div>
+      <div class="tpl-meta">
+        ⏱ ${t.duration_minutes} min · ${t.markers.length} marker · ${t.zones.length} aree · ${t.packages.length} data package<br>
+        ${legend}
+        ${t.description ? "<br>" + esc(t.description) : ""}
+        ${playable ? "" : `<br><span class="pill warn" title="${esc(t.play_errors.join("; "))}">incompleto</span> <span class="muted">${esc(t.play_errors[0] || "")}${t.play_errors.length > 1 ? "…" : ""}</span>`}
+      </div>
+      <div class="tpl-actions">
+        <button class="btn primary" ${playable ? "" : "disabled"} onclick="playTemplate(${t.id}, this)"
+          title="${playable ? "Crea la partita e pusha marker, aree e data package a tutti gli EUD collegati" : esc(t.play_errors.join("; "))}">▶ Play</button>
+        <button class="btn" onclick="openEditor(${t.id})">✏️ Modifica</button>
+        <button class="btn" onclick="duplicateTemplate(${t.id})" title="Crea una copia del template">⧉ Duplica</button>
+        <button class="btn danger" onclick="deleteTemplate(${t.id}, '${esc(t.title).replace(/'/g, "\\'")}')">🗑</button>
+      </div>
+    </div>`;
+  }).join("");
+  el.innerHTML = `
+    <div class="toolbar">
+      <button class="btn primary" onclick="openEditor(null)">＋ Nuovo template</button>
+      <button class="btn" onclick="renderTemplates()">↻ Aggiorna</button>
+      <span class="muted">Un template descrive una missione: modalità, durata, marker e aree su mappa, data package da annunciare al Play.</span>
+    </div>
+    ${TEMPLATES.length ? `<div class="tpl-grid">${cards}</div>` : "<p class='muted'>Nessun template: creane uno con «Nuovo template».</p>"}`;
+}
+
+async function duplicateTemplate(id) {
+  try {
+    await api(`/templates/${id}/duplicate`, { method: "POST" });
+    toast("Template duplicato.");
+    renderTemplates();
+  } catch (e) { toast("Errore: " + e.message, false); }
+}
+
+async function deleteTemplate(id, title) {
+  if (!confirm(`Eliminare il template "${title}"?\n\nLe partite già giocate restano nello storico.`)) return;
+  try {
+    await api(`/templates/${id}`, { method: "DELETE" });
+    toast("Template eliminato.");
+    renderTemplates();
+  } catch (e) { toast("Errore: " + e.message, false); }
+}
+
+async function playTemplate(id, btn) {
+  const t = TEMPLATES.find(x => x.id === id);
+  if (!t) return;
+  const mode = REGISTRY.modes[t.mode];
+  if (!confirm(`Avviare la partita "${t.title}" (${mode.name}, ${t.duration_minutes} min)?\n\n` +
+      `Verranno pushati a TUTTI gli EUD collegati: ${t.markers.length} marker, ${t.zones.length} aree` +
+      (t.packages.length ? `, ${t.packages.length} data package` : "") +
+      `.\nLa partenza viene annunciata nella chat generale.`)) return;
+  btn.disabled = true;
+  try {
+    const res = await api(`/templates/${id}/play`, { method: "POST" });
+    toast(`Partita "${t.title}" avviata!` + (res.warning ? " ⚠️ " + res.warning : ""), !res.warning);
+    gmGoTab("gm_matches");
+  } catch (e) {
+    toast("Errore Play: " + e.message, false);
+    btn.disabled = false;
+  }
+}
+
+/* ---- Editor template su mappa ---- */
+let ED = null;          // stato dell'editor
+let PACKAGES = [];      // data package OTS disponibili
+
+async function openEditor(id) {
+  const el = document.getElementById("content");
+  el.innerHTML = "Caricamento editor…";
+  try {
+    await ensureRegistry();
+    await loadLeaflet();
+    PACKAGES = await api("/datapackages");
+  } catch (e) {
+    el.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
+    return;
+  }
+  const t = id ? TEMPLATES.find(x => x.id === id) : null;
+  ED = {
+    id: id,
+    mode: t ? t.mode : "ctf",
+    markers: t ? t.markers.map(m => ({ ...m })) : [],
+    zones: t ? t.zones.map(z => ({ ...z, points: z.points.map(p => [...p]) })) : [],
+    packages: new Set(t ? t.packages : []),
+    placing: null,   // tipo marker in piazzamento
+    drawing: null,   // {type, points, line} area in disegno
+    map: null,
+  };
+
+  el.innerHTML = `
+    <div class="toolbar">
+      <h2 style="margin:0">${id ? "✏️ Modifica template" : "＋ Nuovo template"}</h2>
+      <span style="flex:1"></span>
+      <button class="btn" onclick="ED=null; renderTemplates()">Annulla</button>
+      <button class="btn primary" onclick="saveTemplate(this)">💾 Salva</button>
+    </div>
+    <div class="ed-grid">
+      <div class="ed-side">
+        <label class="field">Titolo
+          <input id="ed-title" value="${esc(t ? t.title : "")}" placeholder="es. CTF Bosco Nord">
+        </label>
+        <label class="field">Modalità
+          <select id="ed-mode" onchange="changeMode(this.value)">
+            ${Object.entries(REGISTRY.modes).map(([k, m]) =>
+              `<option value="${k}" ${ED.mode === k ? "selected" : ""}>${m.icon} ${esc(m.name)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field">Durata (minuti)
+          <input id="ed-duration" type="number" min="1" max="1440" value="${t ? t.duration_minutes : 30}">
+        </label>
+        <label class="field">Descrizione
+          <textarea id="ed-desc" rows="2" placeholder="regole, briefing…">${esc(t ? t.description || "" : "")}</textarea>
+        </label>
+        <div>
+          <h3 style="margin-top:4px">Marker e aree <span class="muted">(clicca il tipo, poi la mappa)</span></h3>
+          <div class="palette" id="ed-palette"></div>
+          <div class="draw-hint" id="ed-hint" style="display:none"></div>
+        </div>
+        <div>
+          <h3>Data package al Play</h3>
+          ${PACKAGES.length ? `<div class="pkg-list">${PACKAGES.map(p => `
+            <label><input type="checkbox" value="${esc(p.hash)}" ${ED.packages.has(p.hash) ? "checked" : ""}
+              onchange="this.checked ? ED.packages.add(this.value) : ED.packages.delete(this.value)">
+              ${esc(p.filename)} <span class="muted">(${fmtBytes(p.size)})</span></label>`).join("")}</div>`
+            : '<p class="muted" style="margin:4px 0">Nessun data package sul server.</p>'}
+          <p class="muted" style="margin:6px 0 0; font-size:12px">Al Play gli EUD ricevono la proposta di download (fileshare) di ogni package selezionato.</p>
+        </div>
+      </div>
+      <div id="gm-map"></div>
+    </div>`;
+
+  // Mappa: centro salvato nel template, altrimenti fit sui marker, altrimenti Italia
+  const map = L.map("gm-map");
+  ED.map = map;
+  const layers = baseLayers();
+  L.control.layers(layers).addTo(map);
+  layers["Mappa (OSM)"].addTo(map);
+  if (t && t.map && t.map.lat != null && t.map.lon != null) {
+    map.setView([t.map.lat, t.map.lon], t.map.zoom || 15);
+  } else if (ED.markers.length) {
+    map.fitBounds(L.latLngBounds(ED.markers.map(m => [m.lat, m.lon])).pad(0.3));
+  } else {
+    map.setView([45.0, 9.7], 6);
+  }
+  // Container appena inserito nel DOM (iframe/tab): rimisura come per il replay
+  setTimeout(() => map.invalidateSize(), 150);
+  map.on("click", e => mapClick(e.latlng));
+
+  ED.markers.forEach(m => addMarkerLayer(m));
+  ED.zones.forEach(z => addZoneLayer(z));
+  renderPalette();
+}
+
+function modeDef() { return REGISTRY.modes[ED.mode]; }
+function countMarkers(type) { return ED.markers.filter(m => m.type === type).length; }
+function countZones(type) { return ED.zones.filter(z => z.type === type).length; }
+
+function changeMode(mode) {
+  const def = REGISTRY.modes[mode];
+  const badMarkers = ED.markers.filter(m => !(m.type in def.markers));
+  const badZones = ED.zones.filter(z => !(z.type in def.zones));
+  if ((badMarkers.length || badZones.length) &&
+      !confirm(`Cambiando modalità verranno rimossi ${badMarkers.length} marker e ${badZones.length} aree non previsti in ${def.name}. Continuare?`)) {
+    document.getElementById("ed-mode").value = ED.mode;
+    return;
+  }
+  badMarkers.forEach(m => { ED.map.removeLayer(m._layer); });
+  badZones.forEach(z => { ED.map.removeLayer(z._layer); });
+  ED.markers = ED.markers.filter(m => m.type in def.markers);
+  ED.zones = ED.zones.filter(z => z.type in def.zones);
+  ED.mode = mode;
+  cancelPlacing();
+  renderPalette();
+}
+
+function renderPalette() {
+  const def = modeDef();
+  const box = document.getElementById("ed-palette");
+  if (!box) return;
+  let html = "";
+  for (const [type, limits] of Object.entries(def.markers)) {
+    const mt = REGISTRY.marker_types[type];
+    const count = countMarkers(type);
+    const full = count >= limits.max;
+    html += `<button class="btn ${ED.placing === type ? "placing" : ""}" ${full ? "disabled" : ""}
+      onclick="startPlacing('${type}')" title="${full ? "Numero massimo raggiunto" : "Clicca poi sulla mappa per piazzare"}">
+      ${shapeHtml(type)} ${esc(mt.label)} <span class="muted" style="margin-left:auto">${count}/${limits.max}${limits.min ? " (min " + limits.min + ")" : ""}</span></button>`;
+  }
+  for (const [type, limits] of Object.entries(def.zones)) {
+    const zt = REGISTRY.zone_types[type];
+    const count = countZones(type);
+    const full = count >= limits.max;
+    const drawingThis = ED.drawing && ED.drawing.type === type;
+    html += `<button class="btn ${drawingThis ? "placing" : ""}" ${full && !drawingThis ? "disabled" : ""}
+      onclick="startZone('${type}')" title="${full ? "Numero massimo raggiunto" : "Clicca i vertici sulla mappa, poi chiudi l'area"}">
+      <span class="shape" style="--c:${zt.color}; border-radius:3px; opacity:.7"></span>
+      ${esc(zt.label)} <span class="muted" style="margin-left:auto">${count}/${limits.max}${limits.min ? " (min " + limits.min + ")" : ""}</span></button>`;
+  }
+  box.innerHTML = html;
+  updateHint();
+}
+
+function updateHint() {
+  const hint = document.getElementById("ed-hint");
+  if (!hint) return;
+  if (ED.placing) {
+    const mt = REGISTRY.marker_types[ED.placing];
+    hint.style.display = "";
+    hint.innerHTML = `📍 Clicca sulla mappa per piazzare <b>${esc(mt.label)}</b>.
+      <button class="btn" onclick="cancelPlacing()">Annulla</button>`;
+  } else if (ED.drawing) {
+    const zt = REGISTRY.zone_types[ED.drawing.type];
+    const n = ED.drawing.points.length;
+    hint.style.display = "";
+    hint.innerHTML = `✏️ <b>${esc(zt.label)}</b>: clicca i vertici sulla mappa (${n} finora).
+      <button class="btn primary" ${n >= 3 ? "" : "disabled"} onclick="finishZone()">Chiudi area</button>
+      <button class="btn" onclick="cancelPlacing()">Annulla</button>`;
+  } else {
+    hint.style.display = "none";
+  }
+}
+
+function startPlacing(type) {
+  cancelPlacing();
+  ED.placing = type;
+  renderPalette();
+}
+
+function startZone(type) {
+  cancelPlacing();
+  ED.drawing = { type: type, points: [], line: L.polyline([], { color: REGISTRY.zone_types[type].color, dashArray: "6 6" }).addTo(ED.map) };
+  renderPalette();
+}
+
+function cancelPlacing() {
+  ED.placing = null;
+  if (ED.drawing) {
+    ED.map.removeLayer(ED.drawing.line);
+    ED.drawing = null;
+  }
+  renderPalette();
+}
+
+function mapClick(latlng) {
+  if (ED.placing) {
+    const type = ED.placing;
+    const marker = { type: type, label: REGISTRY.marker_types[type].callsign, lat: +latlng.lat.toFixed(6), lon: +latlng.lng.toFixed(6) };
+    ED.markers.push(marker);
+    addMarkerLayer(marker);
+    ED.placing = null;
+    renderPalette();
+  } else if (ED.drawing) {
+    ED.drawing.points.push([+latlng.lat.toFixed(6), +latlng.lng.toFixed(6)]);
+    ED.drawing.line.setLatLngs(ED.drawing.points);
+    updateHint();
+  }
+}
+
+function finishZone() {
+  if (!ED.drawing || ED.drawing.points.length < 3) return;
+  const zone = { type: ED.drawing.type, label: REGISTRY.zone_types[ED.drawing.type].label, points: ED.drawing.points };
+  ED.zones.push(zone);
+  ED.map.removeLayer(ED.drawing.line);
+  ED.drawing = null;
+  addZoneLayer(zone);
+  renderPalette();
+}
+
+function addMarkerLayer(marker) {
+  const mt = REGISTRY.marker_types[marker.type];
+  const layer = L.marker([marker.lat, marker.lon], {
+    draggable: true,
+    icon: L.divIcon({ className: "", html: `<span class="map-shape ${mt.shape}" style="--c:${mt.color}"></span>`, iconSize: [16, 16], iconAnchor: [8, 8] }),
+  }).addTo(ED.map);
+  layer.bindTooltip(() => marker.label || mt.callsign, { direction: "top", offset: [0, -8] });
+  layer.on("dragend", () => {
+    const p = layer.getLatLng();
+    marker.lat = +p.lat.toFixed(6);
+    marker.lon = +p.lng.toFixed(6);
+  });
+  layer.on("click", () => {
+    const idx = ED.markers.indexOf(marker);
+    layer.bindPopup(`<b>${esc(mt.label)}</b><br>
+      <input id="mk-label" value="${esc(marker.label || "")}" placeholder="${esc(mt.callsign)}" style="margin:6px 0; width:170px">
+      <br><button class="btn" onclick="setMarkerLabel(${idx})">OK</button>
+      <button class="btn danger" onclick="removeMarker(${idx})">🗑 Rimuovi</button>`).openPopup();
+  });
+  marker._layer = layer;
+}
+
+function setMarkerLabel(idx) {
+  const marker = ED.markers[idx];
+  const input = document.getElementById("mk-label");
+  if (marker && input) marker.label = input.value.trim() || REGISTRY.marker_types[marker.type].callsign;
+  marker._layer.closePopup();
+}
+
+function removeMarker(idx) {
+  const marker = ED.markers[idx];
+  if (!marker) return;
+  ED.map.removeLayer(marker._layer);
+  ED.markers.splice(idx, 1);
+  renderPalette();
+}
+
+function addZoneLayer(zone) {
+  const zt = REGISTRY.zone_types[zone.type];
+  const layer = L.polygon(zone.points, { color: zt.color, weight: 3, fillOpacity: 0.18 }).addTo(ED.map);
+  layer.bindTooltip(() => zone.label || zt.label);
+  layer.on("click", () => {
+    const idx = ED.zones.indexOf(zone);
+    layer.bindPopup(`<b>${esc(zt.label)}</b> (${zone.points.length} vertici)<br>
+      <button class="btn danger" style="margin-top:6px" onclick="removeZone(${idx})">🗑 Rimuovi</button>`).openPopup();
+  });
+  zone._layer = layer;
+}
+
+function removeZone(idx) {
+  const zone = ED.zones[idx];
+  if (!zone) return;
+  ED.map.removeLayer(zone._layer);
+  ED.zones.splice(idx, 1);
+  renderPalette();
+}
+
+async function saveTemplate(btn) {
+  const title = document.getElementById("ed-title").value.trim();
+  if (!title) return toast("Il titolo è obbligatorio.", false);
+  const center = ED.map.getCenter();
+  const body = {
+    title: title,
+    description: document.getElementById("ed-desc").value.trim(),
+    mode: ED.mode,
+    duration_minutes: +document.getElementById("ed-duration").value,
+    map: { lat: +center.lat.toFixed(6), lon: +center.lng.toFixed(6), zoom: ED.map.getZoom() },
+    markers: ED.markers.map(m => ({ type: m.type, label: m.label, lat: m.lat, lon: m.lon })),
+    zones: ED.zones.map(z => ({ type: z.type, label: z.label, points: z.points })),
+    packages: [...ED.packages],
+  };
+  btn.disabled = true;
+  try {
+    if (ED.id) await api(`/templates/${ED.id}`, { method: "PUT", body });
+    else await api("/templates", { method: "POST", body });
+    toast("Template salvato.");
+    ED = null;
+    renderTemplates();
+  } catch (e) {
+    toast("Errore salvataggio: " + e.message, false);
+    btn.disabled = false;
+  }
+}
+
+/* ---- Tab Partite ---- */
+let MATCH_TIMER = null;
+
+function fmtCountdown(seconds) {
+  if (seconds <= 0) return "00:00";
+  const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = seconds % 60;
+  const mm = String(m).padStart(2, "0"), ss = String(s).padStart(2, "0");
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+async function renderMatches() {
+  clearInterval(MATCH_TIMER);
+  const el = document.getElementById("content");
+  el.innerHTML = "Caricamento partite…";
+  let matches;
+  try {
+    await ensureRegistry();
+    matches = await api("/matches");
+  } catch (e) {
+    el.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
+    return;
+  }
+  const running = matches.filter(m => m.status === "running");
+  const ended = matches.filter(m => m.status !== "running");
+
+  const runningHtml = running.map(m => {
+    const mode = REGISTRY.modes[m.mode] || { name: m.mode, icon: "❓" };
+    return `
+    <div class="match-card">
+      <div>
+        <strong>${mode.icon} ${esc(m.title)}</strong> <span class="pill ${m.expired ? "warn" : "ok"}">${m.expired ? "tempo scaduto" : "in corso"}</span><br>
+        <span class="muted">${esc(mode.name)} · avviata ${fmtDT(m.started_at)} da ${esc(m.started_by || "")} · fine ${fmtDT(m.ends_at)}</span>
+      </div>
+      <div class="countdown" data-ends="${esc(m.ends_at)}">--:--</div>
+      <span style="flex:1"></span>
+      <button class="btn" onclick="republishMatch(${m.id}, this)"
+        title="Ripubblica marker e aree: per gli EUD collegati dopo l'inizio">📡 Ripubblica</button>
+      <button class="btn danger" onclick="endMatch(${m.id}, '${esc(m.title).replace(/'/g, "\\'")}', this)"
+        title="Chiude la partita: i marker vengono cancellati dagli EUD e la fine annunciata in chat">⏹ Termina</button>
+    </div>`;
+  }).join("");
+
+  const endedHtml = ended.length ? `
+    <h3>Storico</h3>
+    <table>
+      <thead><tr><th>Partita</th><th>Modalità</th><th>Inizio</th><th>Fine</th><th>Avviata da</th></tr></thead>
+      <tbody>${ended.map(m => {
+        const mode = REGISTRY.modes[m.mode] || { name: m.mode };
+        return `<tr><td>${esc(m.title)}</td><td>${esc(mode.name)}</td>
+          <td>${fmtDT(m.started_at)}</td><td>${fmtDT(m.ended_at || m.ends_at)}</td><td>${esc(m.started_by || "")}</td></tr>`;
+      }).join("")}</tbody>
+    </table>` : "";
+
+  el.innerHTML = `
+    <div class="toolbar">
+      <button class="btn" onclick="renderMatches()">↻ Aggiorna</button>
+      <span class="muted">Il push iniziale raggiunge gli EUD collegati in quel momento: per chi entra dopo usa «Ripubblica».
+        I marker spariscono da soli dagli ATAK alla fine della partita (stale).</span>
+    </div>
+    ${running.length ? runningHtml : "<p class='muted'>Nessuna partita in corso: avviane una dal tab Template missioni con ▶ Play.</p>"}
+    ${endedHtml}`;
+
+  const tick = () => document.querySelectorAll(".countdown").forEach(c => {
+    const remaining = Math.floor((new Date(c.dataset.ends) - Date.now()) / 1000);
+    c.textContent = fmtCountdown(remaining);
+    c.style.color = remaining <= 0 ? "var(--absent)" : remaining < 300 ? "var(--maybe)" : "";
+  });
+  tick();
+  if (running.length) MATCH_TIMER = setInterval(tick, 1000);
+}
+
+async function republishMatch(id, btn) {
+  btn.disabled = true;
+  try {
+    const res = await api(`/matches/${id}/republish`, { method: "POST" });
+    toast(`Ripubblicati ${res.republished} elementi a tutti gli EUD collegati.`);
+  } catch (e) {
+    toast("Errore: " + e.message, false);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function endMatch(id, title, btn) {
+  if (!confirm(`Terminare la partita "${title}"?\n\nI marker vengono cancellati dagli EUD e la fine annunciata in chat.`)) return;
+  btn.disabled = true;
+  try {
+    const res = await api(`/matches/${id}/end`, { method: "POST" });
+    toast(`Partita "${title}" terminata.` + (res.warning ? " ⚠️ " + res.warning : ""), !res.warning);
+    renderMatches();
+  } catch (e) {
+    toast("Errore: " + e.message, false);
+    btn.disabled = false;
+  }
+}
+
+/* ---- Tab Modalità di gioco (anagrafica + config Game Master) ---- */
+async function renderModes() {
+  const el = document.getElementById("content");
+  el.innerHTML = "Caricamento…";
+  let cfg = {};
+  try {
+    await ensureRegistry();
+    cfg = await api("/config");
+  } catch (e) {
+    el.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
+    return;
+  }
+  const cards = Object.entries(REGISTRY.modes).map(([key, mode]) => `
+    <div class="mode-card">
+      <h2>${mode.icon} ${esc(mode.name)}</h2>
+      <p class="muted" style="margin:0">${esc(mode.description)}</p>
+      <ul>
+        ${Object.entries(mode.markers).map(([mk, lim]) => {
+          const mt = REGISTRY.marker_types[mk];
+          return `<li>${shapeHtml(mk)} <b>${esc(mt.label)}</b> <span class="muted">${lim.min === lim.max ? lim.min : lim.min + "–" + lim.max}</span></li>`;
+        }).join("")}
+        ${Object.entries(mode.zones).map(([zk, lim]) => {
+          const zt = REGISTRY.zone_types[zk];
+          return `<li><span class="shape" style="--c:${zt.color}; border-radius:3px; opacity:.7"></span>
+            <b>${esc(zt.label)}</b> <span class="muted">${lim.min ? "obbligatoria" : "opzionale"}</span></li>`;
+        }).join("")}
+      </ul>
+    </div>`).join("");
+  el.innerHTML = `
+    <p class="muted" style="margin-top:0">L'anagrafica delle modalità è definita nel plugin (<code>game_modes.py</code>):
+      ogni modalità dichiara i marker e le aree richiesti. Su ATAK/WinTAK i marker usano la simbologia nativa:
+      <b style="color:#E53935">rombo rosso</b> spawn Team A, <b style="color:#1E88E5">quadrato blu</b> spawn Team B,
+      <b style="color:#c7a600">giallo</b> bandiera, <b style="color:#9C27B0">spot viola</b> bomb site;
+      le aree arrivano come poligoni colorati.</p>
+    <div class="mode-grid">${cards}</div>
+    <h3 style="margin-top:20px">Configurazione Game Master</h3>
+    <form class="inline" onsubmit="event.preventDefault(); saveGmConfig();">
+      <label>Callsign del Game Master
+        <input id="cfg-gm-callsign" size="24" value="${esc(cfg.OTS_EVENTCALENDAR_GM_CALLSIGN || "")}"
+          title="Firma marker, messaggi in chat e invii data package">
+      </label>
+      <label>Indirizzo server per i download (vuoto = automatico)
+        <input id="cfg-gm-server" size="30" value="${esc(cfg.OTS_EVENTCALENDAR_GM_SERVER_ADDRESS || "")}"
+          placeholder="es. tak.miodominio.it"
+          title="Hostname/IP che gli EUD usano per scaricare i data package annunciati al Play">
+      </label>
+      <button class="btn primary">Salva</button>
+    </form>
+    <p class="muted">I valori vengono salvati in <code>config.yml</code> sul server.</p>`;
+}
+
+async function saveGmConfig() {
+  try {
+    await api("/config", { method: "POST", body: {
+      OTS_EVENTCALENDAR_GM_CALLSIGN: document.getElementById("cfg-gm-callsign").value.trim() || "Game Master",
+      OTS_EVENTCALENDAR_GM_SERVER_ADDRESS: document.getElementById("cfg-gm-server").value.trim(),
+    } });
+    toast("Configurazione salvata.");
+  } catch (e) { toast("Errore salvataggio: " + e.message, false); }
 }
 
 /* ---------------- Init ---------------- */
