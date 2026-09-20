@@ -190,11 +190,11 @@
     <div id="play-info" class="muted"></div>
     <label>Team A <select id="play-team-a"></select></label>
     <label>Team B <select id="play-team-b"></select></label>
-    <label>Osservatori (vedono tutto: es. il team degli admin/HQ)
-      <div id="play-observers" class="pkg-list" style="max-height:110px"></div>
+    <label>Osservatori (vedono tutto: es. il gruppo headquarter/admin)
+      <select id="play-observers"></select>
     </label>
-    <p class="muted" style="margin:0">I team sono quelli <b>nativi di ATAK</b> (colore squadra scelto sul telefono).
-      Senza selezione la missione viene trasmessa a <b>tutti</b> gli EUD collegati. Con i team: lo <b>spawn A</b>
+    <p class="muted" style="margin:0">I gruppi sono i <b>gruppi ATAK</b> definiti sul server (pagina Groups di OTS).
+      Senza selezione la missione viene trasmessa a <b>tutti</b> gli EUD collegati. Con i gruppi: lo <b>spawn A</b>
       lo vede solo il Team A (+ osservatori), lo <b>spawn B</b> solo il Team B; bandiere, bomb site, punti di
       dominio, aree, chat e data package vanno a tutti i coinvolti.</p>
     <div class="modal-actions">
@@ -1289,13 +1289,13 @@ async function deleteTemplate(id, title) {
   } catch (e) { toast("Errore: " + e.message, false); }
 }
 
-// Il Play apre il modal di preparazione: scelta dei destinatari tra i TEAM
-// NATIVI di ATAK (il colore squadra scelto sui telefoni, che il server vede
-// da solo) o broadcast a tutti; il timer parte solo con 🚦
-let PLAY_TPL = null, ATAK_TEAMS = [];
+// Il Play apre il modal di preparazione: scelta dei destinatari tra i GRUPPI
+// ATAK definiti sul server (pagina Groups di OTS) o broadcast a tutti; il
+// timer parte solo con 🚦. Precompilato con la mappatura della tab Team.
+let PLAY_TPL = null, ATAK_GROUPS = [];
 
-function teamDot(t) {
-  return `<span class="rp-dot" style="background:${t.color || "#999"}; vertical-align:-2px"></span>`;
+function groupOption(g, selectedId) {
+  return `<option value="${g.id}" ${g.id === selectedId ? "selected" : ""}>${esc(g.name)} (${g.eud_count} EUD)</option>`;
 }
 
 async function playTemplate(id, btn) {
@@ -1303,8 +1303,8 @@ async function playTemplate(id, btn) {
   if (!t) return;
   let cfg = {};
   try {
-    [ATAK_TEAMS, cfg] = await Promise.all([api("/teams"), api("/config")]);
-  } catch (e) { return toast("Errore caricamento team ATAK: " + e.message, false); }
+    [ATAK_GROUPS, cfg] = await Promise.all([api("/groups"), api("/config")]);
+  } catch (e) { return toast("Errore caricamento gruppi ATAK: " + e.message, false); }
   PLAY_TPL = t;
   const mode = REGISTRY.modes[t.mode];
   document.getElementById("play-info").textContent =
@@ -1313,14 +1313,12 @@ async function playTemplate(id, btn) {
   // Precompilato con la mappatura salvata nella tab Team, modificabile qui
   const defA = cfg.OTS_EVENTCALENDAR_GM_TEAM_A_ID || 0;
   const defB = cfg.OTS_EVENTCALENDAR_GM_TEAM_B_ID || 0;
-  const defObs = cfg.OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS || [];
-  const options = sel => `<option value="">— tutti (broadcast) —</option>` +
-    ATAK_TEAMS.map(tm => teamOption(tm, sel)).join("");
-  document.getElementById("play-team-a").innerHTML = options(defA);
-  document.getElementById("play-team-b").innerHTML = options(defB);
-  document.getElementById("play-observers").innerHTML = ATAK_TEAMS.length
-    ? ATAK_TEAMS.map(tm => `<label><input type="checkbox" value="${tm.id}" ${defObs.includes(tm.id) ? "checked" : ""}> ${teamDot(tm)} ${esc(tm.name)} <span class="muted">(${tm.members.length} EUD)</span></label>`).join("")
-    : '<span class="muted">Nessun team ATAK: i giocatori devono impostare il colore squadra sul telefono.</span>';
+  const defObs = (cfg.OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS || [])[0] || 0;
+  const options = (sel, none) => `<option value="">${none}</option>` +
+    ATAK_GROUPS.map(g => groupOption(g, sel)).join("");
+  document.getElementById("play-team-a").innerHTML = options(defA, "— tutti (broadcast) —");
+  document.getElementById("play-team-b").innerHTML = options(defB, "— tutti (broadcast) —");
+  document.getElementById("play-observers").innerHTML = options(defObs, "— nessuno —");
   const confirmBtn = document.getElementById("play-confirm-btn");
   confirmBtn.disabled = false;
   confirmBtn.textContent = "📡 Prepara missione";
@@ -1336,8 +1334,8 @@ async function confirmPlay() {
   if (!PLAY_TPL) return;
   const teamA = document.getElementById("play-team-a").value;
   const teamB = document.getElementById("play-team-b").value;
-  const observers = [...document.querySelectorAll("#play-observers input:checked")].map(c => +c.value);
-  if (teamA && teamA === teamB) return toast("Team A e Team B non possono essere lo stesso team ATAK.", false);
+  const observer = document.getElementById("play-observers").value;
+  if (teamA && teamA === teamB) return toast("Team A e Team B non possono essere lo stesso gruppo ATAK.", false);
   const btn = document.getElementById("play-confirm-btn");
   btn.disabled = true;
   btn.textContent = "Push in corso…";
@@ -1345,7 +1343,7 @@ async function confirmPlay() {
     const res = await api(`/templates/${PLAY_TPL.id}/play`, { method: "POST", body: {
       team_a_id: teamA ? +teamA : null,
       team_b_id: teamB ? +teamB : null,
-      observer_team_ids: observers,
+      observer_team_ids: observer ? [+observer] : [],
     } });
     toast(`Missione "${PLAY_TPL.title}" pronta: dai la luce verde da Partite.` + (res.warning ? " ⚠️ " + res.warning : ""), !res.warning);
     closePlayModal();
@@ -1816,75 +1814,67 @@ async function endMatch(id, title, status, btn) {
   }
 }
 
-/* ---- Tab Team: mappatura ruoli (Team A/B/osservatori) sui team nativi di ATAK ---- */
-function teamOption(t, selectedId) {
-  return `<option value="${t.id}" ${t.id === selectedId ? "selected" : ""}>${esc(t.name)} (${t.members.length} EUD)</option>`;
-}
-
+/* ---- Tab Team: mappatura ruoli (Team A/B/osservatori) sui gruppi ATAK di OTS ---- */
 async function renderTeams() {
   const el = document.getElementById("content");
-  el.innerHTML = "Caricamento team ATAK…";
+  el.innerHTML = "Caricamento gruppi ATAK…";
   let cfg = {};
   try {
-    [ATAK_TEAMS, cfg] = await Promise.all([api("/teams"), api("/config")]);
+    [ATAK_GROUPS, cfg] = await Promise.all([api("/groups"), api("/config")]);
   } catch (e) {
     el.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
     return;
   }
   const defA = cfg.OTS_EVENTCALENDAR_GM_TEAM_A_ID || 0;
   const defB = cfg.OTS_EVENTCALENDAR_GM_TEAM_B_ID || 0;
-  const defObs = cfg.OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS || [];
-  const options = sel => `<option value="">— non impostato —</option>` + ATAK_TEAMS.map(t => teamOption(t, sel)).join("");
+  const defObs = (cfg.OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS || [])[0] || 0;
+  const options = (sel, none) => `<option value="">${none}</option>` + ATAK_GROUPS.map(g => groupOption(g, sel)).join("");
 
-  const withMembers = ATAK_TEAMS.filter(t => t.members.length);
-  const cards = withMembers.map(t => `
+  const cards = ATAK_GROUPS.map(g => `
     <div class="mode-card">
-      <h2 style="margin:0">${teamDot(t)} ${esc(t.name)} <span class="muted">· ${t.members.length} EUD</span>
-        ${t.id === defA ? '<span class="pill err">TEAM A</span>' : ""}${t.id === defB ? '<span class="pill ok" style="background:#1E88E5">TEAM B</span>' : ""}${defObs.includes(t.id) ? '<span class="pill neutral">👁 OSSERVATORI</span>' : ""}</h2>
-      <table style="margin-top:8px"><tbody>
-        ${t.members.map(m => `<tr>
-          <td><strong>${esc(m.callsign || m.uid)}</strong> <span class="muted">${esc(m.team_role || "")}</span><br>
-            <span class="muted" style="font-size:11.5px">${esc(m.uid)}</span></td>
+      <h2 style="margin:0">👥 ${esc(g.name)} <span class="muted">· ${g.eud_count} EUD</span>
+        ${g.id === defA ? '<span class="pill err">TEAM A</span>' : ""}${g.id === defB ? '<span class="pill ok" style="background:#1E88E5">TEAM B</span>' : ""}${g.id === defObs ? '<span class="pill neutral">👁 OSSERVATORI</span>' : ""}</h2>
+      ${g.description ? `<p class="muted" style="margin:4px 0 0">${esc(g.description)}</p>` : ""}
+      ${g.members.length ? `<table style="margin-top:8px"><tbody>
+        ${g.members.map(m => `<tr>
+          <td><strong>${esc(m.callsign || m.username || "?")}</strong> <span class="muted">${esc(m.username || "")}</span><br>
+            <span class="muted" style="font-size:11.5px">${m.uid ? esc(m.uid) : "nessun EUD registrato per l'utente"}</span></td>
           <td class="muted" style="text-align:right; white-space:nowrap">${fmtDT(m.last_event_time)}</td>
         </tr>`).join("")}
-      </tbody></table>
+      </tbody></table>` : '<p class="muted" style="margin:8px 0 0">Nessun utente nel gruppo.</p>'}
     </div>`).join("");
 
   el.innerHTML = `
-    <h2>Mappatura team di gioco</h2>
-    <p class="muted" style="margin-top:0">I team sono quelli <b>nativi di ATAK</b>: ogni giocatore sceglie il colore
-      squadra sul telefono (ATAK: Impostazioni → Callsign → My Team) e il server lo vede da solo. Qui decidi quale
-      colore è il <b>Team A</b>, quale il <b>Team B</b> e quali sono gli <b>osservatori broadcast</b> che vedono tutto
-      (es. il colore di admin/headquarter): al Play il pannello si apre già con questa mappatura, modificabile per la
-      singola partita.</p>
+    <h2>Mappatura gruppi di gioco</h2>
+    <p class="muted" style="margin-top:0">I gruppi sono i <b>gruppi ATAK</b> definiti sul server (web UI di
+      OpenTAKServer → <b>Groups</b>: lì si creano i gruppi e si assegnano gli utenti; qui si leggono soltanto).
+      Scegli quale gruppo è il <b>Team A</b>, quale il <b>Team B</b> e quale fa da <b>osservatore broadcast</b>
+      che vede tutto (es. headquarter/admin): al Play il pannello si apre già con questa mappatura, modificabile
+      per la singola partita.</p>
     <form class="inline" id="team-map-form">
-      <label>Team A <select id="map-team-a">${options(defA)}</select></label>
-      <label>Team B <select id="map-team-b">${options(defB)}</select></label>
-      <label>Osservatori (vedono tutto)
-        <div class="pkg-list" id="map-observers" style="max-height:110px; min-width:220px">
-          ${ATAK_TEAMS.length ? ATAK_TEAMS.map(t => `<label><input type="checkbox" value="${t.id}" ${defObs.includes(t.id) ? "checked" : ""}> ${teamDot(t)} ${esc(t.name)} <span class="muted">(${t.members.length} EUD)</span></label>`).join("")
-            : '<span class="muted">Nessun team ATAK ancora visto dal server.</span>'}
-        </div>
-      </label>
+      <label>Team A <select id="map-team-a">${options(defA, "— non impostato —")}</select></label>
+      <label>Team B <select id="map-team-b">${options(defB, "— non impostato —")}</select></label>
+      <label>Osservatori (vedono tutto) <select id="map-observers">${options(defObs, "— nessuno —")}</select></label>
       <button class="btn primary" type="submit">💾 Salva mappatura</button>
     </form>
-    <h3>Team ATAK visti dal server</h3>
-    ${withMembers.length ? `<div class="mode-grid">${cards}</div>`
-      : "<p class='muted'>Nessun EUD ha ancora trasmesso un colore squadra: imposta «My Team» sugli ATAK e collega i dispositivi.</p>"}
-    <p class="muted">I cambi di squadra sui telefoni valgono subito («Ripubblica» a partita in corso).
+    <h3>Gruppi ATAK sul server</h3>
+    ${ATAK_GROUPS.length ? `<div class="mode-grid">${cards}</div>`
+      : "<p class='muted'>Nessun gruppo ATAK definito: creali dalla web UI di OpenTAKServer (Groups) e assegna gli utenti.</p>"}
+    <p class="muted">Gli EUD di un gruppo sono i dispositivi degli utenti assegnati; i cambi valgono subito
+      («Ripubblica» a partita in corso).
       <button class="btn small" onclick="renderTeams()">↻ Aggiorna</button></p>`;
 
   document.getElementById("team-map-form").onsubmit = async (e) => {
     e.preventDefault();
     const a = +document.getElementById("map-team-a").value || 0;
     const b = +document.getElementById("map-team-b").value || 0;
-    const obs = [...document.querySelectorAll("#map-observers input:checked")].map(c => +c.value);
-    if (a && a === b) return toast("Team A e Team B non possono essere lo stesso team ATAK.", false);
+    const obs = +document.getElementById("map-observers").value || 0;
+    if (a && a === b) return toast("Team A e Team B non possono essere lo stesso gruppo ATAK.", false);
     try {
       await api("/config", { method: "POST", body: {
         OTS_EVENTCALENDAR_GM_TEAM_A_ID: a,
         OTS_EVENTCALENDAR_GM_TEAM_B_ID: b,
-        OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS: obs,
+        OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS: obs ? [obs] : [],
       } });
       toast("Mappatura salvata: il Play si aprirà già configurato così.");
       renderTeams();

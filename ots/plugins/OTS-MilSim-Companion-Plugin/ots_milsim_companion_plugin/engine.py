@@ -107,12 +107,13 @@ def match_events_for(mode: str) -> dict:
 
 
 def resolve_targets(match: GameMatch) -> dict | None:
-    """Risolve i team della partita in insiemi di uid EUD, al momento
-    dell'invio (i cambi di squadra su ATAK valgono subito, es. con «Ripubblica»).
+    """Risolve i gruppi della partita in insiemi di uid EUD, al momento
+    dell'invio (i cambi di appartenenza valgono subito, es. con «Ripubblica»).
 
-    I team sono quelli NATIVI di ATAK: la tabella `teams` di OTS e il campo
-    EUD.team_id, aggiornati dal colore squadra che ogni EUD trasmette nel
-    proprio <__group>. None = partita senza team: broadcast storico a tutti.
+    I gruppi sono i gruppi/canali TAK di OTS (tabella `groups`, membri in
+    `groups_users` per utente): gli EUD di un gruppo sono i dispositivi
+    (EUD.user_id) degli utenti con una membership abilitata, in qualunque
+    direzione IN/OUT. None = partita senza gruppi: broadcast storico a tutti.
     Altrimenti {"team_a": Team A + osservatori, "team_b": Team B + osservatori,
     "all": tutti i coinvolti} — è la mappa delle audience dei marker.
     """
@@ -121,18 +122,25 @@ def resolve_targets(match: GameMatch) -> dict | None:
         return None
 
     from opentakserver.models.EUD import EUD
+    from opentakserver.models.GroupUser import GroupUser
 
-    def members(team_id) -> set:
-        if not team_id:
+    def members(group_id) -> set:
+        if not group_id:
             return set()
-        rows = db.session.query(EUD).filter(EUD.team_id == int(team_id)).all()
+        user_ids = {
+            m.user_id
+            for m in db.session.query(GroupUser).filter_by(group_id=int(group_id), enabled=True).all()
+        }
+        if not user_ids:
+            return set()
+        rows = db.session.query(EUD).filter(EUD.user_id.in_(user_ids)).all()
         return {row.uid for row in rows}
 
     team_a = members(match.team_a_id)
     team_b = members(match.team_b_id)
     observers: set = set()
-    for team_id in observer_ids:
-        observers |= members(team_id)
+    for group_id in observer_ids:
+        observers |= members(group_id)
 
     return {
         "team_a": team_a | observers,

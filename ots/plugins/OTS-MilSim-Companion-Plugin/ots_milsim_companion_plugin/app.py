@@ -2043,19 +2043,19 @@ class MilSimCompanionPlugin(Plugin):
             if errors:
                 return jsonify({"success": False, "error": "Template incompleto: " + "; ".join(errors)}), 400
 
-            # Team destinatari (opzionali) = team nativi di ATAK (teams di OTS):
+            # Destinatari (opzionali) = gruppi TAK di OTS (tabella groups):
             # senza, broadcast a tutti come sempre
-            from opentakserver.models.Team import Team
+            from opentakserver.models.Group import Group
 
             body = request.json or {}
             team_a_id = body.get("team_a_id") or None
             team_b_id = body.get("team_b_id") or None
             observer_ids = [int(t) for t in (body.get("observer_team_ids") or [])]
-            for team_id in filter(None, [team_a_id, team_b_id, *observer_ids]):
-                if not db.session.get(Team, int(team_id)):
-                    return jsonify({"success": False, "error": f"Team ATAK non trovato: {team_id}"}), 400
+            for group_id in filter(None, [team_a_id, team_b_id, *observer_ids]):
+                if not db.session.get(Group, int(group_id)):
+                    return jsonify({"success": False, "error": f"Gruppo ATAK non trovato: {group_id}"}), 400
             if team_a_id and team_a_id == team_b_id:
-                return jsonify({"success": False, "error": "Team A e Team B non possono essere lo stesso team ATAK"}), 400
+                return jsonify({"success": False, "error": "Team A e Team B non possono essere lo stesso gruppo ATAK"}), 400
 
             # Il Play prepara la missione (stato "ready"): marker, aree e data
             # package vengono pushati subito così le squadre raggiungono gli
@@ -2160,45 +2160,58 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     # ------------------------------------------------------------------
-    # Team ATAK (tabella teams di OTS: il colore squadra scelto sugli EUD)
+    # Gruppi ATAK (tabella groups di OTS: i gruppi/canali TAK del server)
     # ------------------------------------------------------------------
 
     @staticmethod
     @roles_accepted("administrator")
-    @blueprint.route("/teams", methods=["GET"])
-    def get_teams():
-        """Team nativi di ATAK con i loro EUD: la squadra si sceglie sul
-        telefono (ATAK: Impostazioni → Callsign → My Team), il server la vede
-        dal <__group> delle posizioni. Nessuna anagrafica da mantenere qui."""
+    @blueprint.route("/groups", methods=["GET"])
+    def get_groups():
+        """Gruppi TAK definiti sul server (tabella `groups` di OTS, gestiti
+        dalla pagina Groups della web UI / API di OTS), con gli EUD dei loro
+        utenti: sono i destinatari selezionabili come Team A/B/osservatori.
+        Il plugin non gestisce i gruppi: li legge soltanto."""
         try:
             from opentakserver.models.EUD import EUD
-            from opentakserver.models.Team import Team
+            from opentakserver.models.Group import Group
+            from opentakserver.models.GroupUser import GroupUser
 
-            euds_by_team: dict[int, list] = {}
+            # EUD per utente (un utente può avere più dispositivi)
+            euds_by_user: dict[int, list] = {}
             for eud in db.session.query(EUD).order_by(EUD.callsign).all():
-                if eud.team_id:
-                    euds_by_team.setdefault(eud.team_id, []).append(
+                if eud.user_id:
+                    euds_by_user.setdefault(eud.user_id, []).append(
                         {
                             "uid": eud.uid,
                             "callsign": eud.callsign,
-                            "team_role": eud.team_role,
                             "last_event_time": eud.last_event_time.isoformat() + "Z" if eud.last_event_time else None,
                         }
                     )
 
-            teams = db.session.query(Team).order_by(Team.name).all()
+            usernames = {u.id: u.username for u in db.session.query(User).all()}
+
+            # Utenti (abilitati) per gruppo, qualunque direzione IN/OUT
+            users_by_group: dict[int, set] = {}
+            for membership in db.session.query(GroupUser).filter_by(enabled=True).all():
+                users_by_group.setdefault(membership.group_id, set()).add(membership.user_id)
+
             result = []
-            for team in teams:
-                try:
-                    color = team.get_team_color()
-                except BaseException:
-                    color = None
+            for group in db.session.query(Group).order_by(Group.name).all():
+                members = []
+                for user_id in sorted(users_by_group.get(group.id, set())):
+                    user_euds = euds_by_user.get(user_id, [])
+                    for eud in user_euds:
+                        members.append({**eud, "username": usernames.get(user_id)})
+                    if not user_euds:
+                        # Utente nel gruppo ma senza EUD registrati: mostralo comunque
+                        members.append({"uid": None, "callsign": None, "username": usernames.get(user_id), "last_event_time": None})
                 result.append(
                     {
-                        "id": team.id,
-                        "name": team.name,
-                        "color": color,
-                        "members": euds_by_team.get(team.id, []),
+                        "id": group.id,
+                        "name": group.name,
+                        "description": group.description,
+                        "members": members,
+                        "eud_count": sum(1 for m in members if m["uid"]),
                     }
                 )
             return jsonify(result)

@@ -144,34 +144,34 @@ partita**: il player su mappa filtrato esattamente sulla finestra
 
 ### Team e destinatari dei CoT
 
-I team sono quelli **nativi di ATAK**: ogni giocatore sceglie il colore
-squadra sul proprio telefono (ATAK: Impostazioni → Callsign → **My Team**) e
-il server lo vede da solo dal `<__group>` delle posizioni (tabella `teams` di
-OTS + `EUD.team_id`) — **nessuna anagrafica da mantenere**.
+I destinatari sono i **gruppi ATAK** definiti sul server: la tabella `groups`
+di OpenTAKServer, gestita dalla pagina **Groups** della web UI di OTS (lì si
+creano i gruppi e si assegnano gli utenti; il plugin li **legge soltanto**).
+Gli EUD di un gruppo sono i dispositivi degli utenti assegnati
+(`groups_users` → `EUD.user_id`).
 
-Nel tab **Team** si configura la **mappatura dei ruoli**: quale colore ATAK è
-il Team A, quale il Team B e quali sono gli osservatori broadcast (salvata in
-`config.yml`); sotto, i team visti dal server con i loro EUD per il controllo
-pre-partita. Il pannello del **Play si apre già precompilato** con questa
-mappatura, modificabile per la singola partita:
+Nel tab **Team** si configura la **mappatura dei ruoli** con tre menu — quale
+gruppo ATAK è il **Team A**, quale il **Team B** e quale fa da **osservatore
+broadcast** — salvata in `config.yml`; sotto, i gruppi con i loro utenti/EUD
+per il controllo pre-partita. Il pannello del **Play si apre già
+precompilato** con questa mappatura, modificabile per la singola partita:
 
-- **Team A / Team B** (due colori ATAK): lo spawn di un team lo vede **solo
-  quel team** (+ osservatori) — il Team B non sa dove spawna il Team A;
+- **Team A / Team B**: lo spawn di un team lo vede **solo quel gruppo**
+  (+ osservatori) — il Team B non sa dove spawna il Team A;
 - **bandiere, bomb site, punti di dominio, aree, chat e data package** vanno a
-  tutti i team coinvolti (l'audience è dichiarata per tipo di marker
+  tutti i gruppi coinvolti (l'audience è dichiarata per tipo di marker
   nell'anagrafica, campo `audience` in `game_modes.py`);
-- **osservatori** (broadcast): team che vedono tutto, es. il colore degli
-  admin/Headquarter;
-- senza team selezionati la missione va **a tutti** gli EUD (comportamento
+- **osservatori** (broadcast): il gruppo che vede tutto, es. headquarter/admin;
+- senza gruppi selezionati la missione va **a tutti** gli EUD (comportamento
   storico).
 
 La consegna mirata pubblica ogni CoT sull'exchange **`dms`** di OTS con
 routing key = uid dell'EUD (la coda di ogni EUD è legata lì): i cambi di
-squadra sugli ATAK valgono subito, anche a partita in corso con «Ripubblica».
-Il broadcast senza team usa invece `cot_parser` + `firehose` come l'endpoint
-`DELETE /api/markers` di OTS. Nota: i CoT mirati non passano dal `cot_parser`,
-quindi non vengono persistiti nella tabella markers di OTS (lo stato della
-partita vive nel plugin).
+appartenenza ai gruppi valgono subito, anche a partita in corso con
+«Ripubblica». Il broadcast senza gruppi usa invece `cot_parser` + `firehose`
+come l'endpoint `DELETE /api/markers` di OTS. Nota: i CoT mirati non passano
+dal `cot_parser`, quindi non vengono persistiti nella tabella markers di OTS
+(lo stato della partita vive nel plugin).
 
 ### SkyFi: ordini e asset satellitari (tab SkyFi)
 
@@ -260,9 +260,9 @@ restano invariate per compatibilità con i config esistenti.
 | `OTS_EVENTCALENDAR_GM_CALLSIGN` | `Game Master` | Firma di marker, chat e fileshare al Play |
 | `OTS_EVENTCALENDAR_GM_SERVER_ADDRESS` | `""` | Hostname/IP per i download dei data package (vuoto = host della web UI) |
 | `OTS_SKYFI_PLUGIN_API_KEY` | `""` | API key SkyFi (stessa chiave del vecchio OTS-SkyFi-Plugin) |
-| `OTS_EVENTCALENDAR_GM_TEAM_A_ID` | `0` | Team ATAK di default del Team A (id `teams` di OTS, 0 = non impostato) |
-| `OTS_EVENTCALENDAR_GM_TEAM_B_ID` | `0` | Team ATAK di default del Team B |
-| `OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS` | `[]` | Team ATAK osservatori broadcast di default |
+| `OTS_EVENTCALENDAR_GM_TEAM_A_ID` | `0` | Gruppo ATAK di default del Team A (id `groups` di OTS, 0 = non impostato) |
+| `OTS_EVENTCALENDAR_GM_TEAM_B_ID` | `0` | Gruppo ATAK di default del Team B |
+| `OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS` | `[]` | Gruppo ATAK osservatore broadcast di default |
 
 ## API (prefisso `/api/plugins/ots_milsim_companion_plugin`)
 
@@ -287,8 +287,8 @@ restano invariate per compatibilità con i config esistenti.
 | `GET/POST /templates` · `PUT/DELETE /templates/<id>` | admin | CRUD template di missione |
 | `POST /templates/<id>/duplicate` | admin | Copia di un template |
 | `GET /datapackages` | admin | Data package OTS disponibili |
-| `GET /teams` | admin | Team nativi di ATAK con i loro EUD (colore squadra dei telefoni) |
-| `POST /templates/<id>/play` | admin | Prepara la missione (stato *pronta*) e pusha ai destinatari; body opzionale `{"team_a_id", "team_b_id", "observer_team_ids"}` (id della tabella teams di OTS) |
+| `GET /groups` | admin | Gruppi ATAK di OTS con utenti ed EUD (sola lettura) |
+| `POST /templates/<id>/play` | admin | Prepara la missione (stato *pronta*) e pusha ai destinatari; body opzionale `{"team_a_id", "team_b_id", "observer_team_ids"}` (id della tabella groups di OTS) |
 | `GET /matches` | admin | Partite (pronte, in corso e storico) |
 | `POST /matches/<id>/start` | admin | 🚦 Luce verde: annuncio + timer del server (chiusura automatica) |
 | `POST /matches/<id>/event` | admin | Evento arbitro (`{"event": "bomb_planted\|bomb_defused\|bomb_exploded"}`) |
