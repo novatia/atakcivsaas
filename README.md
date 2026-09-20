@@ -48,13 +48,16 @@ ots/
 ### Plugin
 
 - **[OTS-MilSim-Companion-Plugin](ots/plugins/OTS-MilSim-Companion-Plugin/README.md)** —
-  MilSim Soft-Air Companion (ex OTS-EventCalendar-Plugin): calendario eventi (sede
-  dall'anagrafica campi da gioco, inizio/fine, descrizione), import da Google Calendar (ICS)
-  o CSV, RSVP utenti, conferma presenze sul campo con assegnazione punti, classifica e gradi
-  militari con badge, replay giocata su mappa; più le **modalità di gioco** (Capture the
-  Flag, Bomb Defusal, Team Deathmatch): template di missione disegnati su mappa dal browser
-  (spawn point, bandiere, bomb site, aree) e **▶ Play** che crea la partita pushando marker,
-  aree e data package a tutti gli EUD collegati.
+  MilSim Soft-Air Companion (unifica gli ex OTS-EventCalendar-Plugin, OTS-GameMode-Plugin
+  e OTS-SkyFi-Plugin): calendario eventi (sede dall'anagrafica campi da gioco, inizio/fine,
+  descrizione), import da Google Calendar (ICS) o CSV, RSVP utenti, conferma presenze sul
+  campo con assegnazione punti, classifica e gradi militari con badge, replay giocata su
+  mappa; le **modalità di gioco** (Capture the Flag, Bomb Defusal, Team Deathmatch,
+  Dominio): template di missione disegnati su mappa dal browser (spawn point, bandiere,
+  bomb site, punti di dominio, aree) e **▶ Play** che crea la partita pushando marker,
+  aree e data package a tutti gli EUD collegati; **SkyFi** (ordini satellitari, download
+  deliverable via proxy, data package ATAK, asset nelle missioni Data Sync), gestione
+  contenuti delle **missioni Data Sync** e semaforo dello stato **mappe PCN**.
 
 ### Troubleshooting
 

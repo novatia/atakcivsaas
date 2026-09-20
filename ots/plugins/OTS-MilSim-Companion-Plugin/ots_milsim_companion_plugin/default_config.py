@@ -24,6 +24,9 @@ class DefaultConfig:
     # Hostname/IP che gli EUD usano per scaricare i data package annunciati al Play
     # (senderUrl del fileshare). Vuoto = host con cui l'admin sta aprendo la web UI.
     OTS_EVENTCALENDAR_GM_SERVER_ADDRESS = ""
+    # API key SkyFi (app.skyfi.com → Profile → API Key): stessa chiave del vecchio
+    # OTS-SkyFi-Plugin, così i config.yml esistenti continuano a funzionare
+    OTS_SKYFI_PLUGIN_API_KEY = ""
 
     @staticmethod
     def validate(config: dict) -> dict:
@@ -42,7 +45,7 @@ class DefaultConfig:
                         ZoneInfo(str(value))
                     except BaseException:
                         return {"success": False, "error": f"{value} is not a valid IANA timezone"}
-                if key in ("OTS_EVENTCALENDAR_GM_CALLSIGN", "OTS_EVENTCALENDAR_GM_SERVER_ADDRESS") and not isinstance(value, str):
+                if key in ("OTS_EVENTCALENDAR_GM_CALLSIGN", "OTS_EVENTCALENDAR_GM_SERVER_ADDRESS", "OTS_SKYFI_PLUGIN_API_KEY") and not isinstance(value, str):
                     return {"success": False, "error": f"{key} should be a string"}
 
             return {"success": True, "error": ""}

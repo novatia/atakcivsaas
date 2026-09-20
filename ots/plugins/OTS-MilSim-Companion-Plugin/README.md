@@ -2,14 +2,15 @@
 
 **MilSim Soft-Air Companion** per **OpenTAKServer** (>= 1.7): un unico plugin che
 unisce il calendario eventi con presenze/punteggi/gradi (ex OTS-EventCalendar-Plugin,
-fino alla 2.3.0) e le **modalità di gioco** con template di missione e Play
-(ex OTS-GameMode-Plugin). Usa il login e gli utenti di OpenTAKServer.
+fino alla 2.3.0), le **modalità di gioco** con template di missione e Play
+(ex OTS-GameMode-Plugin) e l'integrazione **SkyFi + missioni Data Sync + stato
+mappe PCN** (ex OTS-SkyFi-Plugin). Usa il login e gli utenti di OpenTAKServer.
 
-> **Migrazione dalla 2.x**: il pacchetto si chiamava `OTS-EventCalendar-Plugin`.
-> Le tabelle DB (`ec_*`) e le chiavi di `config.yml` (`OTS_EVENTCALENDAR_*`) sono
-> invariate: i dati sopravvivono. Lo script di install disinstalla da solo i
-> vecchi pacchetti. Cambia l'URL della UI (vedi sotto): i link `#event-<id>`
-> condivisi in precedenza vanno rigenerati.
+> **Migrazione**: le tabelle DB (`ec_*`, `gm_*`) e le chiavi di `config.yml`
+> (`OTS_EVENTCALENDAR_*`, `OTS_SKYFI_PLUGIN_API_KEY`) sono invariate: dati e
+> configurazione sopravvivono. Lo script di install disinstalla da solo i
+> vecchi pacchetti (EventCalendar, GameMode, SkyFi). Cambia l'URL della UI
+> (vedi sotto): i link `#event-<id>` condivisi in precedenza vanno rigenerati.
 
 ## Funzionalità
 
@@ -78,6 +79,11 @@ ogni modalità dichiara i tipi di marker e di area richiesti (con min/max).
 | 🚩 **Capture the Flag** | Spawn A, Spawn B, 1–2 Bandiere | Perimetro campo (opz.) |
 | 💣 **Bomb Defusal** | Spawn A, Spawn B, Bomb site A, Bomb site B | **Area valida ordigni**, perimetro (opz.) |
 | ⚔️ **Team Deathmatch** | Spawn A, Spawn B | Perimetro campo (opz.) |
+| 🏰 **Dominio** | Spawn A, Spawn B, 2–8 Punti di dominio | **Un'area di validità per ogni punto** (verificato al Play), perimetro (opz.) |
+
+In Dominio la meccanica di cattura dei punti da parte delle squadre non è
+ancora implementata: per ora il Play pusha punti e aree, la presa è gestita
+a voce/arbitro (vedi Roadmap, orchestratore in campo).
 
 Resa su ATAK/WinTAK (simbologia nativa dove i colori coincidono):
 
@@ -87,7 +93,8 @@ Resa su ATAK/WinTAK (simbologia nativa dove i colori coincidono):
 | Spawn Team B | blu | quadrato (amico) | `a-f-G` |
 | Bandiera | giallo | simbolo sconosciuto | `a-u-G` |
 | Bomb site A/B | viola | spot marker colorato | `b-m-p-s-m` |
-| Aree | viola / verde | poligono colorato | `u-d-f` |
+| Punto di dominio | arancione | spot marker colorato | `b-m-p-s-m` |
+| Aree | viola / arancione / verde | poligono colorato | `u-d-f` |
 
 ### Template di missione ed editor su mappa
 
@@ -121,6 +128,41 @@ template al momento del Play).
 
 Il broadcast dei CoT usa lo stesso meccanismo dell'endpoint `DELETE /api/markers`
 di OTS (exchange RabbitMQ `cot_parser` + `firehose`).
+
+### SkyFi: ordini e asset satellitari (tab SkyFi)
+
+Ereditato dal fork OTS-SkyFi-Plugin (upstream brian7704, che non distribuisce la UI):
+
+- lista ordini SkyFi **paginata** con ricerca, **anteprime**, stato delivery e costo;
+- **download dei deliverable** (image / payload / COG / view-ready) via **proxy
+  backend**: l'API key SkyFi non arriva mai al browser;
+- **📦 Data package ATAK**: crea un data package OTS con i tile WMTS dell'ordine
+  (layer SkyFi + Google Hybrid), scaricabile dagli EUD;
+- **🎯 Missione**: scarica il deliverable sul server e lo aggiunge ai contenuti di
+  una missione **Data Sync**, replicando il flusso di `/Marti/sync/upload` +
+  `PUT /Marti/api/missions/<name>/contents` (dedup per sha256, MissionChange
+  ADD_CONTENT, CoT `t-x-m-c` sull'exchange `missions`): gli EUD iscritti vengono
+  notificati e scaricano il file;
+- configurazione **API key** nel tab stesso (si genera su app.skyfi.com → Profile
+  → API Key, account SkyFi Pro; salvata in `config.yml`).
+
+### Missioni Data Sync (tab Missioni)
+
+La web UI di OTS non mostra i contenuti (dataset) delle missioni Data Sync:
+questo tab li elenca per missione — con anteprima delle immagini, dimensione,
+autore e data — e permette **download dal browser** e **rimozione** (replica di
+`DELETE /Marti/api/missions/<name>/contents`: si toglie solo il link
+contenuto↔missione con MissionChange REMOVE_CONTENT e notifica agli EUD, il
+file resta su disco per lo storico).
+
+In cima al tab c'è lo **stato mappe PCN** (Geoportale Italia): il pulsante
+«Verifica adesso» chiede una vera tile `GetMap` (WMS 1.1.1, EPSG:3857) a
+ciascuno dei 5 servizi usati nei data package del gruppo (IGM 25/100/250k,
+ortofoto 2006/2012), perché il catalogo del PCN risponde anche quando la
+generazione delle immagini è rotta: quando il servizio è giù, su ATAK/WinTAK
+le mappe restano verdi/vuote senza alcun errore, e il semaforo permette di
+distinguere subito il guasto del Ministero da un problema nostro.
+Nessun automatismo: il check parte solo dal pulsante.
 
 ## Installazione
 
@@ -173,6 +215,7 @@ restano invariate per compatibilità con i config esistenti.
 | `OTS_EVENTCALENDAR_TIMEZONE` | `Europe/Rome` | Fuso orario degli orari del calendario (per il replay: i punti CoT sono in UTC) |
 | `OTS_EVENTCALENDAR_GM_CALLSIGN` | `Game Master` | Firma di marker, chat e fileshare al Play |
 | `OTS_EVENTCALENDAR_GM_SERVER_ADDRESS` | `""` | Hostname/IP per i download dei data package (vuoto = host della web UI) |
+| `OTS_SKYFI_PLUGIN_API_KEY` | `""` | API key SkyFi (stessa chiave del vecchio OTS-SkyFi-Plugin) |
 
 ## API (prefisso `/api/plugins/ots_milsim_companion_plugin`)
 
@@ -201,6 +244,15 @@ restano invariate per compatibilità con i config esistenti.
 | `GET /matches` | admin | Partite (in corso e storico) |
 | `POST /matches/<id>/republish` | admin | Ripubblica marker/aree (stessi UID) |
 | `POST /matches/<id>/end` | admin | Termina: cancella i marker dagli EUD |
+| `GET /orders` · `GET /orders/<uid>` | admin | Ordini SkyFi (paginati, `?search=`) · dettaglio |
+| `GET /orders/<uid>/image` | admin | Anteprima ordine (data-URI, via proxy) |
+| `GET /orders/<uid>/download/<tipo>` | admin | Proxy del deliverable (image/payload/cog/view-ready) |
+| `POST /orders/<uid>/data_package` | admin | Data package ATAK con i tile WMTS dell'ordine |
+| `POST /orders/<uid>/mission` | admin | `{"mission", "deliverable_type"}`: asset nella missione Data Sync |
+| `GET /missions` · `GET /missions/<nome>/contents` | admin | Missioni Data Sync · contenuti condivisi |
+| `GET /missions/<nome>/contents/<hash>/download` · `/preview` | admin | Download / anteprima immagine di un contenuto |
+| `DELETE /missions/<nome>/contents/<hash>` | admin | Rimuove il contenuto dalla missione (notifica EUD) |
+| `GET /pcn/status` | admin | Semaforo WMS PCN (una GetMap di prova per servizio) |
 
 I badge caricati vengono salvati in
 `~/ots/plugins/ots_milsim_companion_plugin/badges/` (inclusi nel backup di `update-ots.sh`).
@@ -211,6 +263,9 @@ I badge caricati vengono salvati in
   interrogabili via API (`GET /matches`), un dispositivo in campo potrà
   leggere lo stato della partita e comparire come marker/entità attiva sulla
   mappa (es. l'ordigno stesso che trasmette il proprio stato).
+- **Cattura dei punti di dominio**: registrare quale squadra controlla ogni
+  punto (dall'orchestratore in campo o manualmente dal Game Master) e
+  aggiornarne il colore sugli EUD.
 - Punteggi di fine partita agganciati all'anagrafica giocatori.
 
 ## Esempio CSV

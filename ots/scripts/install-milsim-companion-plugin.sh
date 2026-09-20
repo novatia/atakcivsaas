@@ -2,8 +2,9 @@
 #
 # install-milsim-companion-plugin.sh — Installa o aggiorna OTS-MilSim-Companion-Plugin
 # nel venv di OpenTAKServer a partire da questo repo. Disinstalla da solo i
-# pacchetti precedenti (OTS-EventCalendar-Plugin, OTS-GameMode-Plugin): i dati
-# restano perché le tabelle DB non cambiano nome.
+# pacchetti precedenti (OTS-EventCalendar-Plugin, OTS-GameMode-Plugin,
+# OTS-SkyFi-Plugin, ora tutti fusi qui): i dati restano perché le tabelle DB
+# non cambiano nome e le chiavi di config.yml restano le stesse.
 #
 # Uso (da root sul server, dentro il clone del repo):
 #   ./install-milsim-companion-plugin.sh            # (ri)installa il plugin + restart + verifica
@@ -22,7 +23,7 @@ OTS_DATA="${OTS_DATA:-/home/${OTS_USER}/ots}"
 OTS_SERVICE="${OTS_SERVICE:-opentakserver}"
 
 PLUGIN_DISTRO="OTS-MilSim-Companion-Plugin"
-LEGACY_DISTROS=("OTS-EventCalendar-Plugin" "OTS-GameMode-Plugin")
+LEGACY_DISTROS=("OTS-EventCalendar-Plugin" "OTS-GameMode-Plugin" "OTS-SkyFi-Plugin")
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="${PLUGIN_DIR:-${SCRIPT_DIR}/../plugins/${PLUGIN_DISTRO}}"
 

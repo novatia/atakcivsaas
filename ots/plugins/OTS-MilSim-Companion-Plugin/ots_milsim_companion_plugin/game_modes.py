@@ -61,6 +61,15 @@ MARKER_TYPES = {
         "callsign": "BOMB B",
         "spot": True,
     },
+    "dom_point": {
+        "label": "Punto di dominio",
+        "color": "#FB8C00",           # arancione (i colori affiliazione sono già presi)
+        "shape": "circle",
+        "cot_type": "b-m-p-s-m",      # spot marker colorato, come i bomb site
+        "argb": argb("FFFB8C00"),
+        "callsign": "DOM",
+        "spot": True,
+    },
 }
 
 ZONE_TYPES = {
@@ -69,6 +78,12 @@ ZONE_TYPES = {
         "color": "#9C27B0",
         "stroke_argb": argb("FF9C27B0"),
         "fill_argb": argb("409C27B0"),   # stesso colore, alpha 25%
+    },
+    "dom_area": {
+        "label": "Area punto di dominio",
+        "color": "#FB8C00",
+        "stroke_argb": argb("FFFB8C00"),
+        "fill_argb": argb("40FB8C00"),
     },
     "field_boundary": {
         "label": "Perimetro campo",
@@ -118,6 +133,22 @@ GAME_MODES = {
         "zones": {
             "field_boundary": {"min": 0, "max": 1},
         },
+    },
+    "dom": {
+        "name": "Dominio",
+        "icon": "🏰",
+        "description": "Due squadre si contendono N punti di dominio (minimo 2), ognuno con la propria area di validità: il punto è preso quando la squadra lo controlla (meccanica di cattura in arrivo).",
+        "markers": {
+            "spawn_a": {"min": 1, "max": 4},
+            "spawn_b": {"min": 1, "max": 4},
+            "dom_point": {"min": 2, "max": 8},
+        },
+        "zones": {
+            "dom_area": {"min": 2, "max": 8},
+            "field_boundary": {"min": 0, "max": 1},
+        },
+        # Al Play il numero di aree deve corrispondere al numero di punti
+        "paired": {"dom_point": "dom_area"},
     },
 }
 
@@ -182,5 +213,16 @@ def validate_template(mode_key: str, markers: list, zones: list, for_play: bool 
             errors.append(f"Troppe aree '{ZONE_TYPES[ztype]['label']}': {count} (max {limits['max']})")
         if for_play and count < limits["min"]:
             errors.append(f"Manca l'area '{ZONE_TYPES[ztype]['label']}' (minimo {limits['min']})")
+
+    # Vincoli di accoppiamento (es. Dominio: un'area di validità per ogni punto)
+    if for_play:
+        for mtype, ztype in (mode.get("paired") or {}).items():
+            m_count = marker_counts.get(mtype, 0)
+            z_count = zone_counts.get(ztype, 0)
+            if m_count != z_count:
+                errors.append(
+                    f"Servono tante aree '{ZONE_TYPES[ztype]['label']}' quanti marker "
+                    f"'{MARKER_TYPES[mtype]['label']}': ora {z_count} aree per {m_count} marker"
+                )
 
     return errors

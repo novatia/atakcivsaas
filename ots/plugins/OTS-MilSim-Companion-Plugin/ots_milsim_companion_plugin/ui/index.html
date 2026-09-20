@@ -123,6 +123,30 @@
   .mode-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
   .mode-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
   .mode-card ul { margin: 6px 0 0; padding-left: 18px; line-height: 1.7; }
+  /* ---- SkyFi (ordini) e Missioni Data Sync ---- */
+  .orders-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+  .order-card { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
+  .order-preview { background: var(--tab); aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; overflow: hidden; }
+  .order-preview img { width: 100%; height: 100%; object-fit: cover; }
+  .order-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+  .order-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .order-head strong { font-size: 14px; }
+  .order-meta { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .order-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 8px; }
+  .pager { display: flex; align-items: center; gap: 10px; justify-content: center; margin-top: 16px; }
+  img.thumb { width: 72px; height: 54px; object-fit: cover; border-radius: 4px;
+    border: 1px solid var(--border); cursor: zoom-in; display: block; background: #0003; }
+  .filename { word-break: break-all; font-weight: 600; }
+  .kw { display: inline-block; background: var(--tab); border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px; font-size: 11px; color: var(--muted); margin-right: 4px; }
+  .pcn-status { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px;
+    margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+  #modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
+  #modal-backdrop.hidden { display: none; }
+  .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; width: min(420px, 92vw); display: flex; flex-direction: column; gap: 12px; }
+  .modal h2 { margin: 0; }
+  .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  .modal select { width: 100%; }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 </style>
 <script>
   // Applica subito il tema salvato per evitare il flash chiaro/scuro al caricamento
@@ -141,6 +165,25 @@
 <nav id="tabs"></nav>
 <main><section class="panel" id="content">Caricamento…</section></main>
 <div id="toast"></div>
+<div id="modal-backdrop" class="hidden" onclick="closeMissionModal()">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h2>🎯 Assegna a missione</h2>
+    <div id="modal-order" class="muted"></div>
+    <label>Missione (Data Sync)
+      <select id="mission-select"></select>
+    </label>
+    <label>Asset da inviare
+      <select id="deliverable-select"></select>
+    </label>
+    <p class="muted" style="margin:0">Il file viene scaricato da SkyFi sul server e aggiunto ai contenuti
+      della missione: gli EUD iscritti ricevono la notifica e possono scaricarlo. Per file grandi
+      (payload/COG) il trasferimento può richiedere qualche minuto.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeMissionModal()">Annulla</button>
+      <button class="btn primary" id="assign-btn" onclick="assignToMission()">Assegna</button>
+    </div>
+  </div>
+</div>
 
 <script>
 "use strict";
@@ -212,6 +255,8 @@ const TABS = [
   { id: "gm_templates", label: "Template missioni", admin: true, render: () => { clearEventHash(); renderTemplates(); } },
   { id: "gm_matches", label: "Partite", admin: true, render: () => { clearEventHash(); renderMatches(); } },
   { id: "gm_modes", label: "Modalità di gioco", admin: true, render: () => { clearEventHash(); renderModes(); } },
+  { id: "skyfi", label: "SkyFi", admin: true, render: () => { clearEventHash(); renderOrders(); } },
+  { id: "missions", label: "Missioni", admin: true, render: () => { clearEventHash(); renderMissions(); } },
   { id: "leaderboard", label: "Classifica", admin: false, render: () => { clearEventHash(); renderLeaderboard(); } },
   { id: "attendance", label: "Presenze", admin: true, render: renderAttendance },
   { id: "players", label: "Giocatori", admin: true, render: renderPlayers },
@@ -1676,6 +1721,433 @@ async function saveGmConfig() {
     } });
     toast("Configurazione salvata.");
   } catch (e) { toast("Errore salvataggio: " + e.message, false); }
+}
+
+/* ================= SkyFi: ordini, deliverable, missioni Data Sync, stato PCN ================= */
+
+function fmtCost(cents) {
+  if (cents == null) return "";
+  return (cents / 100).toLocaleString("it-IT", { style: "currency", currency: "USD" });
+}
+
+/* ---- Tab SkyFi (ordini) ---- */
+let PAGE = 0, PAGE_SIZE = 9, SEARCH = "", TOTAL = 0;
+let ORDERS_BY_UID = {};
+
+// La delivery passa per vari stati SkyFi: verde = consegnato, rosso = fallito
+function statusPill(status) {
+  const s = (status || "").toUpperCase();
+  let cls = "neutral";
+  if (s === "DELIVERY_COMPLETED") cls = "ok";
+  else if (s.endsWith("_FAILED")) cls = "err";
+  else if (s.includes("PENDING") || s === "CREATED" || s === "STARTED") cls = "warn";
+  return `<span class="pill ${cls}">${esc(s.replaceAll("_", " ") || "?")}</span>`;
+}
+
+function deliverables(o) {
+  const list = [];
+  if (o.downloadImageUrl) list.push({ type: "image", label: "Immagine" });
+  if (o.downloadPayloadUrl) list.push({ type: "payload", label: "Payload", size: o.payloadSize });
+  if (o.downloadCogUrl) list.push({ type: "cog", label: "COG", size: o.cogSize });
+  if (o.downloadViewReadyCogUrl) list.push({ type: "view-ready", label: "View-ready", size: o.viewReadyCogSize });
+  return list;
+}
+
+async function renderOrders() {
+  const el = document.getElementById("content");
+  let cfg = {};
+  try { cfg = await api("/config"); } catch (e) { /* la config è solo per il form sotto */ }
+  el.innerHTML = `
+    <form class="inline" onsubmit="event.preventDefault(); PAGE = 0; loadOrders();">
+      <label>Cerca (località, codice, stato…)
+        <input id="search" value="${esc(SEARCH)}" placeholder="es. Milano">
+      </label>
+      <label>Per pagina
+        <select id="page-size" onchange="PAGE_SIZE = +this.value; PAGE = 0; loadOrders();">
+          ${[9, 18, 50].map(n => `<option ${n === PAGE_SIZE ? "selected" : ""}>${n}</option>`).join("")}
+        </select>
+      </label>
+      <button class="btn primary">Cerca</button>
+      <button class="btn" type="button" onclick="loadOrders()">↻ Aggiorna</button>
+      <span id="orders-total" class="muted"></span>
+    </form>
+    <div id="orders-box">Caricamento ordini…</div>
+    <details style="margin-top:18px">
+      <summary style="cursor:pointer"><strong>⚙️ Configurazione SkyFi (API key)</strong></summary>
+      <p class="muted">L'API key si genera su <b>app.skyfi.com</b> → Profile → API Key (richiede un account SkyFi Pro).
+         Viene salvata in <code>config.yml</code> sul server e non lascia mai il backend.</p>
+      <form class="inline" onsubmit="event.preventDefault(); saveSkyfiConfig();">
+        <label>API key
+          <input id="skyfi-api-key" type="password" size="42" value="${esc(cfg.OTS_SKYFI_PLUGIN_API_KEY || "")}" autocomplete="off">
+        </label>
+        <button class="btn" type="button" onclick="const k = document.getElementById('skyfi-api-key'); k.type = k.type === 'password' ? 'text' : 'password';">👁</button>
+        <button class="btn primary">Salva</button>
+        <button class="btn" type="button" onclick="testSkyfiConnection(this)">Prova connessione</button>
+      </form>
+      <p id="skyfi-test-result" class="muted"></p>
+    </details>`;
+  loadOrders();
+}
+
+async function loadOrders() {
+  const box = document.getElementById("orders-box");
+  const searchEl = document.getElementById("search");
+  if (searchEl) SEARCH = searchEl.value.trim();
+  box.textContent = "Caricamento ordini…";
+  let data;
+  try {
+    data = await api(`/orders?page=${PAGE}&page_size=${PAGE_SIZE}${SEARCH ? "&search=" + encodeURIComponent(SEARCH) : ""}`);
+  } catch (e) {
+    box.innerHTML = `<p>⚠️ ${esc(e.message)}</p><p class="muted">Se non hai ancora inserito l'API key SkyFi, aprila qui sotto in <b>Configurazione SkyFi</b>.</p>`;
+    return;
+  }
+
+  TOTAL = data.total ?? 0;
+  const totalEl = document.getElementById("orders-total");
+  if (totalEl) totalEl.textContent = TOTAL ? `${TOTAL} ordini` : "";
+  const orders = data.orders || [];
+  if (!orders.length) {
+    box.innerHTML = "<p>Nessun ordine trovato.</p>";
+    return;
+  }
+
+  ORDERS_BY_UID = {};
+  orders.forEach(o => ORDERS_BY_UID[o.id || o.orderId] = o);
+
+  const pages = Math.max(1, Math.ceil(TOTAL / PAGE_SIZE));
+  box.innerHTML = `
+    <div class="orders-grid">${orders.map(orderCard).join("")}</div>
+    <div class="pager">
+      <button class="btn" onclick="PAGE--; loadOrders();" ${PAGE <= 0 ? "disabled" : ""}>← Precedente</button>
+      <span class="muted">pagina ${PAGE + 1} di ${pages}</span>
+      <button class="btn" onclick="PAGE++; loadOrders();" ${PAGE >= pages - 1 ? "disabled" : ""}>Successiva →</button>
+    </div>`;
+  loadPreviews(orders);
+}
+
+function orderCard(o) {
+  const uid = o.id || o.orderId;
+  const title = o.orderLabel || o.label || o.orderCode;
+  const dls = deliverables(o);
+  const meta = [
+    [o.geocodeLocation, o.resolution].filter(Boolean).join(" · "),
+    [o.orderType, o.productType].filter(Boolean).join(" · "),
+    [o.aoiSqkm ? o.aoiSqkm.toFixed(1) + " km²" : null, fmtCost(o.orderCost), fmtDT(o.createdAt)].filter(Boolean).join(" · "),
+  ].filter(Boolean).map(esc).join("<br>");
+
+  return `
+  <div class="order-card">
+    <div class="order-preview" id="preview-${esc(uid)}">anteprima…</div>
+    <div class="order-body">
+      <div class="order-head">
+        <strong>${esc(title)}</strong>
+        <span class="muted">${esc(o.orderCode)}</span>
+        ${statusPill(o.status)}
+      </div>
+      <div class="order-meta">${meta}</div>
+      <div class="order-actions">
+        ${dls.map(d => `<button class="btn" onclick="downloadDeliverable('${esc(uid)}', '${d.type}')"
+            title="Scarica il deliverable ${d.label}">⬇ ${d.label}${d.size ? " (" + fmtBytes(d.size) + ")" : ""}</button>`).join("")}
+        ${o.tilesUrl ? `<button class="btn primary" onclick="skyfiDataPackage(this, '${esc(uid)}')"
+            title="Crea un data package con i tile per ATAK/EUD">📦 Data package ATAK</button>` : ""}
+        ${dls.length ? `<button class="btn" onclick="openMissionModal('${esc(uid)}')"
+            title="Aggiunge un asset ai contenuti di una missione Data Sync">🎯 Missione</button>` : ""}
+        ${!dls.length && !o.tilesUrl ? '<span class="muted">nessun asset scaricabile (delivery non completata)</span>' : ""}
+      </div>
+    </div>
+  </div>`;
+}
+
+// Le anteprime passano dal backend (CORS) come data-URI: le carico in sequenza
+// per non aprire troppe richieste verso SkyFi in parallelo
+async function loadPreviews(orders) {
+  for (const o of orders) {
+    const uid = o.id || o.orderId;
+    const el = document.getElementById(`preview-${uid}`);
+    if (!el) continue; // cambio pagina nel frattempo
+    try {
+      const res = await fetch(`${API}/orders/${encodeURIComponent(uid)}/image`);
+      if (!res.ok) throw new Error(res.status);
+      const dataUri = await res.text();
+      const current = document.getElementById(`preview-${uid}`);
+      if (current) current.innerHTML = `<img src="${dataUri}" alt="anteprima ${esc(o.orderCode)}">`;
+    } catch (e) {
+      const current = document.getElementById(`preview-${uid}`);
+      if (current) current.textContent = "anteprima non disponibile";
+    }
+  }
+}
+
+function downloadDeliverable(uid, type) {
+  toast("Download avviato: il file arriva dal proxy del server, può richiedere un po'…");
+  const a = document.createElement("a");
+  a.href = `${API}/orders/${encodeURIComponent(uid)}/download/${type}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function skyfiDataPackage(btn, uid) {
+  btn.disabled = true;
+  try {
+    const res = await api(`/orders/${encodeURIComponent(uid)}/data_package`, { method: "POST" });
+    toast(`Data package "${res.name}" creato: ora è tra i data package di OTS, scaricabile dagli EUD.`);
+  } catch (e) {
+    toast("Errore data package: " + e.message, false);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function saveSkyfiConfig() {
+  try {
+    await api("/config", { method: "POST", body: { OTS_SKYFI_PLUGIN_API_KEY: document.getElementById("skyfi-api-key").value.trim() } });
+    toast("Configurazione salvata.");
+  } catch (e) { toast("Errore salvataggio: " + e.message, false); }
+}
+
+async function testSkyfiConnection(btn) {
+  const out = document.getElementById("skyfi-test-result");
+  btn.disabled = true;
+  out.textContent = "Verifica in corso…";
+  try {
+    const data = await api("/orders?page=0&page_size=1");
+    out.textContent = `✅ Connessione OK: ${data.total ?? 0} ordini sull'account.`;
+  } catch (e) {
+    out.textContent = "❌ " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ---- Assegnazione a missione ---- */
+let MODAL_UID = null;
+
+async function openMissionModal(uid) {
+  const order = ORDERS_BY_UID[uid];
+  if (!order) return;
+  MODAL_UID = uid;
+
+  let missions;
+  try {
+    missions = await api("/missions");
+  } catch (e) {
+    return toast("Errore caricamento missioni: " + e.message, false);
+  }
+  if (!missions.length) {
+    return toast("Nessuna missione sul server: creane una dalla web UI di OTS o da ATAK (Data Sync).", false);
+  }
+
+  document.getElementById("modal-order").textContent =
+    `Ordine ${order.orderCode}${order.geocodeLocation ? " — " + order.geocodeLocation : ""}`;
+  document.getElementById("mission-select").innerHTML = missions.map(m =>
+    `<option value="${esc(m.name)}">${esc(m.name)}${m.password_protected ? " 🔒" : ""}${m.description ? " — " + esc(m.description) : ""}</option>`
+  ).join("");
+
+  const dls = deliverables(order);
+  document.getElementById("deliverable-select").innerHTML = dls.map(d =>
+    `<option value="${d.type}" ${d.type === "payload" ? "selected" : ""}>${d.label}${d.size ? " (" + fmtBytes(d.size) + ")" : ""}</option>`
+  ).join("");
+
+  const btn = document.getElementById("assign-btn");
+  btn.disabled = false;
+  btn.textContent = "Assegna";
+  document.getElementById("modal-backdrop").classList.remove("hidden");
+}
+
+function closeMissionModal() {
+  document.getElementById("modal-backdrop").classList.add("hidden");
+  MODAL_UID = null;
+}
+
+async function assignToMission() {
+  if (!MODAL_UID) return;
+  const btn = document.getElementById("assign-btn");
+  btn.disabled = true;
+  btn.textContent = "Trasferimento…";
+  try {
+    const res = await api(`/orders/${encodeURIComponent(MODAL_UID)}/mission`, {
+      method: "POST",
+      body: {
+        mission: document.getElementById("mission-select").value,
+        deliverable_type: document.getElementById("deliverable-select").value,
+      },
+    });
+    if (res.already_assigned) {
+      toast(`"${res.filename}" era già nei contenuti della missione "${res.mission}".`);
+    } else {
+      toast(`"${res.filename}" aggiunto alla missione "${res.mission}": gli EUD iscritti sono stati notificati.`);
+    }
+    closeMissionModal();
+  } catch (e) {
+    toast("Errore assegnazione: " + e.message, false);
+    btn.disabled = false;
+    btn.textContent = "Assegna";
+  }
+}
+
+/* ---- Stato server mappe PCN ---- */
+// Il WMS del Geoportale Italia (mappe IGM/ortofoto dei data package del
+// gruppo) ogni tanto è giù lato Ministero: su ATAK/WinTAK la mappa resta
+// verde/vuota senza errori. Il check del backend chiede una tile vera per
+// servizio, quindi l'esito riflette quello che vedrebbero gli EUD.
+// Nessun automatismo: il check (5 richieste al PCN) parte SOLO dal pulsante.
+const PCN_STATUS_LABELS = { online: ["ok", "🟢 online"], degradato: ["warn", "🟠 degradato"], offline: ["err", "🔴 offline"] };
+
+function renderPcnStatusIdle() {
+  const box = document.getElementById("pcn-status");
+  if (!box) return;
+  box.innerHTML = `🗺️ Mappe italiane (PCN Geoportale):
+    <button class="btn" type="button" onclick="loadPcnStatus()"
+      title="Chiede una tile di prova a ciascuno dei 5 servizi WMS del PCN (IGM 25/100/250k, ortofoto)">Verifica adesso</button>
+    <span class="muted">Se su ATAK/WinTAK le mappe PCN restano verdi/vuote, verifica da qui se il server del Ministero è giù.</span>`;
+}
+
+async function loadPcnStatus() {
+  const box = document.getElementById("pcn-status");
+  if (!box) return;
+  box.innerHTML = '🗺️ Mappe italiane (PCN Geoportale): <span class="muted">verifica in corso…</span>';
+  let st;
+  try {
+    st = await api("/pcn/status");
+  } catch (e) {
+    if (!document.getElementById("pcn-status")) return; // tab cambiato nel frattempo
+    box.innerHTML = `🗺️ Mappe italiane (PCN Geoportale): <span class="pill neutral">check fallito</span>
+      <span class="muted">${esc(e.message)}</span>
+      <button class="btn" type="button" onclick="loadPcnStatus()" title="Riprova adesso">↻</button>`;
+    return;
+  }
+  if (!document.getElementById("pcn-status")) return; // tab cambiato nel frattempo
+  const [cls, label] = PCN_STATUS_LABELS[st.status] || ["neutral", esc(st.status)];
+  box.innerHTML = `🗺️ Mappe italiane (PCN Geoportale):
+    <span class="pill ${cls}" title="Servizi che rispondono con tile vere: ${st.online} su ${st.total}">${label} ${st.online}/${st.total}</span>
+    ${st.services.map(s => `<span class="kw" title="${esc(s.detail)}">${s.status === "online" ? "🟢" : s.status === "errore" ? "🔴" : "⚪"} ${esc(s.name)}</span>`).join("")}
+    <button class="btn" type="button" onclick="loadPcnStatus()" title="Riprova adesso">↻</button>
+    <span class="muted" title="Ora del check">${fmtDT(st.checked_at)}</span>`;
+  if (st.status !== "online") {
+    box.innerHTML += '<span class="muted">Quando è giù, su ATAK/WinTAK le mappe PCN restano verdi/vuote: è un guasto del Ministero, non del nostro server.</span>';
+  }
+}
+
+/* ---- Tab Missioni: contenuti condivisi (Data Sync) ---- */
+// La web UI di OTS non mostra i contenuti (dataset) delle missioni Data Sync:
+// questo tab li elenca e permette download e rimozione, qualunque sia la
+// fonte del contenuto (plugin, ATAK, web UI).
+let MISSIONS = [];
+let CURRENT_MISSION = null;
+
+async function renderMissions() {
+  const content = document.getElementById("content");
+  content.innerHTML = '<div id="pcn-status" class="pcn-status"></div><div id="missions-area">Caricamento missioni…</div>';
+  renderPcnStatusIdle();
+  const el = document.getElementById("missions-area");
+  try {
+    MISSIONS = await api("/missions");
+  } catch (e) {
+    el.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
+    return;
+  }
+  if (!MISSIONS.length) {
+    el.innerHTML = "<p>Nessuna missione sul server: creane una dalla web UI di OTS o da ATAK (Data Sync).</p>";
+    return;
+  }
+  if (!CURRENT_MISSION || !MISSIONS.some(m => m.name === CURRENT_MISSION)) {
+    CURRENT_MISSION = MISSIONS[0].name;
+  }
+  el.innerHTML = `
+    <form class="inline" onsubmit="event.preventDefault();">
+      <label>Missione (Data Sync)
+        <select id="mission-view-select" onchange="CURRENT_MISSION = this.value; loadMissionContents();">
+          ${MISSIONS.map(m => `<option value="${esc(m.name)}" ${m.name === CURRENT_MISSION ? "selected" : ""}>
+            ${esc(m.name)}${m.password_protected ? " 🔒" : ""} (${m.content_count ?? 0} contenuti)</option>`).join("")}
+        </select>
+      </label>
+      <button class="btn" type="button" onclick="renderMissions()">↻ Aggiorna</button>
+    </form>
+    <div id="mission-desc" class="muted"></div>
+    <div id="mission-contents">Caricamento…</div>`;
+  loadMissionContents();
+}
+
+async function loadMissionContents() {
+  const mission = MISSIONS.find(m => m.name === CURRENT_MISSION);
+  const descEl = document.getElementById("mission-desc");
+  if (descEl) descEl.textContent = mission && mission.description ? mission.description : "";
+  const box = document.getElementById("mission-contents");
+  box.textContent = "Caricamento contenuti…";
+  let contents;
+  try {
+    contents = await api(`/missions/${encodeURIComponent(CURRENT_MISSION)}/contents`);
+  } catch (e) {
+    box.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
+    return;
+  }
+  if (!contents.length) {
+    box.innerHTML = '<p class="muted" style="margin-top:12px">Nessun dataset condiviso su questa missione.</p>';
+    return;
+  }
+  box.innerHTML = `
+    <table>
+      <thead><tr>
+        <th></th><th>Nome file</th><th>Tipo</th><th>Dimensione</th><th>Caricato da</th><th>Data</th><th></th>
+      </tr></thead>
+      <tbody>${contents.map(c => `
+        <tr>
+          <td>${isImageContent(c) && c.on_disk ? `
+            <img class="thumb" loading="lazy" alt="anteprima ${esc(c.filename)}"
+              title="Clic per aprire a dimensione piena"
+              src="${API}/missions/${encodeURIComponent(CURRENT_MISSION)}/contents/${encodeURIComponent(c.hash)}/preview"
+              onclick="window.open(this.src, '_blank')"
+              onerror="this.remove()">` : ""}
+          </td>
+          <td><span class="filename">${esc(c.filename)}</span><br>
+            ${(c.keywords || []).map(k => `<span class="kw">${esc(k)}</span>`).join("")}
+            ${c.on_disk ? "" : '<span class="pill err" title="Il file non è più presente su disco: il download fallirà">file mancante</span>'}
+          </td>
+          <td class="muted">${esc(c.mime_type || "")}</td>
+          <td>${fmtBytes(c.size)}</td>
+          <td>${esc(c.submitter || "")}</td>
+          <td>${fmtDT(c.submission_time)}</td>
+          <td style="white-space:nowrap; text-align:right">
+            <button class="btn" ${c.on_disk ? "" : "disabled"} title="Scarica il file sul tuo PC"
+              onclick="downloadMissionContent('${esc(c.hash)}')">⬇ Scarica</button>
+            <button class="btn" title="Rimuove il dataset dalla missione (gli EUD iscritti vengono notificati); il file resta sul server"
+              onclick="removeMissionContent('${esc(c.hash)}', '${esc(c.filename).replace(/'/g, "\\'")}', this)">🗑 Rimuovi</button>
+          </td>
+        </tr>`).join("")}
+      </tbody>
+    </table>
+    <p class="muted">La rimozione toglie il dataset dalla missione e notifica gli EUD iscritti con un
+      CoT di mission change, come farebbe ATAK; il file resta sul server e nello storico della missione.</p>`;
+}
+
+function isImageContent(c) {
+  return (c.mime_type || "").toLowerCase().startsWith("image/")
+    || /\.(jpe?g|png|gif|webp|bmp|avif)$/i.test(c.filename || "");
+}
+
+function downloadMissionContent(hash) {
+  toast("Download avviato…");
+  const a = document.createElement("a");
+  a.href = `${API}/missions/${encodeURIComponent(CURRENT_MISSION)}/contents/${encodeURIComponent(hash)}/download`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function removeMissionContent(hash, filename, btn) {
+  if (!confirm(`Rimuovere "${filename}" dalla missione "${CURRENT_MISSION}"?\n\nGli EUD iscritti riceveranno la notifica di rimozione. Il file resta sul server.`)) return;
+  btn.disabled = true;
+  try {
+    const res = await api(`/missions/${encodeURIComponent(CURRENT_MISSION)}/contents/${encodeURIComponent(hash)}`, { method: "DELETE" });
+    toast(`"${res.filename}" rimosso dalla missione "${res.mission}".`);
+    const mission = MISSIONS.find(m => m.name === CURRENT_MISSION);
+    if (mission && mission.content_count > 0) mission.content_count--;
+    loadMissionContents();
+  } catch (e) {
+    toast("Errore rimozione: " + e.message, false);
+    btn.disabled = false;
+  }
 }
 
 /* ---------------- Init ---------------- */

@@ -1,30 +1,44 @@
+import base64
 import csv
+import hashlib
 import io
 import json
+import mimetypes
 import os
 import pathlib
 import traceback
 import uuid
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from urllib.parse import unquote
 
+import requests
 import yaml
 from flask import (
     Blueprint,
     Flask,
+    Response,
     current_app as app,
     jsonify,
     request,
     send_from_directory,
+    stream_with_context,
 )
 from flask_security import auth_required, current_user, roles_accepted
+from sqlalchemy import insert
 
+from opentakserver.blueprints.marti_api.data_package_marti_api import create_data_package_zip
 from opentakserver.extensions import db, logger
 from opentakserver.models.DataPackage import DataPackage
+from opentakserver.models.Mission import Mission
+from opentakserver.models.MissionChange import MissionChange
+from opentakserver.models.MissionContent import MissionContent
+from opentakserver.models.MissionContentMission import MissionContentMission
 from opentakserver.models.user import User
 from opentakserver.plugins.Plugin import Plugin
 
-from . import cot
+from . import cot, skyfi
 from .default_config import DefaultConfig
 from .game_modes import GAME_MODES, MARKER_TYPES, serialize_registry, validate_template
 from .models import (
@@ -470,6 +484,9 @@ class MilSimCompanionPlugin(Plugin):
                         db.session.add(Rank(name=name, min_score=min_score))
                     db.session.commit()
                     logger.info("MilSim: seeded default ranks")
+
+            if not app.config.get("OTS_SKYFI_PLUGIN_API_KEY"):
+                logger.warning(f"{self.name}: API key SkyFi non configurata (OTS_SKYFI_PLUGIN_API_KEY): il tab SkyFi non funzionerà")
 
             logger.info(f"Successfully Loaded {self.name}")
         except BaseException as e:
@@ -2092,5 +2109,491 @@ class MilSimCompanionPlugin(Plugin):
         except BaseException as e:
             db.session.rollback()
             logger.error(f"MilSim: failed to end match {match_id}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # Ordini SkyFi (ereditato dal fork OTS-SkyFi-Plugin)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/orders", methods=["GET"])
+    def get_orders():
+        try:
+            params = {
+                "pageNumber": request.args.get("page", 0),
+                "pageSize": request.args.get("page_size", 9),
+            }
+            if request.args.get("search"):
+                params["search"] = request.args.get("search")
+
+            r = requests.get(f"{skyfi.BASE_URL}/orders", headers=skyfi.headers(), params=params, timeout=30)
+            if r.status_code == 200:
+                return jsonify(r.json())
+
+            logger.error(f"Failed to get orders: {r.text}")
+            return jsonify({"success": False, "error": "Controlla l'API key SkyFi e riprova"}), 400
+        except BaseException as e:
+            logger.error(f"Failed to get orders: {e}")
+            return jsonify({"success": False, "error": f"Failed to get orders: {str(e)}"}), 400
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/orders/<uid>", methods=["GET"])
+    def get_order(uid: str):
+        try:
+            r = requests.get(f"{skyfi.BASE_URL}/orders/{uid}", headers=skyfi.headers(), timeout=30)
+            if r.status_code == 200:
+                return jsonify(r.json())
+            return jsonify({"success": False, "error": f"Ordine non trovato: {r.status_code}"}), r.status_code
+        except BaseException as e:
+            logger.error(f"Failed to get order {uid}: {e}")
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/orders/<uid>/image")
+    def get_preview_image(uid: str):
+        r = requests.get(f"{skyfi.BASE_URL}/orders/{uid}/image", headers=skyfi.headers(), timeout=60)
+        if r.status_code == 200:
+            return f"data:image/png;base64,{base64.b64encode(r.content).decode('UTF-8')}", 200
+        return jsonify({"success": False, "error": f"Image download failed with status code {r.status_code}"}), r.status_code
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/orders/<uid>/download/<deliverable_type>", methods=["GET"])
+    def download_deliverable(uid: str, deliverable_type: str):
+        """Scarica un deliverable (image/payload/cog/view-ready) facendo da proxy
+        verso l'URL firmato di SkyFi, così l'API key non arriva mai al browser."""
+        if deliverable_type not in skyfi.DELIVERABLE_TYPES:
+            return jsonify({"success": False, "error": f"Tipo non valido: {deliverable_type}"}), 400
+
+        try:
+            order = skyfi.get_order(uid) or {}
+            r = requests.get(
+                f"{skyfi.BASE_URL}/orders/{uid}/{deliverable_type}",
+                headers=skyfi.headers(),
+                stream=True,
+                allow_redirects=True,
+                timeout=(10, 300),
+            )
+            if r.status_code != 200:
+                logger.error(f"Deliverable {deliverable_type} for {uid} failed: {r.status_code}")
+                return jsonify({"success": False, "error": f"Download fallito: HTTP {r.status_code}"}), r.status_code
+
+            filename = skyfi.deliverable_filename(r, order, uid, deliverable_type)
+
+            headers = {
+                "Content-Type": r.headers.get("Content-Type", "application/octet-stream"),
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            }
+            if r.headers.get("Content-Length"):
+                headers["Content-Length"] = r.headers["Content-Length"]
+
+            return Response(
+                stream_with_context(r.iter_content(chunk_size=64 * 1024)),
+                status=200,
+                headers=headers,
+            )
+        except BaseException as e:
+            logger.error(f"Failed to download {deliverable_type} for {uid}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/orders/<uid>/data_package", methods=["POST", "GET"])
+    def create_skyfi_data_package(uid: str):
+        try:
+            order = skyfi.get_order(uid)
+            if not order:
+                return jsonify({"success": False, "error": "Ordine non trovato su SkyFi"}), 404
+            if not order.get("tilesUrl"):
+                return jsonify({"success": False, "error": "L'ordine non ha ancora i tile WMTS (tilesUrl)"}), 400
+
+            location = order.get("geocodeLocation") or order.get("label") or ""
+            package_name = skyfi.safe_name(f"SkyFi-{order['orderCode']}_{location}")
+
+            multi_layer_tile_source = ET.Element("customMultiLayerMapSource")
+            multi_layer_tile_source.text = f"SkyFi-{order['orderCode']} {location}"
+
+            layers = ET.SubElement(multi_layer_tile_source, "layers")
+
+            google_tiles = ET.SubElement(layers, "customMapSource")
+            ET.SubElement(google_tiles, "name").text = "Google Hybrid"
+            ET.SubElement(google_tiles, "minZoom").text = "0"
+            ET.SubElement(google_tiles, "maxZoom").text = "22"
+            ET.SubElement(google_tiles, "tileType").text = "jpg"
+            ET.SubElement(google_tiles, "tileUpdate").text = "None"
+            ET.SubElement(google_tiles, "url").text = unquote("http://mt1.google.com/vt/lyrs=y&amp;x={$x}&amp;y={$y}&amp;z={$z}")
+
+            skyfi_tiles = ET.SubElement(layers, "customMapSource")
+            ET.SubElement(skyfi_tiles, "name").text = f"SkyFi-{order['orderCode']} {location}"
+            ET.SubElement(skyfi_tiles, "minZoom").text = "0"
+            ET.SubElement(skyfi_tiles, "maxZoom").text = "22"
+            ET.SubElement(skyfi_tiles, "tileType").text = "png"
+            ET.SubElement(skyfi_tiles, "tileUpdate").text = "None"
+            ET.SubElement(skyfi_tiles, "url").text = unquote(
+                order["tilesUrl"].replace("{z}", "{$z}").replace("{x}", "{$x}").replace("{y}", "{$y}")
+            )
+
+            xml_path = os.path.join(app.config.get("UPLOAD_FOLDER"), f"{package_name}.xml")
+            with open(xml_path, "w") as f:
+                f.write(ET.tostring(multi_layer_tile_source).decode("UTF-8"))
+
+            create_data_package_zip(xml_path)
+
+            return jsonify({"success": True, "name": package_name}), 200
+        except BaseException as e:
+            logger.error(f"Failed to create data package for {uid}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # Stato mappe PCN (Geoportale Italia)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/pcn/status", methods=["GET"])
+    def pcn_status():
+        """Verifica se il WMS del PCN (le mappe IGM/ortofoto dei data package
+        del gruppo) sta servendo davvero le tile: quando è giù, su ATAK/WinTAK
+        la mappa resta verde/vuota senza alcun messaggio d'errore."""
+        try:
+            with ThreadPoolExecutor(max_workers=len(skyfi.PCN_SERVICES)) as pool:
+                services = list(pool.map(skyfi.check_pcn_service, skyfi.PCN_SERVICES))
+            online = sum(1 for s in services if s["status"] == "online")
+            status = "online" if online == len(services) else ("offline" if online == 0 else "degradato")
+            return jsonify({
+                "status": status,
+                "online": online,
+                "total": len(services),
+                "services": services,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except BaseException as e:
+            logger.error(f"PCN status check failed: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # Missioni (Data Sync)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/missions", methods=["GET"])
+    def get_missions():
+        try:
+            missions = db.session.execute(db.session.query(Mission)).scalars().all()
+            content_counts = dict(
+                db.session.execute(
+                    db.session.query(MissionContentMission.mission_name, db.func.count())
+                    .group_by(MissionContentMission.mission_name)
+                ).all()
+            )
+            return jsonify(
+                [
+                    {
+                        "name": m.name,
+                        "guid": m.guid,
+                        "description": m.description,
+                        "password_protected": bool(m.password_protected),
+                        "content_count": content_counts.get(m.name, 0),
+                    }
+                    for m in missions
+                ]
+            )
+        except BaseException as e:
+            logger.error(f"Failed to get missions: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/missions/<mission_name>/contents", methods=["GET"])
+    def get_mission_contents(mission_name: str):
+        """Elenca i contenuti (dataset) condivisi su una missione Data Sync,
+        qualunque sia la fonte (questo plugin, ATAK, web UI): la web UI di OTS
+        non li mostra, quindi questa è la vista amministrativa per gestirli."""
+        try:
+            mission = db.session.execute(
+                db.session.query(Mission).filter_by(name=mission_name)
+            ).scalar()
+            if not mission:
+                return jsonify({"success": False, "error": f"Missione non trovata: {mission_name}"}), 404
+
+            contents = (
+                db.session.execute(
+                    db.session.query(MissionContent)
+                    .join(MissionContentMission, MissionContentMission.mission_content_id == MissionContent.id)
+                    .filter(MissionContentMission.mission_name == mission_name)
+                    .order_by(MissionContent.submission_time.desc())
+                )
+                .scalars()
+                .all()
+            )
+            return jsonify(
+                [
+                    {
+                        "filename": c.filename,
+                        "hash": c.hash,
+                        "uid": c.uid,
+                        "size": c.size,
+                        "mime_type": c.mime_type,
+                        "submitter": c.submitter,
+                        "submission_time": c.submission_time.isoformat() if c.submission_time else None,
+                        "keywords": c.keywords or [],
+                        "on_disk": skyfi.mission_content_location(c) is not None,
+                    }
+                    for c in contents
+                ]
+            )
+        except BaseException as e:
+            logger.error(f"Failed to get contents for mission {mission_name}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/missions/<mission_name>/contents/<file_hash>/download", methods=["GET"])
+    def download_mission_content(mission_name: str, file_hash: str):
+        """Scarica dal browser un contenuto missione, cercando il file negli
+        stessi posti di /Marti/sync/content (che però è raggiungibile solo
+        dagli EUD con certificato, non dalla web UI)."""
+        try:
+            content = db.session.execute(
+                db.session.query(MissionContent).filter_by(hash=file_hash)
+            ).scalar()
+            if not content:
+                return jsonify({"success": False, "error": f"Nessun contenuto con hash {file_hash}"}), 404
+
+            location = skyfi.mission_content_location(content)
+            if not location:
+                return jsonify({"success": False, "error": f"File non trovato sul server: {content.filename}"}), 404
+
+            folder, name = location
+            return send_from_directory(folder, name, as_attachment=True, download_name=content.filename)
+        except BaseException as e:
+            logger.error(f"Failed to download mission content {file_hash}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/missions/<mission_name>/contents/<file_hash>/preview", methods=["GET"])
+    def preview_mission_content(mission_name: str, file_hash: str):
+        """Serve inline (non come download) un contenuto immagine, per le
+        anteprime nella tabella del tab Missioni."""
+        try:
+            content = db.session.execute(
+                db.session.query(MissionContent).filter_by(hash=file_hash)
+            ).scalar()
+            if not content:
+                return jsonify({"success": False, "error": f"Nessun contenuto con hash {file_hash}"}), 404
+
+            mime = (content.mime_type or "").lower()
+            if not mime.startswith("image/"):
+                guessed, _ = mimetypes.guess_type(content.filename or "")
+                if guessed and guessed.startswith("image/"):
+                    mime = guessed
+                else:
+                    return jsonify({"success": False, "error": "Anteprima disponibile solo per le immagini"}), 415
+
+            location = skyfi.mission_content_location(content)
+            if not location:
+                return jsonify({"success": False, "error": f"File non trovato sul server: {content.filename}"}), 404
+
+            folder, name = location
+            return send_from_directory(folder, name, as_attachment=False, mimetype=mime, max_age=3600)
+        except BaseException as e:
+            logger.error(f"Failed to preview mission content {file_hash}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/missions/<mission_name>/contents/<file_hash>", methods=["DELETE"])
+    def remove_mission_content(mission_name: str, file_hash: str):
+        """Rimuove un contenuto dalla missione replicando il flusso di
+        DELETE /Marti/api/missions/<name>/contents: si cancella solo il link
+        contenuto↔missione e si registra un MissionChange REMOVE_CONTENT; il
+        file resta su disco e nel DB così lo storico della missione rimane
+        corretto e il contenuto può essere riassegnato."""
+        try:
+            mission = db.session.execute(
+                db.session.query(Mission).filter_by(name=mission_name)
+            ).scalar()
+            if not mission:
+                return jsonify({"success": False, "error": f"Missione non trovata: {mission_name}"}), 404
+
+            content = db.session.execute(
+                db.session.query(MissionContent).filter_by(hash=file_hash)
+            ).scalar()
+            if not content:
+                return jsonify({"success": False, "error": f"Nessun contenuto con hash {file_hash}"}), 404
+
+            mission_content_mission = db.session.execute(
+                db.session.query(MissionContentMission).filter_by(
+                    mission_name=mission_name, mission_content_id=content.id
+                )
+            ).scalar()
+            if not mission_content_mission:
+                return jsonify(
+                    {"success": False, "error": f"Il contenuto non è assegnato alla missione {mission_name}"}
+                ), 404
+
+            username = current_user.username if current_user else "MilSim-Plugin"
+
+            db.session.delete(mission_content_mission)
+
+            mission_change = MissionChange()
+            mission_change.isFederatedChange = False
+            mission_change.change_type = MissionChange.REMOVE_CONTENT
+            mission_change.content_uid = content.uid
+            mission_change.mission_name = mission_name
+            mission_change.timestamp = datetime.now(timezone.utc)
+            mission_change.creator_uid = username
+            mission_change.server_time = datetime.now(timezone.utc)
+            db.session.add(mission_change)
+            db.session.commit()
+
+            skyfi.notify_mission_change(mission_name, mission, mission_change, content)
+
+            logger.info(f"MilSim/SkyFi: {content.filename} rimosso dalla missione {mission_name} da {username}")
+            return jsonify({"success": True, "filename": content.filename, "mission": mission_name})
+        except BaseException as e:
+            logger.error(f"Failed to remove content {file_hash} from mission {mission_name}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/orders/<uid>/mission", methods=["POST"])
+    def assign_to_mission(uid: str):
+        """Scarica un deliverable da SkyFi e lo aggiunge come contenuto di una
+        missione Data Sync, replicando il flusso di /Marti/sync/upload +
+        PUT /Marti/api/missions/<name>/contents: gli EUD iscritti ricevono il
+        CoT di mission change e scaricano il file da /Marti/sync/content."""
+        body = request.json or {}
+        mission_name = body.get("mission")
+        deliverable_type = body.get("deliverable_type", "payload")
+
+        if not mission_name:
+            return jsonify({"success": False, "error": "Manca il nome della missione"}), 400
+        if deliverable_type not in skyfi.DELIVERABLE_TYPES:
+            return jsonify({"success": False, "error": f"Tipo non valido: {deliverable_type}"}), 400
+
+        try:
+            mission = db.session.execute(
+                db.session.query(Mission).filter_by(name=mission_name)
+            ).scalar()
+            if not mission:
+                return jsonify({"success": False, "error": f"Missione non trovata: {mission_name}"}), 404
+
+            order = skyfi.get_order(uid)
+            if not order:
+                return jsonify({"success": False, "error": "Ordine non trovato su SkyFi"}), 404
+
+            # Download in streaming nella cartella missioni, con hash calcolato al volo
+            missions_folder = os.path.join(app.config.get("OTS_DATA_FOLDER"), "missions")
+            os.makedirs(missions_folder, exist_ok=True)
+
+            r = requests.get(
+                f"{skyfi.BASE_URL}/orders/{uid}/{deliverable_type}",
+                headers=skyfi.headers(),
+                stream=True,
+                allow_redirects=True,
+                timeout=(10, 600),
+            )
+            if r.status_code != 200:
+                return jsonify({"success": False, "error": f"Download da SkyFi fallito: HTTP {r.status_code}"}), r.status_code
+
+            filename = skyfi.deliverable_filename(r, order, uid, deliverable_type)
+            mime_type = r.headers.get("Content-Type", "application/octet-stream").split(";")[0]
+
+            sha256 = hashlib.sha256()
+            size = 0
+            tmp_path = os.path.join(missions_folder, f".skyfi-{uuid.uuid4().hex}.part")
+            try:
+                with open(tmp_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=1024 * 1024):
+                        sha256.update(chunk)
+                        size += len(chunk)
+                        f.write(chunk)
+                file_hash = sha256.hexdigest()
+                # /Marti/sync/content serve i contenuti missione per nome file
+                os.replace(tmp_path, os.path.join(missions_folder, filename))
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+
+            username = current_user.username if current_user else "MilSim-Plugin"
+
+            # Stesso flusso di /Marti/sync/upload: MissionContent riusato se lo
+            # stesso file (hash) è già presente
+            content = db.session.execute(
+                db.session.query(MissionContent).filter_by(hash=file_hash)
+            ).scalar()
+            if not content:
+                content = MissionContent()
+                content.mime_type = mime_type
+                content.filename = filename
+                content.submission_time = datetime.now(timezone.utc)
+                content.submitter = username
+                content.uid = str(uuid.uuid4())
+                content.creator_uid = username
+                content.size = size
+                content.expiration = -1
+                content.keywords = ["skyfi", order.get("orderCode", uid)]
+                content.hash = file_hash
+                db.session.execute(insert(MissionContent).values(**content.serialize()))
+                db.session.commit()
+                content = db.session.execute(
+                    db.session.query(MissionContent).filter_by(hash=file_hash)
+                ).scalar()
+            elif content.filename != filename:
+                # Il file su disco è stato salvato col nuovo nome: allinea il DB
+                content.filename = filename
+                db.session.add(content)
+                db.session.commit()
+
+            # Associazione alla missione + MissionChange, come PUT /Marti/api/missions/<name>/contents
+            already_assigned = db.session.execute(
+                db.session.query(MissionContentMission).filter_by(
+                    mission_content_id=content.id, mission_name=mission_name
+                )
+            ).first()
+            if already_assigned:
+                return jsonify(
+                    {"success": True, "filename": filename, "mission": mission_name, "already_assigned": True}
+                )
+
+            mission_content_mission = MissionContentMission()
+            mission_content_mission.mission_name = mission_name
+            mission_content_mission.mission_content_id = content.id
+            db.session.add(mission_content_mission)
+
+            mission_change = MissionChange()
+            mission_change.isFederatedChange = False
+            mission_change.change_type = MissionChange.ADD_CONTENT
+            mission_change.content_uid = content.uid
+            mission_change.mission_name = mission_name
+            mission_change.timestamp = datetime.now(timezone.utc)
+            mission_change.creator_uid = username
+            mission_change.server_time = datetime.now(timezone.utc)
+            db.session.add(mission_change)
+            db.session.commit()
+
+            skyfi.notify_mission_change(mission_name, mission, mission_change, content)
+
+            logger.info(f"MilSim/SkyFi: {filename} ({size} bytes) assegnato alla missione {mission_name} da {username}")
+            return jsonify(
+                {"success": True, "filename": filename, "mission": mission_name, "hash": file_hash, "size": size}
+            )
+        except BaseException as e:
+            logger.error(f"Failed to assign order {uid} to mission: {e}")
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 500
