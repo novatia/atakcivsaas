@@ -190,12 +190,13 @@
     <div id="play-info" class="muted"></div>
     <label>Team A <select id="play-team-a"></select></label>
     <label>Team B <select id="play-team-b"></select></label>
-    <label>Osservatori (vedono tutto: es. Admins, Headquarter)
+    <label>Osservatori (vedono tutto: es. il team degli admin/HQ)
       <div id="play-observers" class="pkg-list" style="max-height:110px"></div>
     </label>
-    <p class="muted" style="margin:0">Senza gruppi la missione viene trasmessa a <b>tutti</b> gli EUD collegati.
-      Con i gruppi: lo <b>spawn A</b> lo vede solo il Team A (+ osservatori), lo <b>spawn B</b> solo il Team B;
-      bandiere, bomb site, punti di dominio, aree, chat e data package vanno a tutti i coinvolti.</p>
+    <p class="muted" style="margin:0">I team sono quelli <b>nativi di ATAK</b> (colore squadra scelto sul telefono).
+      Senza selezione la missione viene trasmessa a <b>tutti</b> gli EUD collegati. Con i team: lo <b>spawn A</b>
+      lo vede solo il Team A (+ osservatori), lo <b>spawn B</b> solo il Team B; bandiere, bomb site, punti di
+      dominio, aree, chat e data package vanno a tutti i coinvolti.</p>
     <div class="modal-actions">
       <button class="btn" onclick="closePlayModal()">Annulla</button>
       <button class="btn primary" id="play-confirm-btn" onclick="confirmPlay()">📡 Prepara missione</button>
@@ -1288,28 +1289,34 @@ async function deleteTemplate(id, title) {
   } catch (e) { toast("Errore: " + e.message, false); }
 }
 
-// Il Play apre il modal di preparazione: scelta dei gruppi destinatari
-// (Team A/B, osservatori) o broadcast a tutti; il timer parte solo con 🚦
-let PLAY_TPL = null, GM_GROUPS = [];
+// Il Play apre il modal di preparazione: scelta dei destinatari tra i TEAM
+// NATIVI di ATAK (il colore squadra scelto sui telefoni, che il server vede
+// da solo) o broadcast a tutti; il timer parte solo con 🚦
+let PLAY_TPL = null, ATAK_TEAMS = [];
+
+function teamDot(t) {
+  return `<span class="rp-dot" style="background:${t.color || "#999"}; vertical-align:-2px"></span>`;
+}
 
 async function playTemplate(id, btn) {
   const t = TEMPLATES.find(x => x.id === id);
   if (!t) return;
   try {
-    GM_GROUPS = await api("/groups");
-  } catch (e) { return toast("Errore caricamento gruppi: " + e.message, false); }
+    ATAK_TEAMS = await api("/teams");
+  } catch (e) { return toast("Errore caricamento team ATAK: " + e.message, false); }
   PLAY_TPL = t;
   const mode = REGISTRY.modes[t.mode];
   document.getElementById("play-info").textContent =
     `${t.title} — ${mode.name}, ${t.duration_minutes} min · ${t.markers.length} marker, ${t.zones.length} aree` +
     (t.packages.length ? `, ${t.packages.length} data package` : "");
+  const withMembers = ATAK_TEAMS.filter(tm => tm.members.length);
   const options = `<option value="">— tutti (broadcast) —</option>` +
-    GM_GROUPS.map(g => `<option value="${g.id}">${esc(g.name)} (${g.members.length} EUD)</option>`).join("");
+    withMembers.map(tm => `<option value="${tm.id}">${esc(tm.name)} (${tm.members.length} EUD)</option>`).join("");
   document.getElementById("play-team-a").innerHTML = options;
   document.getElementById("play-team-b").innerHTML = options;
-  document.getElementById("play-observers").innerHTML = GM_GROUPS.length
-    ? GM_GROUPS.map(g => `<label><input type="checkbox" value="${g.id}"> ${esc(g.name)} <span class="muted">(${g.members.length} EUD)</span></label>`).join("")
-    : '<span class="muted">Nessun gruppo definito: crea i team nel tab Team.</span>';
+  document.getElementById("play-observers").innerHTML = withMembers.length
+    ? withMembers.map(tm => `<label><input type="checkbox" value="${tm.id}"> ${teamDot(tm)} ${esc(tm.name)} <span class="muted">(${tm.members.length} EUD)</span></label>`).join("")
+    : '<span class="muted">Nessun team ATAK: i giocatori devono impostare il colore squadra sul telefono.</span>';
   const confirmBtn = document.getElementById("play-confirm-btn");
   confirmBtn.disabled = false;
   confirmBtn.textContent = "📡 Prepara missione";
@@ -1326,15 +1333,15 @@ async function confirmPlay() {
   const teamA = document.getElementById("play-team-a").value;
   const teamB = document.getElementById("play-team-b").value;
   const observers = [...document.querySelectorAll("#play-observers input:checked")].map(c => +c.value);
-  if (teamA && teamA === teamB) return toast("Team A e Team B non possono essere lo stesso gruppo.", false);
+  if (teamA && teamA === teamB) return toast("Team A e Team B non possono essere lo stesso team ATAK.", false);
   const btn = document.getElementById("play-confirm-btn");
   btn.disabled = true;
   btn.textContent = "Push in corso…";
   try {
     const res = await api(`/templates/${PLAY_TPL.id}/play`, { method: "POST", body: {
-      team_a_group_id: teamA ? +teamA : null,
-      team_b_group_id: teamB ? +teamB : null,
-      observer_group_ids: observers,
+      team_a_id: teamA ? +teamA : null,
+      team_b_id: teamB ? +teamB : null,
+      observer_team_ids: observers,
     } });
     toast(`Missione "${PLAY_TPL.title}" pronta: dai la luce verde da Partite.` + (res.warning ? " ⚠️ " + res.warning : ""), !res.warning);
     closePlayModal();
@@ -1805,93 +1812,40 @@ async function endMatch(id, title, status, btn) {
   }
 }
 
-/* ---- Tab Team: gruppi di gioco (Team A/B e osservatori) ---- */
-let TEAM_EUDS = [];
-
+/* ---- Tab Team: i team nativi di ATAK (sola lettura) ---- */
 async function renderTeams() {
   const el = document.getElementById("content");
-  el.innerHTML = "Caricamento gruppi…";
+  el.innerHTML = "Caricamento team ATAK…";
   try {
-    [GM_GROUPS, TEAM_EUDS] = await Promise.all([api("/groups"), api("/euds")]);
+    ATAK_TEAMS = await api("/teams");
   } catch (e) {
     el.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
     return;
   }
-  const callsigns = {};
-  TEAM_EUDS.forEach(e => callsigns[e.uid] = e.callsign || e.uid);
-  const eudLabel = uid => callsigns[uid] ? `${esc(callsigns[uid])} <span class="muted">(${esc(uid)})</span>` : esc(uid);
-
-  const groupCards = GM_GROUPS.map(g => {
-    const freeEuds = TEAM_EUDS.filter(e => !g.members.includes(e.uid));
-    return `
+  const withMembers = ATAK_TEAMS.filter(t => t.members.length);
+  const cards = withMembers.map(t => `
     <div class="mode-card">
-      <div style="display:flex; align-items:baseline; gap:8px">
-        <h2 style="margin:0">👥 ${esc(g.name)}</h2>
-        <span class="muted">${g.members.length} EUD</span>
-        <span style="flex:1"></span>
-        <button class="btn small danger" onclick="deleteGroup(${g.id}, '${esc(g.name).replace(/'/g, "\\'")}')">🗑 Elimina</button>
-      </div>
-      ${g.members.length ? `<table style="margin-top:8px"><tbody>
-        ${g.members.map(uid => `<tr><td>${eudLabel(uid)}</td>
-          <td style="text-align:right"><button class="btn small" onclick="removeGroupMember(${g.id}, '${esc(uid).replace(/'/g, "\\'")}')">Rimuovi</button></td></tr>`).join("")}
-      </tbody></table>` : '<p class="muted" style="margin:8px 0 0">Nessun EUD nel gruppo.</p>'}
-      ${freeEuds.length ? `
-      <form class="inline" style="margin:10px 0 0" onsubmit="event.preventDefault(); addGroupMember(${g.id}, this.eud.value);">
-        <label>Aggiungi EUD
-          <select name="eud">${freeEuds.map(e => `<option value="${esc(e.uid)}">${esc(e.callsign || e.uid)}</option>`).join("")}</select>
-        </label>
-        <button class="btn primary">＋ Aggiungi</button>
-      </form>` : ""}
-    </div>`;
-  }).join("");
+      <h2 style="margin:0">${teamDot(t)} ${esc(t.name)} <span class="muted">· ${t.members.length} EUD</span></h2>
+      <table style="margin-top:8px"><tbody>
+        ${t.members.map(m => `<tr>
+          <td><strong>${esc(m.callsign || m.uid)}</strong> <span class="muted">${esc(m.team_role || "")}</span><br>
+            <span class="muted" style="font-size:11.5px">${esc(m.uid)}</span></td>
+          <td class="muted" style="text-align:right; white-space:nowrap">${fmtDT(m.last_event_time)}</td>
+        </tr>`).join("")}
+      </tbody></table>
+    </div>`).join("");
 
   el.innerHTML = `
-    <p class="muted" style="margin-top:0">I gruppi decidono <b>chi riceve cosa</b> quando prepari una missione:
-      al Play scegli il gruppo del Team A, quello del Team B e gli osservatori broadcast (es. Admins, Headquarter)
-      che vedono tutto. Lo spawn di un team lo vede solo quel team; bandiere, bomb site, punti di dominio e aree
-      vanno a tutti i coinvolti. Senza gruppi la missione viene trasmessa a tutti gli EUD collegati.
-      I membri sono gli EUD conosciuti dal server (${TEAM_EUDS.length}): i cambi valgono subito, anche a partita
-      in corso con «Ripubblica».</p>
-    <h3>Nuovo gruppo</h3>
-    <form class="inline" id="group-form">
-      <label>Nome <input name="name" required placeholder="es. Team Alpha, Admins, Headquarter"></label>
-      <button class="btn primary" type="submit">＋ Crea gruppo</button>
-    </form>
-    ${GM_GROUPS.length ? `<div class="mode-grid">${groupCards}</div>` : "<p class='muted'>Nessun gruppo: creane uno (es. Team Alpha, Team Bravo, Admins).</p>"}`;
-
-  document.getElementById("group-form").onsubmit = async (e) => {
-    e.preventDefault();
-    try {
-      await api("/groups", { method: "POST", body: Object.fromEntries(new FormData(e.target).entries()) });
-      toast("Gruppo creato");
-      renderTeams();
-    } catch (err) { toast(err.message, false); }
-  };
-}
-
-async function addGroupMember(groupId, uid) {
-  try {
-    await api(`/groups/${groupId}/members`, { method: "POST", body: { uid } });
-    toast("EUD aggiunto al gruppo");
-    renderTeams();
-  } catch (e) { toast(e.message, false); }
-}
-
-async function removeGroupMember(groupId, uid) {
-  try {
-    await api(`/groups/${groupId}/members`, { method: "DELETE", body: { uid } });
-    toast("EUD rimosso dal gruppo");
-    renderTeams();
-  } catch (e) { toast(e.message, false); }
-}
-
-async function deleteGroup(groupId, name) {
-  if (!confirm(`Eliminare il gruppo "${name}"?`)) return;
-  try {
-    await api(`/groups/${groupId}`, { method: "DELETE" });
-    toast("Gruppo eliminato");
-    renderTeams();
-  } catch (e) { toast(e.message, false); }
+    <div class="toolbar">
+      <button class="btn" onclick="renderTeams()">↻ Aggiorna</button>
+      <span class="muted">Questi sono i <b>team nativi di ATAK</b>: ogni giocatore sceglie il colore squadra sul proprio
+        telefono (ATAK: Impostazioni → Callsign → My Team) e il server lo vede da solo — niente anagrafica da mantenere.
+        Al Play scegli quale colore è il Team A, quale il Team B e i team osservatori (es. il colore degli admin/HQ):
+        lo spawn di un team lo vede solo quel team, il resto va a tutti i coinvolti. I cambi di squadra valgono subito
+        («Ripubblica» a partita in corso).</span>
+    </div>
+    ${withMembers.length ? `<div class="mode-grid">${cards}</div>`
+      : "<p class='muted'>Nessun EUD ha ancora trasmesso un colore squadra: imposta «My Team» sugli ATAK e collega i dispositivi.</p>"}`;
 }
 
 /* ---- Tab Modalità di gioco (anagrafica + config Game Master) ---- */

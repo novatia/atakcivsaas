@@ -50,8 +50,6 @@ from .models import (
     GameField,
     GameMatch,
     GameTemplate,
-    GmGroup,
-    GmGroupEud,
     Player,
     PlayerScore,
     Rank,
@@ -505,9 +503,9 @@ class MilSimCompanionPlugin(Plugin):
                         ("created_at", "ALTER TABLE gm_matches ADD COLUMN created_at TIMESTAMP"),
                         ("end_reason", "ALTER TABLE gm_matches ADD COLUMN end_reason VARCHAR(32)"),
                         ("winner", "ALTER TABLE gm_matches ADD COLUMN winner VARCHAR(255)"),
-                        # 3.2 -> 3.3: destinatari per gruppo (Team A/B, osservatori)
-                        ("team_a_group_id", "ALTER TABLE gm_matches ADD COLUMN team_a_group_id INTEGER"),
-                        ("team_b_group_id", "ALTER TABLE gm_matches ADD COLUMN team_b_group_id INTEGER"),
+                        # 3.2 -> 3.4: destinatari = team nativi di ATAK (teams.id di OTS)
+                        ("team_a_id", "ALTER TABLE gm_matches ADD COLUMN team_a_id INTEGER"),
+                        ("team_b_id", "ALTER TABLE gm_matches ADD COLUMN team_b_id INTEGER"),
                         ("observers_json", "ALTER TABLE gm_matches ADD COLUMN observers_json TEXT"),
                     ):
                         if name not in match_columns:
@@ -524,6 +522,12 @@ class MilSimCompanionPlugin(Plugin):
                     for ddl in (
                         "ALTER TABLE gm_matches ALTER COLUMN started_at DROP NOT NULL",
                         "ALTER TABLE gm_matches ALTER COLUMN ends_at DROP NOT NULL",
+                        # 3.3 -> 3.4: l'anagrafica gruppi custom è stata ritirata
+                        # (si usano i team nativi di ATAK): via tabelle e colonne
+                        "DROP TABLE IF EXISTS gm_group_euds",
+                        "DROP TABLE IF EXISTS gm_groups",
+                        "ALTER TABLE gm_matches DROP COLUMN IF EXISTS team_a_group_id",
+                        "ALTER TABLE gm_matches DROP COLUMN IF EXISTS team_b_group_id",
                     ):
                         try:
                             db.session.execute(text(ddl))
@@ -2039,16 +2043,19 @@ class MilSimCompanionPlugin(Plugin):
             if errors:
                 return jsonify({"success": False, "error": "Template incompleto: " + "; ".join(errors)}), 400
 
-            # Gruppi destinatari (opzionali): senza, broadcast a tutti come sempre
+            # Team destinatari (opzionali) = team nativi di ATAK (teams di OTS):
+            # senza, broadcast a tutti come sempre
+            from opentakserver.models.Team import Team
+
             body = request.json or {}
-            team_a_id = body.get("team_a_group_id") or None
-            team_b_id = body.get("team_b_group_id") or None
-            observer_ids = [int(g) for g in (body.get("observer_group_ids") or [])]
-            for group_id in filter(None, [team_a_id, team_b_id, *observer_ids]):
-                if not db.session.get(GmGroup, int(group_id)):
-                    return jsonify({"success": False, "error": f"Gruppo non trovato: {group_id}"}), 400
+            team_a_id = body.get("team_a_id") or None
+            team_b_id = body.get("team_b_id") or None
+            observer_ids = [int(t) for t in (body.get("observer_team_ids") or [])]
+            for team_id in filter(None, [team_a_id, team_b_id, *observer_ids]):
+                if not db.session.get(Team, int(team_id)):
+                    return jsonify({"success": False, "error": f"Team ATAK non trovato: {team_id}"}), 400
             if team_a_id and team_a_id == team_b_id:
-                return jsonify({"success": False, "error": "Team A e Team B non possono essere lo stesso gruppo"}), 400
+                return jsonify({"success": False, "error": "Team A e Team B non possono essere lo stesso team ATAK"}), 400
 
             # Il Play prepara la missione (stato "ready"): marker, aree e data
             # package vengono pushati subito così le squadre raggiungono gli
@@ -2061,8 +2068,8 @@ class MilSimCompanionPlugin(Plugin):
                 created_at=_utcnow(),
                 status="ready",
                 started_by=current_user.username,
-                team_a_group_id=int(team_a_id) if team_a_id else None,
-                team_b_group_id=int(team_b_id) if team_b_id else None,
+                team_a_id=int(team_a_id) if team_a_id else None,
+                team_b_id=int(team_b_id) if team_b_id else None,
                 observers_json=json.dumps(observer_ids),
                 snapshot_json=json.dumps(snapshot),
             )
@@ -2084,7 +2091,7 @@ class MilSimCompanionPlugin(Plugin):
             targets = engine.resolve_targets(match)
             if targets is not None and not targets["all"]:
                 return jsonify(
-                    {"success": False, "error": "I gruppi selezionati non hanno nessun EUD: aggiungi i membri nel tab Team"}
+                    {"success": False, "error": "I team selezionati non hanno nessun EUD: i giocatori devono impostare il colore squadra su ATAK"}
                 ), 400
             items = _match_items(match, uids, targets)
 
@@ -2134,14 +2141,16 @@ class MilSimCompanionPlugin(Plugin):
     def get_matches():
         try:
             matches = db.session.query(GameMatch).order_by(GameMatch.created_at.desc()).limit(100).all()
-            group_names = {g.id: g.name for g in db.session.query(GmGroup).all()}
+            from opentakserver.models.Team import Team
+
+            team_names = {t.id: t.name for t in db.session.query(Team).all()}
             results = []
             for match in matches:
                 data = match.serialize()
                 data["groups"] = {
-                    "team_a": group_names.get(match.team_a_group_id),
-                    "team_b": group_names.get(match.team_b_group_id),
-                    "observers": [group_names[g] for g in data["observer_group_ids"] if g in group_names],
+                    "team_a": team_names.get(match.team_a_id),
+                    "team_b": team_names.get(match.team_b_id),
+                    "observers": [team_names[t] for t in data["observer_team_ids"] if t in team_names],
                 }
                 results.append(data)
             return jsonify(results)
@@ -2151,150 +2160,51 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     # ------------------------------------------------------------------
-    # Anagrafica gruppi di gioco (Team A/B, osservatori) e EUD noti
+    # Team ATAK (tabella teams di OTS: il colore squadra scelto sugli EUD)
     # ------------------------------------------------------------------
 
     @staticmethod
     @roles_accepted("administrator")
-    @blueprint.route("/euds", methods=["GET"])
-    def get_euds():
-        """EUD conosciuti dal server (per assegnarli ai gruppi)."""
+    @blueprint.route("/teams", methods=["GET"])
+    def get_teams():
+        """Team nativi di ATAK con i loro EUD: la squadra si sceglie sul
+        telefono (ATAK: Impostazioni → Callsign → My Team), il server la vede
+        dal <__group> delle posizioni. Nessuna anagrafica da mantenere qui."""
         try:
             from opentakserver.models.EUD import EUD
+            from opentakserver.models.Team import Team
 
-            euds = db.session.query(EUD).order_by(EUD.callsign).all()
-            return jsonify(
-                [
-                    {
-                        "uid": e.uid,
-                        "callsign": e.callsign,
-                        "last_event_time": e.last_event_time.isoformat() + "Z" if e.last_event_time else None,
-                    }
-                    for e in euds
-                ]
-            )
-        except BaseException as e:
-            logger.error(traceback.format_exc())
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    @staticmethod
-    @roles_accepted("administrator")
-    @blueprint.route("/groups", methods=["GET"])
-    def get_groups():
-        try:
-            groups = db.session.query(GmGroup).order_by(GmGroup.name).all()
-            return jsonify([g.serialize() for g in groups])
-        except BaseException as e:
-            logger.error(traceback.format_exc())
-            return jsonify({"success": False, "error": str(e)}), 500
-
-    @staticmethod
-    @roles_accepted("administrator")
-    @blueprint.route("/groups", methods=["POST"])
-    def create_group():
-        try:
-            name = ((request.json or {}).get("name") or "").strip()
-            if not name:
-                return jsonify({"success": False, "error": "Il nome del gruppo è obbligatorio"}), 400
-            if db.session.query(GmGroup).filter(db.func.lower(GmGroup.name) == name.lower()).first():
-                return jsonify({"success": False, "error": "Esiste già un gruppo con questo nome"}), 400
-            group = GmGroup(name=name)
-            db.session.add(group)
-            db.session.commit()
-            return jsonify({"success": True, "group": group.serialize()})
-        except BaseException as e:
-            db.session.rollback()
-            logger.error(traceback.format_exc())
-            return jsonify({"success": False, "error": str(e)}), 400
-
-    @staticmethod
-    @roles_accepted("administrator")
-    @blueprint.route("/groups/<int:group_id>", methods=["PUT"])
-    def update_group(group_id: int):
-        try:
-            group = db.session.get(GmGroup, group_id)
-            if not group:
-                return jsonify({"success": False, "error": "Gruppo non trovato"}), 404
-            name = ((request.json or {}).get("name") or "").strip()
-            if name:
-                group.name = name
-            db.session.commit()
-            return jsonify({"success": True, "group": group.serialize()})
-        except BaseException as e:
-            db.session.rollback()
-            logger.error(traceback.format_exc())
-            return jsonify({"success": False, "error": str(e)}), 400
-
-    @staticmethod
-    @roles_accepted("administrator")
-    @blueprint.route("/groups/<int:group_id>", methods=["DELETE"])
-    def delete_group(group_id: int):
-        try:
-            group = db.session.get(GmGroup, group_id)
-            if not group:
-                return jsonify({"success": False, "error": "Gruppo non trovato"}), 404
-            # Un gruppo usato da una partita non conclusa non si può eliminare
-            in_use = (
-                db.session.query(GameMatch)
-                .filter(GameMatch.status.in_(("ready", "running")))
-                .filter(
-                    db.or_(
-                        GameMatch.team_a_group_id == group_id,
-                        GameMatch.team_b_group_id == group_id,
-                        GameMatch.observers_json.contains(str(group_id)),
+            euds_by_team: dict[int, list] = {}
+            for eud in db.session.query(EUD).order_by(EUD.callsign).all():
+                if eud.team_id:
+                    euds_by_team.setdefault(eud.team_id, []).append(
+                        {
+                            "uid": eud.uid,
+                            "callsign": eud.callsign,
+                            "team_role": eud.team_role,
+                            "last_event_time": eud.last_event_time.isoformat() + "Z" if eud.last_event_time else None,
+                        }
                     )
+
+            teams = db.session.query(Team).order_by(Team.name).all()
+            result = []
+            for team in teams:
+                try:
+                    color = team.get_team_color()
+                except BaseException:
+                    color = None
+                result.append(
+                    {
+                        "id": team.id,
+                        "name": team.name,
+                        "color": color,
+                        "members": euds_by_team.get(team.id, []),
+                    }
                 )
-                .first()
-            )
-            if in_use:
-                return jsonify(
-                    {"success": False, "error": f"Il gruppo è usato dalla partita '{in_use.title}' non ancora conclusa"}
-                ), 400
-            db.session.delete(group)
-            db.session.commit()
-            return jsonify({"success": True})
+            return jsonify(result)
         except BaseException as e:
-            db.session.rollback()
             logger.error(traceback.format_exc())
-            return jsonify({"success": False, "error": str(e)}), 400
-
-    @staticmethod
-    @roles_accepted("administrator")
-    @blueprint.route("/groups/<int:group_id>/members", methods=["POST"])
-    def add_group_member(group_id: int):
-        try:
-            group = db.session.get(GmGroup, group_id)
-            if not group:
-                return jsonify({"success": False, "error": "Gruppo non trovato"}), 404
-            uid = ((request.json or {}).get("uid") or "").strip()
-            if not uid:
-                return jsonify({"success": False, "error": "uid dell'EUD obbligatorio"}), 400
-            if db.session.query(GmGroupEud).filter_by(group_id=group_id, eud_uid=uid).first():
-                return jsonify({"success": False, "error": "EUD già nel gruppo"}), 400
-            db.session.add(GmGroupEud(group_id=group_id, eud_uid=uid))
-            db.session.commit()
-            return jsonify({"success": True, "group": group.serialize()})
-        except BaseException as e:
-            db.session.rollback()
-            logger.error(traceback.format_exc())
-            return jsonify({"success": False, "error": str(e)}), 400
-
-    @staticmethod
-    @roles_accepted("administrator")
-    @blueprint.route("/groups/<int:group_id>/members", methods=["DELETE"])
-    def remove_group_member(group_id: int):
-        try:
-            uid = ((request.json or {}).get("uid") or "").strip()
-            member = db.session.query(GmGroupEud).filter_by(group_id=group_id, eud_uid=uid).first()
-            if not member:
-                return jsonify({"success": False, "error": "EUD non presente nel gruppo"}), 404
-            db.session.delete(member)
-            db.session.commit()
-            return jsonify({"success": True})
-        except BaseException as e:
-            db.session.rollback()
-            logger.error(traceback.format_exc())
-            return jsonify({"success": False, "error": str(e)}), 400
+            return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
     @roles_accepted("administrator")

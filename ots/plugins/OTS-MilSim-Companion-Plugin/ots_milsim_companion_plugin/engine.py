@@ -25,7 +25,7 @@ from opentakserver.extensions import db, logger
 
 from . import cot
 from .game_modes import GAME_MODES
-from .models import EngineLease, GameMatch, GmGroupEud
+from .models import EngineLease, GameMatch
 
 TICK_SECONDS = 1
 LEASE_TIMEOUT = timedelta(seconds=10)
@@ -107,28 +107,32 @@ def match_events_for(mode: str) -> dict:
 
 
 def resolve_targets(match: GameMatch) -> dict | None:
-    """Risolve i gruppi della partita in insiemi di uid EUD, al momento
-    dell'invio (i cambi di membri valgono subito, es. con «Ripubblica»).
+    """Risolve i team della partita in insiemi di uid EUD, al momento
+    dell'invio (i cambi di squadra su ATAK valgono subito, es. con «Ripubblica»).
 
-    None = partita senza gruppi: broadcast storico a tutti. Altrimenti
-    {"team_a": spawn A + osservatori, "team_b": spawn B + osservatori,
+    I team sono quelli NATIVI di ATAK: la tabella `teams` di OTS e il campo
+    EUD.team_id, aggiornati dal colore squadra che ogni EUD trasmette nel
+    proprio <__group>. None = partita senza team: broadcast storico a tutti.
+    Altrimenti {"team_a": Team A + osservatori, "team_b": Team B + osservatori,
     "all": tutti i coinvolti} — è la mappa delle audience dei marker.
     """
     observer_ids = json.loads(match.observers_json or "[]")
-    if not (match.team_a_group_id or match.team_b_group_id or observer_ids):
+    if not (match.team_a_id or match.team_b_id or observer_ids):
         return None
 
-    def members(group_id) -> set:
-        if not group_id:
-            return set()
-        rows = db.session.query(GmGroupEud).filter_by(group_id=group_id).all()
-        return {row.eud_uid for row in rows}
+    from opentakserver.models.EUD import EUD
 
-    team_a = members(match.team_a_group_id)
-    team_b = members(match.team_b_group_id)
+    def members(team_id) -> set:
+        if not team_id:
+            return set()
+        rows = db.session.query(EUD).filter(EUD.team_id == int(team_id)).all()
+        return {row.uid for row in rows}
+
+    team_a = members(match.team_a_id)
+    team_b = members(match.team_b_id)
     observers: set = set()
-    for group_id in observer_ids:
-        observers |= members(group_id)
+    for team_id in observer_ids:
+        observers |= members(team_id)
 
     return {
         "team_a": team_a | observers,
