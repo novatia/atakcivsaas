@@ -1371,11 +1371,13 @@ async function openEditor(id) {
     return;
   }
   const t = id ? TEMPLATES.find(x => x.id === id) : null;
+  // Corregge eventuali longitudini fuori range salvate prima del fix wrap
+  const wrapLon = lon => ((lon + 180) % 360 + 360) % 360 - 180;
   ED = {
     id: id,
     mode: t ? t.mode : "ctf",
-    markers: t ? t.markers.map(m => ({ ...m })) : [],
-    zones: t ? t.zones.map(z => ({ ...z, points: z.points.map(p => [...p]) })) : [],
+    markers: t ? t.markers.map(m => ({ ...m, lon: wrapLon(m.lon) })) : [],
+    zones: t ? t.zones.map(z => ({ ...z, points: z.points.map(p => [p[0], wrapLon(p[1])]) })) : [],
     packages: new Set(t ? t.packages : []),
     placing: null,   // tipo marker in piazzamento
     drawing: null,   // {type, points, line} area in disegno
@@ -1541,15 +1543,18 @@ function cancelPlacing() {
 }
 
 function mapClick(latlng) {
+  // .wrap(): se la mappa è stata trascinata su una copia del mondo Leaflet
+  // restituisce longitudini tipo 729° e i marker non si vedono su ATAK/OTS
+  const ll = latlng.wrap();
   if (ED.placing) {
     const type = ED.placing;
-    const marker = { type: type, label: REGISTRY.marker_types[type].callsign, lat: +latlng.lat.toFixed(6), lon: +latlng.lng.toFixed(6) };
+    const marker = { type: type, label: REGISTRY.marker_types[type].callsign, lat: +ll.lat.toFixed(6), lon: +ll.lng.toFixed(6) };
     ED.markers.push(marker);
     addMarkerLayer(marker);
     ED.placing = null;
     renderPalette();
   } else if (ED.drawing) {
-    ED.drawing.points.push([+latlng.lat.toFixed(6), +latlng.lng.toFixed(6)]);
+    ED.drawing.points.push([+ll.lat.toFixed(6), +ll.lng.toFixed(6)]);
     ED.drawing.line.setLatLngs(ED.drawing.points);
     updateHint();
   }
@@ -1573,7 +1578,7 @@ function addMarkerLayer(marker) {
   }).addTo(ED.map);
   layer.bindTooltip(() => marker.label || mt.callsign, { direction: "top", offset: [0, -8] });
   layer.on("dragend", () => {
-    const p = layer.getLatLng();
+    const p = layer.getLatLng().wrap();
     marker.lat = +p.lat.toFixed(6);
     marker.lon = +p.lng.toFixed(6);
   });
@@ -1625,7 +1630,7 @@ function removeZone(idx) {
 async function saveTemplate(btn) {
   const title = document.getElementById("ed-title").value.trim();
   if (!title) return toast("Il titolo è obbligatorio.", false);
-  const center = ED.map.getCenter();
+  const center = ED.map.getCenter().wrap();
   const body = {
     title: title,
     description: document.getElementById("ed-desc").value.trim(),

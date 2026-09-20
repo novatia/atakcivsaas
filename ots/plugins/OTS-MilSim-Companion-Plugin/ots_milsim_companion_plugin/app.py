@@ -339,6 +339,14 @@ def _template_payload(body: dict) -> tuple[dict | None, str | None]:
     if errors:
         return None, "; ".join(errors)
 
+    # Normalizza le coordinate nei range CoT: la mappa Leaflet dell'editor può
+    # restituire longitudini "wrappate" (es. 729.88°) se trascinata su una
+    # copia del mondo, e i marker risulterebbero invisibili su ATAK/OTS
+    for marker in markers:
+        marker["lat"], marker["lon"] = cot.wrap_coords(marker["lat"], marker["lon"])
+    for zone in zones:
+        zone["points"] = [list(cot.wrap_coords(p[0], p[1])) for p in zone["points"]]
+
     packages = [h for h in (body.get("packages") or []) if isinstance(h, str)]
     map_conf = body.get("map") or {}
 

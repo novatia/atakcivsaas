@@ -35,7 +35,21 @@ def _base_event(uid: str, cot_type: str, stale: datetime, how: str = "h-g-i-g-o"
     )
 
 
+def wrap_coords(lat: float, lon: float) -> tuple[float, float]:
+    """Riporta le coordinate nei range CoT (-90..90, -180..180).
+
+    La mappa Leaflet dell'editor può restituire longitudini "wrappate" (es.
+    729.88 = 9.88 + 2 giri di mondo se si è trascinata la mappa su una copia):
+    con una longitudine fuori range ATAK e la web map di OTS non riescono a
+    posizionare il marker, che compare negli elenchi ma non in mappa (caso
+    reale del 2026-09-20)."""
+    lon = ((float(lon) + 180.0) % 360.0) - 180.0
+    lat = max(-90.0, min(90.0, float(lat)))
+    return round(lat, 6), round(lon, 6)
+
+
 def _point(event: Element, lat: float, lon: float) -> None:
+    lat, lon = wrap_coords(lat, lon)
     SubElement(
         event,
         "point",
@@ -94,7 +108,7 @@ def marker_event(
 
 def zone_event(uid: str, zone: dict, stale: datetime, remarks: str = "") -> Element:
     ztype = ZONE_TYPES[zone["type"]]
-    points = zone["points"]
+    points = [wrap_coords(p[0], p[1]) for p in zone["points"]]
     lat = sum(p[0] for p in points) / len(points)
     lon = sum(p[1] for p in points) / len(points)
 
