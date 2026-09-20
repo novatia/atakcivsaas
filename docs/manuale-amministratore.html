@@ -204,7 +204,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MA-TAK-001 · Rev 13 · 2026-09-15</span><span>Server: n3test002</span></div>
+    <div class="doc-meta"><span>MA-TAK-001 · Rev 14 · 2026-09-20</span><span>Server: n3test002</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Amministratore<br>Tactical Scout Codogno</h1>
@@ -388,6 +388,22 @@ sudo certbot certonly --nginx -d tacticalscout.3utilities.com --deploy-hook "sys
 sudo certbot renew --dry-run   <span class="c"># deve chiudere con "all simulated renewals succeeded"</span></pre>
     <p><code>certbot certonly</code> installa solo i file in <code>/etc/letsencrypt/live/</code> e <strong>non tocca la configurazione nginx</strong> (la regola d'oro sulla 8443 resta al sicuro). Se la validazione fallisce con timeout o «unauthorized», verificare che la regola firewall GCP per la porta 80 sia aperta verso internet.</p></div>
 
+    <h3>Tracce GPS, replay delle giocate e retention</h3>
+    <p>Ogni posizione trasmessa da un EUD collegato viene salvata dal <code>cot_parser</code> nel database, senza alcuna configurazione: tabella <code>points</code> (lat/lon, quota, velocità, rotta, batteria, timestamp <strong>in UTC</strong>), collegata a <code>cot</code> (l'XML grezzo dell'evento) e a <code>euds</code> (anagrafica dispositivi, con <code>callsign</code>, <code>last_status</code> e <code>last_event_time</code>). È il motivo per cui la unit <code>opentakserver-cot-parser</code> deve sempre girare (v. «Servizi»).</p>
+    <p>Su queste tabelle si appoggia il <strong>replay delle giocate</strong> del plugin EventCalendar (dalla v2.3.0): bottone <strong>«▶ Giocata»</strong> su ogni evento del calendario → player su mappa con velocità 1x/3x/5x/10x/100x, slider temporale e scie per EUD. Funziona retroattivamente su tutto lo storico già in <code>points</code>; le tracce esistono solo per gli EUD che erano <em>collegati al server</em> durante l'evento. Gli orari del calendario sono interpretati nel fuso <code>OTS_EVENTCALENDAR_TIMEZONE</code> (default <code>Europe/Rome</code>) — il server è in UTC, la conversione la fa il plugin.</p>
+    <p>Estrazione manuale di una traccia (utile anche senza plugin):</p>
+    <pre>sudo -u postgres psql -d ots -c "SELECT timestamp, latitude, longitude, speed FROM points
+  WHERE device_uid = '&lt;uid EUD&gt;' AND timestamp BETWEEN '2026-09-20 07:00' AND '2026-09-20 12:00'
+  ORDER BY timestamp;"   <span class="c"># orari in UTC: ora italiana −2 (estate) o −1 (inverno)</span></pre>
+    <p><strong>Retention.</strong> Il job schedulato <code>delete_old_data</code> di OTS elimina i dati più vecchi di una soglia: marker, alert, chat, punti, CoT <strong>e gli EUD non visti da più della soglia</strong> (con tutte le loro tracce, in cascata). Decisione del gruppo: <strong>5 anni</strong>. In <code>/home/ots/ots/config.yml</code>:</p>
+    <pre>OTS_DELETE_OLD_DATA_DAYS: 1825
+OTS_DELETE_OLD_DATA_SECONDS: 0
+OTS_DELETE_OLD_DATA_MINUTES: 0
+OTS_DELETE_OLD_DATA_HOURS: 0
+OTS_DELETE_OLD_DATA_WEEKS: 0</pre>
+    <p>poi <code>sudo systemctl restart opentakserver</code>. Lo stato del job si controlla nella pagina <strong>Jobs</strong> della web UI di OTS.</p>
+    <div class="warn"><span class="tag">Attenzione</span><p>Il default di fabbrica di OTS è <code>OTS_DELETE_OLD_DATA_WEEKS: 1</code>: se il job venisse attivato senza prima impostare le chiavi qui sopra, cancellerebbe <strong>tutto lo storico oltre una settimana</strong> — tracce delle giocate comprese — e gli EUD offline da più di 7 giorni. Mai attivare il job con soglie basse; verificare sempre le chiavi in <code>config.yml</code> prima.</p></div>
+
     <h3>Verifica rapida di salute</h3>
     <pre>systemctl status opentakserver opentakserver-cot-parser opentakserver-eud-handler --no-pager | grep -E "●|Active"
 ss -tlnp | grep -E '8080|8089|8443'
@@ -565,7 +581,7 @@ rm /tmp/eud.pem   <span class="c"># pulizia: contiene la chiave privata</span></
   </section>
 
   <footer>
-    <span>MA-TAK-001 · Rev 13</span>
+    <span>MA-TAK-001 · Rev 14</span>
     <span>Aggiornato il 2026-09-15: mai ricreare una missione (token stantii → 401 su Upload All), invito vs QR</span>
   </footer>
 </div>
