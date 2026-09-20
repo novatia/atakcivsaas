@@ -2589,7 +2589,10 @@ class MilSimCompanionPlugin(Plugin):
             package_name = skyfi.safe_name(f"SkyFi-{order['orderCode']}_{location}")
 
             multi_layer_tile_source = ET.Element("customMultiLayerMapSource")
-            multi_layer_tile_source.text = f"SkyFi-{order['orderCode']} {location}"
+            # ATAK esige il nome come elemento <name>: come testo della radice
+            # (bug ereditato dall'upstream) l'import del layer fallisce con
+            # RuntimeException e l'XML resta nel pacchetto come file generico
+            ET.SubElement(multi_layer_tile_source, "name").text = f"SkyFi-{order['orderCode']} {location}"
 
             layers = ET.SubElement(multi_layer_tile_source, "layers")
 
@@ -2599,7 +2602,9 @@ class MilSimCompanionPlugin(Plugin):
             ET.SubElement(google_tiles, "maxZoom").text = "22"
             ET.SubElement(google_tiles, "tileType").text = "jpg"
             ET.SubElement(google_tiles, "tileUpdate").text = "None"
-            ET.SubElement(google_tiles, "url").text = unquote("http://mt1.google.com/vt/lyrs=y&amp;x={$x}&amp;y={$y}&amp;z={$z}")
+            # & letterale: è ElementTree a fare l'escape in serializzazione
+            # (l'unquote upstream non decodeva le entity e produceva &amp;amp;)
+            ET.SubElement(google_tiles, "url").text = "http://mt1.google.com/vt/lyrs=y&x={$x}&y={$y}&z={$z}"
 
             skyfi_tiles = ET.SubElement(layers, "customMapSource")
             ET.SubElement(skyfi_tiles, "name").text = f"SkyFi-{order['orderCode']} {location}"
@@ -2613,11 +2618,28 @@ class MilSimCompanionPlugin(Plugin):
 
             xml_path = os.path.join(app.config.get("UPLOAD_FOLDER"), f"{package_name}.xml")
             with open(xml_path, "w") as f:
+                f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
                 f.write(ET.tostring(multi_layer_tile_source).decode("UTF-8"))
 
-            create_data_package_zip(xml_path)
+            data_package_hash = create_data_package_zip(xml_path)
 
-            return jsonify({"success": True, "name": package_name}), 200
+            try:
+                os.remove(xml_path)
+            except OSError:
+                pass
+
+            # save_data_package_to_db di OTS sovrascrive creator_uid con eud_uid
+            # (sempre None qui) e può lasciare submission_user nullo: registra
+            # esplicitamente l'utente corrente come mittente del pacchetto
+            data_package = db.session.execute(
+                db.session.query(DataPackage).filter_by(hash=data_package_hash)
+            ).scalar()
+            if data_package:
+                data_package.submission_user = current_user.id
+                data_package.creator_uid = current_user.username
+                db.session.commit()
+
+            return jsonify({"success": True, "name": package_name, "hash": data_package_hash}), 200
         except BaseException as e:
             logger.error(f"Failed to create data package for {uid}: {e}")
             logger.error(traceback.format_exc())
