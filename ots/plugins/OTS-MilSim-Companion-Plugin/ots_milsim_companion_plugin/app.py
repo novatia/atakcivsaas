@@ -2508,6 +2508,22 @@ class MilSimCompanionPlugin(Plugin):
                     {"success": False, "error": "La sessione non è terminata: usa prima Annulla/Termina"}
                 ), 400
             title = match.title
+
+            # Pulizia best-effort: rimanda le cancellazioni dei marker della
+            # sessione (già inviate alla chiusura) per gli EUD rientrati dopo
+            # la fine o per residui di sessioni precedenti
+            try:
+                targets = engine.resolve_targets(match)
+                items = []
+                for entry in json.loads(match.cot_uids_json or "[]"):
+                    delete = cot.delete_event(entry["uid"], entry["cot_type"] or "a-u-G")
+                    items.append((delete, engine.audience_targets(targets, entry.get("audience", "all"))))
+                    if targets is not None:
+                        items.append((delete, None))
+                cot.deliver(items)
+            except BaseException as cleanup_error:
+                logger.warning(f"MilSim: pulizia marker sessione {match_id} fallita: {cleanup_error}")
+
             db.session.delete(match)
             db.session.commit()
             logger.info(f"MilSim: sessione '{title}' eliminata dallo storico da {current_user.username}")

@@ -193,6 +193,15 @@
     <label>Osservatori (vedono tutto: es. il gruppo headquarter/admin)
       <select id="play-observers"></select>
     </label>
+    <div id="play-active-block" class="hidden" style="border:1px solid var(--maybe); border-radius:6px; padding:8px 10px; display:flex; flex-direction:column; gap:6px">
+      <div id="play-active-list" style="font-size:12.5px"></div>
+      <label style="flex-direction:row; align-items:center; gap:6px; color:var(--text)">
+        <input type="radio" name="play-active-choice" value="end" checked style="width:auto">
+        ⏹ Termina le sessioni attive prima di iniziare (marker rimossi dagli EUD)</label>
+      <label style="flex-direction:row; align-items:center; gap:6px; color:var(--text)">
+        <input type="radio" name="play-active-choice" value="overlap" style="width:auto">
+        Sovrapponi: la nuova sessione convive con quelle attive</label>
+    </div>
     <p class="muted" style="margin:0">I gruppi sono i <b>gruppi ATAK</b> definiti sul server (pagina Groups di OTS).
       Senza selezione la missione viene trasmessa a <b>tutti</b> gli EUD collegati. Con i gruppi: lo <b>spawn A</b>
       lo vede solo il Team A (+ osservatori), lo <b>spawn B</b> solo il Team B; bandiere, bomb site, punti di
@@ -1292,7 +1301,7 @@ async function deleteTemplate(id, title) {
 // Il Play apre il modal di preparazione: scelta dei destinatari tra i GRUPPI
 // ATAK definiti sul server (pagina Groups di OTS) o broadcast a tutti; il
 // timer parte solo con 🚦. Precompilato con la mappatura della tab Team.
-let PLAY_TPL = null, ATAK_GROUPS = [];
+let PLAY_TPL = null, ATAK_GROUPS = [], PLAY_ACTIVE = [];
 
 function groupOption(g, selectedId) {
   return `<option value="${g.id}" ${g.id === selectedId ? "selected" : ""}>${esc(g.name)} (${g.eud_count} EUD)</option>`;
@@ -1301,11 +1310,23 @@ function groupOption(g, selectedId) {
 async function playTemplate(id, btn) {
   const t = TEMPLATES.find(x => x.id === id);
   if (!t) return;
-  let cfg = {};
+  let cfg = {}, allMatches = [];
   try {
-    [ATAK_GROUPS, cfg] = await Promise.all([api("/groups"), api("/config")]);
+    [ATAK_GROUPS, cfg, allMatches] = await Promise.all([api("/groups"), api("/config"), api("/matches")]);
   } catch (e) { return toast("Errore caricamento gruppi ATAK: " + e.message, false); }
   PLAY_TPL = t;
+  // Sessioni ancora attive: al conferma si sceglie se terminarle o sovrapporre
+  PLAY_ACTIVE = allMatches.filter(m => m.status === "ready" || m.status === "running");
+  const activeBlock = document.getElementById("play-active-block");
+  if (PLAY_ACTIVE.length) {
+    document.getElementById("play-active-list").innerHTML =
+      `⚠️ ${PLAY_ACTIVE.length === 1 ? "C'è già una sessione attiva" : "Ci sono già " + PLAY_ACTIVE.length + " sessioni attive"}: ` +
+      PLAY_ACTIVE.map(m => `<b>${esc(m.title)}</b> (${m.status === "running" ? "in corso" : "pronta"})`).join(", ");
+    activeBlock.querySelector('input[value="end"]').checked = true;
+    activeBlock.classList.remove("hidden");
+  } else {
+    activeBlock.classList.add("hidden");
+  }
   const mode = REGISTRY.modes[t.mode];
   document.getElementById("play-info").textContent =
     `${t.title} — ${mode.name}, ${t.duration_minutes} min · ${t.markers.length} marker, ${t.zones.length} aree` +
@@ -1340,6 +1361,19 @@ async function confirmPlay() {
   btn.disabled = true;
   btn.textContent = "Push in corso…";
   try {
+    // Sessioni attive: se si è scelto di non sovrapporre, prima le chiude
+    // (Termina/Annulla rimuove anche i loro marker dagli EUD)
+    if (PLAY_ACTIVE.length) {
+      const choice = document.querySelector('input[name="play-active-choice"]:checked');
+      if (choice && choice.value === "end") {
+        btn.textContent = "Chiusura sessioni attive…";
+        for (const m of PLAY_ACTIVE) {
+          await api(`/matches/${m.id}/end`, { method: "POST" });
+        }
+        toast(`${PLAY_ACTIVE.length === 1 ? "Sessione attiva terminata" : PLAY_ACTIVE.length + " sessioni attive terminate"}.`);
+        btn.textContent = "Push in corso…";
+      }
+    }
     const res = await api(`/templates/${PLAY_TPL.id}/play`, { method: "POST", body: {
       team_a_id: teamA ? +teamA : null,
       team_b_id: teamB ? +teamB : null,
