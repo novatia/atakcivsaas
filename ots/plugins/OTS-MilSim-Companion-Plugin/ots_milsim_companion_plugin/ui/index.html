@@ -121,7 +121,7 @@
   .match-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   .countdown { font-size: 20px; font-variant-numeric: tabular-nums; font-weight: 700; }
   .mode-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
-  .mode-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .mode-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; overflow: hidden; min-width: 0; }
   .mode-card ul { margin: 6px 0 0; padding-left: 18px; line-height: 1.7; }
   /* ---- SkyFi (ordini) e Missioni Data Sync ---- */
   .orders-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
@@ -1861,11 +1861,11 @@ async function renderTeams() {
       <h2 style="margin:0">👥 ${esc(g.name)} <span class="muted">· ${g.eud_count} EUD</span>
         ${g.id === defA ? '<span class="pill err">TEAM A</span>' : ""}${g.id === defB ? '<span class="pill ok" style="background:#1E88E5">TEAM B</span>' : ""}${defObsAll.includes(g.id) ? '<span class="pill neutral">👁 OSSERVATORI</span>' : ""}</h2>
       ${g.description ? `<p class="muted" style="margin:4px 0 0">${esc(g.description)}</p>` : ""}
-      ${g.members.length ? `<table style="margin-top:8px"><tbody>
+      ${g.members.length ? `<table style="margin-top:8px; table-layout:fixed; width:100%"><colgroup><col><col style="width:96px"></colgroup><tbody>
         ${g.members.map(m => `<tr>
-          <td><strong>${esc(m.callsign || m.username || "?")}</strong> <span class="muted">${esc(m.username || "")}</span><br>
+          <td style="overflow-wrap:anywhere"><strong>${esc(m.callsign || m.username || "?")}</strong> <span class="muted">${esc(m.username || "")}</span><br>
             <span class="muted" style="font-size:11.5px">${m.uid ? esc(m.uid) : "nessun EUD registrato per l'utente"}</span></td>
-          <td class="muted" style="text-align:right; white-space:nowrap">${fmtDT(m.last_event_time)}</td>
+          <td class="muted" style="text-align:right; font-size:12px">${fmtDT(m.last_event_time)}</td>
         </tr>`).join("")}
       </tbody></table>` : '<p class="muted" style="margin:8px 0 0">Nessun utente nel gruppo.</p>'}
     </div>`).join("");
