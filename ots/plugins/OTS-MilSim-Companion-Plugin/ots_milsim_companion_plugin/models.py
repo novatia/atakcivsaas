@@ -254,6 +254,9 @@ class GameTemplate(db.Model):
     markers_json = db.Column(Text, nullable=False, default="[]")   # [{type,label,lat,lon}]
     zones_json = db.Column(Text, nullable=False, default="[]")     # [{type,label,points:[[lat,lon],…]}]
     packages_json = db.Column(Text, nullable=False, default="[]")  # [hash data package OTS]
+    # Al Play crea anche una missione Data Sync collegata alla partita, così
+    # l'admin può definirne i dataset e assegnarla ai team con l'invito
+    create_mission = db.Column(Boolean, nullable=False, default=False)
     created_at = db.Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -268,6 +271,7 @@ class GameTemplate(db.Model):
             "markers": _loads(self.markers_json, []),
             "zones": _loads(self.zones_json, []),
             "packages": _loads(self.packages_json, []),
+            "create_mission": bool(self.create_mission),
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -305,9 +309,11 @@ class GameMatch(db.Model):
     # Null/vuoto = broadcast a tutti gli EUD (comportamento storico). Con i team,
     # i CoT viaggiano mirati sull'exchange "dms" di OTS: gli spawn li vede solo
     # il proprio team (+ osservatori), il resto tutti i coinvolti.
-    team_a_id = db.Column(Integer, nullable=True)   # teams.id di OTS
-    team_b_id = db.Column(Integer, nullable=True)   # teams.id di OTS
-    observers_json = db.Column(Text, nullable=False, default="[]")  # [teams.id osservatori]
+    team_a_id = db.Column(Integer, nullable=True)   # groups.id di OTS
+    team_b_id = db.Column(Integer, nullable=True)   # groups.id di OTS
+    observers_json = db.Column(Text, nullable=False, default="[]")  # [groups.id osservatori]
+    # Missione Data Sync creata al Play (se il template ha create_mission)
+    mission_name = db.Column(String(255), nullable=True)
     snapshot_json = db.Column(Text, nullable=False, default="{}")
     cot_uids_json = db.Column(Text, nullable=False, default="[]")  # [{uid, cot_type, audience}]
 
@@ -331,6 +337,7 @@ class GameMatch(db.Model):
             "team_a_id": self.team_a_id,
             "team_b_id": self.team_b_id,
             "observer_team_ids": _loads(self.observers_json, []),
+            "mission_name": self.mission_name,
             "remaining_seconds": max(0, remaining) if (self.status == "running" and remaining is not None) else 0,
             "expired": self.status == "running" and remaining is not None and remaining <= 0,
             "snapshot": _loads(self.snapshot_json, {}),

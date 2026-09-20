@@ -113,11 +113,17 @@ ATAK→server, validazione immediata contro l'anagrafica della modalità.
 
 Il ciclo di vita di una partita ha due passi, gestiti dal server:
 
-1. **▶ Play** su un template completo **prepara la missione** (stato *pronta*,
-   link al template in `template_id`): marker e aree vengono pushati come CoT a
-   **tutti gli EUD collegati** (stale provvisorio di 24 h), ogni data package
-   assegnato viene annunciato con un CoT `b-f-t-r` (fileshare) e in **chat
-   generale** esce l'invito a raggiungere gli spawn. Il timer NON parte.
+1. **▶ Play** su un template completo **prepara la partita** (stato *pronta*,
+   link al template in `template_id`): marker e aree vengono pushati come CoT
+   ai destinatari (stale provvisorio di 24 h), ogni data package assegnato
+   viene annunciato con un CoT `b-f-t-r` (fileshare) e in **chat generale**
+   esce l'invito a raggiungere gli spawn. Il timer NON parte. Se il template
+   ha il flag **🎯 Crea missione**, nasce anche una **missione Data Sync**
+   collegata alla partita (nome `<titolo>-<run>`, salvato in
+   `gm_matches.mission_name`): l'admin può definirne i dataset dal tab
+   Missioni o da ATAK, e con **🎯 Assegna missione** (accanto alla luce verde,
+   nel tab **Sessione**) gli EUD dei team ricevono l'invito `t-x-m-i` con
+   token a iscriversi.
 2. **🚦 Inizia partita** (tab Partite) dà la **luce verde**: annuncio 🟢 in chat,
    `started_at`/`ends_at` fissati, marker ripubblicati con lo stale vero
    (fine partita +2') e da lì **il tempo lo tiene il server**.
@@ -136,7 +142,7 @@ chiude la partita da solo, cancella i marker dagli EUD (`t-x-d-d`) e annuncia
   (`POST /matches/<id>/event`) domani la chiamerà l'orchestratore in campo;
   a tempo scaduto senza esplosione vincono i difensori.
 
-Nella tab Partite: countdown live, eventi di partita, **📡 Ripubblica** (stessi
+Nella tab Sessione: countdown live, eventi di partita, **📡 Ripubblica** (stessi
 UID, per gli EUD entrati dopo), **⏹ Termina / 🚫 Annulla** manuali; nello
 storico esito (vincitore + motivo: tempo/obiettivo/manuale) e **▶ Replay
 partita**: il player su mappa filtrato esattamente sulla finestra
@@ -291,6 +297,7 @@ restano invariate per compatibilità con i config esistenti.
 | `POST /templates/<id>/play` | admin | Prepara la missione (stato *pronta*) e pusha ai destinatari; body opzionale `{"team_a_id", "team_b_id", "observer_team_ids"}` (id della tabella groups di OTS) |
 | `GET /matches` | admin | Partite (pronte, in corso e storico) |
 | `POST /matches/<id>/start` | admin | 🚦 Luce verde: annuncio + timer del server (chiusura automatica) |
+| `POST /matches/<id>/invite` | admin | 🎯 Invita gli EUD dei team alla missione Data Sync della partita |
 | `POST /matches/<id>/event` | admin | Evento arbitro (`{"event": "bomb_planted\|bomb_defused\|bomb_exploded"}`) |
 | `POST /matches/<id>/republish` | admin | Ripubblica marker/aree (stessi UID) |
 | `POST /matches/<id>/end` | admin | Termina/annulla manualmente: cancella i marker dagli EUD |

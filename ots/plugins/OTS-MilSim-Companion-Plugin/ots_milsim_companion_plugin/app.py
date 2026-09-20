@@ -353,6 +353,7 @@ def _template_payload(body: dict) -> tuple[dict | None, str | None]:
         "markers_json": json.dumps(markers),
         "zones_json": json.dumps(zones),
         "packages_json": json.dumps(packages),
+        "create_mission": bool(body.get("create_mission")),
     }, None
 
 
@@ -503,10 +504,12 @@ class MilSimCompanionPlugin(Plugin):
                         ("created_at", "ALTER TABLE gm_matches ADD COLUMN created_at TIMESTAMP"),
                         ("end_reason", "ALTER TABLE gm_matches ADD COLUMN end_reason VARCHAR(32)"),
                         ("winner", "ALTER TABLE gm_matches ADD COLUMN winner VARCHAR(255)"),
-                        # 3.2 -> 3.4: destinatari = team nativi di ATAK (teams.id di OTS)
+                        # 3.2 -> 3.6: destinatari = gruppi ATAK (groups.id di OTS)
                         ("team_a_id", "ALTER TABLE gm_matches ADD COLUMN team_a_id INTEGER"),
                         ("team_b_id", "ALTER TABLE gm_matches ADD COLUMN team_b_id INTEGER"),
                         ("observers_json", "ALTER TABLE gm_matches ADD COLUMN observers_json TEXT"),
+                        # 3.7: missione Data Sync collegata alla partita
+                        ("mission_name", "ALTER TABLE gm_matches ADD COLUMN mission_name VARCHAR(255)"),
                     ):
                         if name not in match_columns:
                             db.session.execute(text(ddl))
@@ -534,6 +537,15 @@ class MilSimCompanionPlugin(Plugin):
                             db.session.commit()
                         except BaseException:
                             db.session.rollback()
+
+                # 3.6 -> 3.7: flag "crea missione" sui template
+                if inspector.has_table("gm_templates"):
+                    template_columns = {c["name"] for c in inspector.get_columns("gm_templates")}
+                    if "create_mission" not in template_columns:
+                        db.session.execute(text("ALTER TABLE gm_templates ADD COLUMN create_mission BOOLEAN"))
+                        db.session.execute(text("UPDATE gm_templates SET create_mission = FALSE WHERE create_mission IS NULL"))
+                        db.session.commit()
+                        logger.info("MilSim: gm_templates migrata (aggiunta colonna create_mission)")
 
                 if legacy:
                     # Un giocatore per ogni account OTS esistente, già associato
@@ -1994,6 +2006,7 @@ class MilSimCompanionPlugin(Plugin):
                 markers_json=template.markers_json,
                 zones_json=template.zones_json,
                 packages_json=template.packages_json,
+                create_mission=template.create_mission,
             )
             db.session.add(copy)
             db.session.commit()
@@ -2100,6 +2113,41 @@ class MilSimCompanionPlugin(Plugin):
             items.extend((event, all_targets) for event in package_events)
 
             mode_name = GAME_MODES[template.mode]["name"]
+
+            # Flag "crea missione" sul template: nasce una missione Data Sync
+            # collegata alla partita, così l'admin può definirne i dataset e
+            # assegnarla ai team con 🎯 Assegna missione
+            if template.create_mission:
+                from opentakserver.models.Mission import Mission
+
+                data_sync_name = skyfi.safe_name(f"{template.title}-{run[:6]}")
+                mission = Mission()
+                mission.name = data_sync_name
+                mission.guid = str(uuid.uuid4())
+                mission.tool = "public"
+                # creator_uid è FK verso euds.uid: il Game Master non è un EUD
+                mission.creator_uid = None
+                mission.create_time = _utcnow()
+                mission.description = f"Partita {template.title} ({mode_name}) — MilSim Companion"
+                mission.group = "__ANON__"
+                mission.default_role = "MISSION_SUBSCRIBER"
+                mission.password_protected = False
+                db.session.add(mission)
+
+                mission_change = MissionChange()
+                mission_change.isFederatedChange = False
+                mission_change.change_type = MissionChange.CREATE_MISSION
+                mission_change.mission_name = data_sync_name
+                mission_change.timestamp = datetime.now(timezone.utc)
+                mission_change.creator_uid = current_user.username
+                mission_change.server_time = datetime.now(timezone.utc)
+                db.session.add(mission_change)
+
+                match.mission_name = data_sync_name
+                items.append(
+                    (cot.mission_announce_event(data_sync_name, mission.guid, "public", _gm_sender_uid()), all_targets)
+                )
+
             chat = (
                 f"🎮 Missione pronta: {template.title} ({mode_name}, {template.duration_minutes} minuti). "
                 f"Raggiungete gli spawn e attendete la luce verde."
@@ -2109,6 +2157,7 @@ class MilSimCompanionPlugin(Plugin):
             items.append((cot.geochat_event(chat, _gm_sender_uid(), _gm_callsign()), all_targets))
 
             if not cot.deliver(items):
+                db.session.rollback()
                 return jsonify(
                     {"success": False, "error": "Push agli EUD fallito (RabbitMQ non raggiungibile): partita non creata"}
                 ), 502
@@ -2266,6 +2315,61 @@ class MilSimCompanionPlugin(Plugin):
         except BaseException as e:
             db.session.rollback()
             logger.error(f"MilSim: failed to start match {match_id}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/matches/<int:match_id>/invite", methods=["POST"])
+    def invite_mission(match_id: int):
+        """🎯 Assegna missione: manda l'invito alla missione Data Sync della
+        partita agli EUD dei team coinvolti (t-x-m-i con token, come gli
+        inviti Marti di OTS): su ATAK compare la richiesta di iscrizione."""
+        try:
+            match = db.session.get(GameMatch, match_id)
+            if not match:
+                return jsonify({"success": False, "error": "Partita non trovata"}), 404
+            if match.status not in ("ready", "running"):
+                return jsonify({"success": False, "error": "La partita è già terminata"}), 400
+            if not match.mission_name:
+                return jsonify({"success": False, "error": "La partita non ha una missione (flag «Crea missione» nel template)"}), 400
+
+            from opentakserver.blueprints.marti_api.mission_marti_api import generate_token
+            from opentakserver.models.Mission import Mission
+
+            mission = db.session.execute(
+                db.session.query(Mission).filter_by(name=match.mission_name)
+            ).scalar()
+            if not mission:
+                return jsonify({"success": False, "error": f"Missione non trovata sul server: {match.mission_name}"}), 404
+
+            targets = engine.resolve_targets(match)
+            if targets is None or not targets["all"]:
+                return jsonify(
+                    {"success": False, "error": "Partita senza gruppi (broadcast): senza Team A/B non so a chi assegnare la missione"}
+                ), 400
+
+            items = []
+            for eud_uid in sorted(targets["all"]):
+                token = generate_token(mission, eud_uid)
+                items.append(
+                    (
+                        cot.mission_invite_event(
+                            mission.name, mission.guid, mission.tool or "public", _gm_sender_uid(), token
+                        ),
+                        {eud_uid},
+                    )
+                )
+            if not cot.deliver(items):
+                return jsonify({"success": False, "error": "Invio inviti fallito (RabbitMQ non raggiungibile)"}), 502
+
+            logger.info(
+                f"MilSim: missione '{mission.name}' assegnata a {len(items)} EUD della partita "
+                f"'{match.title}' da {current_user.username}"
+            )
+            return jsonify({"success": True, "mission": mission.name, "invited": len(items)})
+        except BaseException as e:
+            logger.error(f"MilSim: failed to invite mission for match {match_id}: {e}")
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 500
 

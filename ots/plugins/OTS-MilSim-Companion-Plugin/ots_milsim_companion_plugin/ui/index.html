@@ -272,7 +272,7 @@ function badgeImg(rank, size) {
 const TABS = [
   { id: "events", label: "Eventi", admin: true, render: () => { clearEventHash(); renderEvents(); } },
   { id: "gm_templates", label: "Template missioni", admin: true, render: () => { clearEventHash(); renderTemplates(); } },
-  { id: "gm_matches", label: "Partite", admin: true, render: () => { clearEventHash(); renderMatches(); } },
+  { id: "gm_matches", label: "Sessione", admin: true, render: () => { clearEventHash(); renderMatches(); } },
   { id: "gm_modes", label: "Modalità di gioco", admin: true, render: () => { clearEventHash(); renderModes(); } },
   { id: "gm_teams", label: "Team", admin: true, render: () => { clearEventHash(); renderTeams(); } },
   { id: "skyfi", label: "SkyFi", admin: true, render: () => { clearEventHash(); renderOrders(); } },
@@ -1249,7 +1249,7 @@ async function renderTemplates() {
         <span class="pill neutral">${esc(mode.name)}</span>
       </div>
       <div class="tpl-meta">
-        ⏱ ${t.duration_minutes} min · ${t.markers.length} marker · ${t.zones.length} aree · ${t.packages.length} data package<br>
+        ⏱ ${t.duration_minutes} min · ${t.markers.length} marker · ${t.zones.length} aree · ${t.packages.length} data package${t.create_mission ? " · 🎯 missione" : ""}<br>
         ${legend}
         ${t.description ? "<br>" + esc(t.description) : ""}
         ${playable ? "" : `<br><span class="pill warn" title="${esc(t.play_errors.join("; "))}">incompleto</span> <span class="muted">${esc(t.play_errors[0] || "")}${t.play_errors.length > 1 ? "…" : ""}</span>`}
@@ -1345,7 +1345,7 @@ async function confirmPlay() {
       team_b_id: teamB ? +teamB : null,
       observer_team_ids: observer ? [+observer] : [],
     } });
-    toast(`Missione "${PLAY_TPL.title}" pronta: dai la luce verde da Partite.` + (res.warning ? " ⚠️ " + res.warning : ""), !res.warning);
+    toast(`Missione "${PLAY_TPL.title}" pronta: dai la luce verde dal tab Sessione.` + (res.warning ? " ⚠️ " + res.warning : ""), !res.warning);
     closePlayModal();
     gmGoTab("gm_matches");
   } catch (e) {
@@ -1402,6 +1402,10 @@ async function openEditor(id) {
         </label>
         <label class="field">Durata (minuti)
           <input id="ed-duration" type="number" min="1" max="1440" value="${t ? t.duration_minutes : 30}">
+        </label>
+        <label class="field" style="flex-direction:row; align-items:center; gap:8px" title="Al Play viene creata anche una missione Data Sync collegata alla partita: l'admin può definirne i dataset e assegnarla ai team con 🎯 Assegna missione">
+          <input id="ed-mission" type="checkbox" style="width:auto" ${t && t.create_mission ? "checked" : ""}>
+          <span>🎯 Crea missione (Data Sync) al Play</span>
         </label>
         <label class="field">Descrizione
           <textarea id="ed-desc" rows="2" placeholder="regole, briefing…">${esc(t ? t.description || "" : "")}</textarea>
@@ -1631,6 +1635,7 @@ async function saveTemplate(btn) {
     markers: ED.markers.map(m => ({ type: m.type, label: m.label, lat: m.lat, lon: m.lon })),
     zones: ED.zones.map(z => ({ type: z.type, label: z.label, points: z.points })),
     packages: [...ED.packages],
+    create_mission: document.getElementById("ed-mission").checked,
   };
   btn.disabled = true;
   try {
@@ -1688,11 +1693,13 @@ async function renderMatches() {
     <div class="match-card">
       <div>
         <strong>${mode.icon} ${esc(m.title)}</strong> <span class="pill neutral">pronta</span><br>
-        <span class="muted">${esc(mode.name)} · ${m.duration_minutes} min · preparata ${fmtDT(m.created_at)} da ${esc(m.started_by || "")}<br>${matchGroupsLine(m)}</span>
+        <span class="muted">${esc(mode.name)} · ${m.duration_minutes} min · preparata ${fmtDT(m.created_at)} da ${esc(m.started_by || "")}<br>${matchGroupsLine(m)}${m.mission_name ? ` · 🎯 ${esc(m.mission_name)}` : ""}</span>
       </div>
       <span style="flex:1"></span>
       <button class="btn primary" onclick="startMatch(${m.id}, '${safeTitle(m)}', ${m.duration_minutes}, this)"
         title="Luce verde: annuncio in chat a tutti gli EUD e il server fa partire il timer">🚦 Inizia partita</button>
+      ${m.mission_name ? `<button class="btn" onclick="inviteMission(${m.id}, '${esc(m.mission_name).replace(/'/g, "\\'")}', this)"
+        title="Manda agli EUD dei team l'invito a iscriversi alla missione Data Sync della partita">🎯 Assegna missione</button>` : ""}
       <button class="btn" onclick="republishMatch(${m.id}, this)"
         title="Ripubblica marker e aree agli EUD collegati">📡 Ripubblica</button>
       <button class="btn danger" onclick="endMatch(${m.id}, '${safeTitle(m)}', 'ready', this)"
@@ -1710,10 +1717,12 @@ async function renderMatches() {
     <div class="match-card">
       <div>
         <strong>${mode.icon} ${esc(m.title)}</strong> <span class="pill ${m.expired ? "warn" : "ok"}">${m.expired ? "tempo scaduto" : "in corso"}</span><br>
-        <span class="muted">${esc(mode.name)} · luce verde ${fmtDT(m.started_at)} · fine ${fmtDT(m.ends_at)} · il server chiude da solo allo scadere<br>${matchGroupsLine(m)}</span>
+        <span class="muted">${esc(mode.name)} · luce verde ${fmtDT(m.started_at)} · fine ${fmtDT(m.ends_at)} · il server chiude da solo allo scadere<br>${matchGroupsLine(m)}${m.mission_name ? ` · 🎯 ${esc(m.mission_name)}` : ""}</span>
       </div>
       <div class="countdown" data-ends="${esc(m.ends_at)}">--:--</div>
       <span style="flex:1"></span>
+      ${m.mission_name ? `<button class="btn" onclick="inviteMission(${m.id}, '${esc(m.mission_name).replace(/'/g, "\\'")}', this)"
+        title="Manda agli EUD dei team l'invito a iscriversi alla missione Data Sync della partita">🎯 Assegna missione</button>` : ""}
       ${eventButtons}
       <button class="btn" onclick="republishMatch(${m.id}, this)"
         title="Ripubblica marker e aree: per gli EUD collegati dopo l'inizio">📡 Ripubblica</button>
@@ -1757,6 +1766,19 @@ async function renderMatches() {
   });
   tick();
   if (running.length) MATCH_TIMER = setInterval(tick, 1000);
+}
+
+async function inviteMission(id, missionName, btn) {
+  if (!confirm(`Assegnare la missione "${missionName}" ai team?\n\nGli EUD dei gruppi coinvolti ricevono su ATAK l'invito a iscriversi alla missione Data Sync.`)) return;
+  btn.disabled = true;
+  try {
+    const res = await api(`/matches/${id}/invite`, { method: "POST" });
+    toast(`🎯 Invito alla missione "${res.mission}" mandato a ${res.invited} EUD.`);
+  } catch (e) {
+    toast("Errore: " + e.message, false);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function startMatch(id, title, duration, btn) {

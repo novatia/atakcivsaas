@@ -127,6 +127,39 @@ def fileshare_event(package: dict, sender_url: str, sender_uid: str, callsign: s
     return event
 
 
+def mission_announce_event(name: str, guid: str, tool: str, author_uid: str) -> Element:
+    """t-x-m-n: annuncia agli EUD la creazione di una missione Data Sync
+    (stessa struttura di generate_new_mission_cot di OTS, ma con authorUid
+    del Game Master: il campo creator_uid della missione è FK verso euds.uid
+    e resta null lato DB)."""
+    now = datetime.now(timezone.utc)
+    event = _base_event(str(uuid.uuid4()), "t-x-m-n", now + timedelta(hours=1))
+    _point(event, 0, 0)
+    detail = SubElement(event, "detail")
+    SubElement(detail, "mission", {"type": "CREATE", "tool": tool, "name": name, "guid": guid, "authorUid": author_uid})
+    return event
+
+
+def mission_invite_event(name: str, guid: str, tool: str, author_uid: str, token: str) -> Element:
+    """t-x-m-i: invito alla missione per un singolo EUD (il token JWT è
+    generato da generate_token di OTS per quell'uid). Ruolo SUBSCRIBER
+    (read+write), come gli inviti standard di OTS."""
+    now = datetime.now(timezone.utc)
+    event = _base_event(str(uuid.uuid4()), "t-x-m-i", now + timedelta(hours=1))
+    _point(event, 0, 0)
+    detail = SubElement(event, "detail")
+    mission_tag = SubElement(
+        detail,
+        "mission",
+        {"type": "INVITE", "tool": tool, "name": name, "guid": guid, "authorUid": author_uid, "token": token},
+    )
+    role = SubElement(mission_tag, "role", {"type": "MISSION_SUBSCRIBER"})
+    permissions = SubElement(role, "permissions")
+    SubElement(permissions, "permission", {"type": "MISSION_READ"})
+    SubElement(permissions, "permission", {"type": "MISSION_WRITE"})
+    return event
+
+
 def geochat_event(text: str, sender_uid: str, callsign: str) -> Element:
     """b-t-f su "All Chat Rooms": messaggio in chat generale a tutti gli EUD."""
     now = datetime.now(timezone.utc)
