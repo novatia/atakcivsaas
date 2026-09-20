@@ -39,20 +39,45 @@ def _point(event: Element, lat: float, lon: float) -> None:
     SubElement(
         event,
         "point",
-        {"lat": str(lat), "lon": str(lon), "hae": "0", "ce": "9999999", "le": "9999999"},
+        {"lat": str(lat), "lon": str(lon), "hae": "0.0", "ce": "9999999.0", "le": "9999999.0"},
     )
 
 
-def marker_event(uid: str, marker: dict, stale: datetime, remarks: str = "") -> Element:
+def marker_event(
+    uid: str,
+    marker: dict,
+    stale: datetime,
+    remarks: str = "",
+    sender_uid: str = "",
+    sender_callsign: str = "",
+) -> Element:
     """Marker di partita con lo stesso detail che ATAK-CIV genera per i propri
-    marker (status + usericon): senza <usericon> alcuni client mostrano il
-    marker in elenco (categoria "Other") ma non disegnano il simbolo in mappa."""
+    marker (status, archive, contact, remarks, link al mittente, usericon):
+    con un detail parziale alcuni client mostrano il marker in elenco
+    (categoria "Other") ma non disegnano il simbolo in mappa."""
     mtype = MARKER_TYPES[marker["type"]]
     event = _base_event(uid, mtype["cot_type"], stale)
     _point(event, marker["lat"], marker["lon"])
     detail = SubElement(event, "detail")
     SubElement(detail, "status", {"readiness": "true"})
+    # <archive/>: ATAK lo tratta come marker vero e proprio (sopravvive anche
+    # al riavvio dell'app durante la partita); la rimozione a fine partita
+    # resta affidata al CoT t-x-d-d
+    SubElement(detail, "archive")
     SubElement(detail, "contact", {"callsign": marker.get("label") or mtype["callsign"]})
+    SubElement(detail, "remarks").text = remarks or ""
+    if sender_uid:
+        SubElement(
+            detail,
+            "link",
+            {
+                "uid": sender_uid,
+                "production_time": iso8601_string_from_datetime(datetime.now(timezone.utc)),
+                "type": "a-f-G-U-C",
+                "parent_callsign": sender_callsign or sender_uid,
+                "relation": "p-p",
+            },
+        )
     if mtype["spot"]:
         # Gli spot marker prendono il colore dall'iconsetpath e da <color>
         SubElement(detail, "color", {"argb": str(mtype["argb"])})
@@ -64,8 +89,6 @@ def marker_event(uid: str, marker: dict, stale: datetime, remarks: str = "") -> 
         affiliation = "-".join(mtype["cot_type"].split("-")[:2])  # es. "a-f"
         SubElement(detail, "color", {"argb": "-1"})
         SubElement(detail, "usericon", {"iconsetpath": f"COT_MAPPING_2525C/{affiliation}/{mtype['cot_type']}"})
-    if remarks:
-        SubElement(detail, "remarks").text = remarks
     return event
 
 
@@ -78,6 +101,7 @@ def zone_event(uid: str, zone: dict, stale: datetime, remarks: str = "") -> Elem
     event = _base_event(uid, "u-d-f", stale, how="h-e")
     _point(event, lat, lon)
     detail = SubElement(event, "detail")
+    SubElement(detail, "archive")
     # Poligono chiuso: primo vertice ripetuto in coda
     for p in points + [points[0]]:
         SubElement(detail, "link", {"point": f"{p[0]},{p[1]}"})

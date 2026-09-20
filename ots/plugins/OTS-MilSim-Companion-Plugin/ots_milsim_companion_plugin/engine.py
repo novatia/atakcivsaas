@@ -168,13 +168,14 @@ def finish_match(match: GameMatch, end_reason: str, winner: str | None, chat_tex
     viene chiusa comunque: i marker spariranno con lo stale)."""
     targets = resolve_targets(match)
     uids = json.loads(match.cot_uids_json or "[]")
-    items = [
-        (
-            cot.delete_event(u["uid"], u["cot_type"] or "a-u-G"),
-            audience_targets(targets, u.get("audience", "all")),
-        )
-        for u in uids
-    ]
+    items = []
+    for u in uids:
+        delete = cot.delete_event(u["uid"], u["cot_type"] or "a-u-G")
+        items.append((delete, audience_targets(targets, u.get("audience", "all"))))
+        if targets is not None:
+            # Copia per il cot_parser: ripulisce anche la tabella markers di
+            # OTS (la web map del server), simmetrica alla copia del Play
+            items.append((delete, None))
     items.append(
         (cot.geochat_event(chat_text, _sender_uid(), _callsign()), audience_targets(targets, "all"))
     )

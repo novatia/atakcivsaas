@@ -422,10 +422,16 @@ def _match_items(match: GameMatch, uids: list[dict], targets: dict | None) -> li
     for entry, item in zip(uids, items):
         kind, data = item
         if kind == "marker":
-            event = cot.marker_event(entry["uid"], data, stale, remarks)
+            event = cot.marker_event(entry["uid"], data, stale, remarks, _gm_sender_uid(), _gm_callsign())
         else:
             event = cot.zone_event(entry["uid"], data, stale, remarks)
         result.append((event, engine.audience_targets(targets, entry.get("audience", "all"))))
+        if targets is not None:
+            # Copia di persistenza: passa dal cot_parser così OTS salva il
+            # marker (visibile nella web map del server). OTS la smista solo al
+            # gruppo __ANON__ (EUD di utenti senza gruppi): i team, che i
+            # gruppi li hanno, continuano a vedere solo la propria audience.
+            result.append((event, None))
     return result
 
 
