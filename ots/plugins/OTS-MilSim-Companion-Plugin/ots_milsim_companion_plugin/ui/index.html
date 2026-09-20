@@ -2294,24 +2294,35 @@ function orderCard(o) {
   </div>`;
 }
 
-// Le anteprime sono thumbnail JPEG in cache su disco lato server (generate
-// in batch al caricamento della lista): le carico in sequenza perché alla
-// prima visita di una pagina la generazione può richiedere qualche secondo
-async function loadPreviews(orders) {
-  for (const o of orders) {
-    const uid = o.id || o.orderId;
-    const el = document.getElementById(`preview-${uid}`);
-    if (!el) continue; // cambio pagina nel frattempo
-    try {
-      const res = await fetch(`${API}/orders/${encodeURIComponent(uid)}/image`);
-      if (!res.ok) throw new Error(res.status);
-      const blob = await res.blob();
-      const current = document.getElementById(`preview-${uid}`);
-      if (current) current.innerHTML = `<img src="${URL.createObjectURL(blob)}" alt="anteprima ${esc(o.orderCode)}">`;
-    } catch (e) {
-      const current = document.getElementById(`preview-${uid}`);
-      if (current) current.textContent = "anteprima non disponibile";
+// Le anteprime sono thumbnail JPEG in cache su disco lato server, generate
+// in batch in background: finché una non è pronta il server risponde 202 e
+// qui si riprova dopo qualche secondo, senza bloccare le altre card
+function loadPreviews(orders) {
+  orders.forEach(o => loadPreview(o, 0));
+}
+
+async function loadPreview(o, attempt) {
+  const uid = o.id || o.orderId;
+  const el = document.getElementById(`preview-${uid}`);
+  if (!el) return; // cambio pagina nel frattempo
+  try {
+    const res = await fetch(`${API}/orders/${encodeURIComponent(uid)}/image`);
+    if (res.status === 202) {
+      if (attempt < 20) {
+        el.textContent = "anteprima in preparazione…";
+        setTimeout(() => loadPreview(o, attempt + 1), 6000);
+      } else {
+        el.textContent = "anteprima non disponibile";
+      }
+      return;
     }
+    if (!res.ok) throw new Error(res.status);
+    const blob = await res.blob();
+    const current = document.getElementById(`preview-${uid}`);
+    if (current) current.innerHTML = `<img src="${URL.createObjectURL(blob)}" alt="anteprima ${esc(o.orderCode)}">`;
+  } catch (e) {
+    const current = document.getElementById(`preview-${uid}`);
+    if (current) current.textContent = "anteprima non disponibile";
   }
 }
 

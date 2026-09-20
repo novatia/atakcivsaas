@@ -6,7 +6,6 @@ import mimetypes
 import os
 import pathlib
 import threading
-import time
 import traceback
 import uuid
 import xml.etree.ElementTree as ET
@@ -101,9 +100,14 @@ def _badges_folder() -> str:
 # Lato più lungo delle thumbnail degli ordini SkyFi (le immagini originali
 # possono essere enormi: mai servirle intere alla UI)
 SKYFI_THUMB_MAX_SIDE = 640
+# Oltre questa dimensione l'immagine non viene neanche scaricata (cache negativa)
+SKYFI_THUMB_MAX_DOWNLOAD = 200 * 1024 * 1024
 
 _skyfi_thumbs_lock = threading.Lock()
 _skyfi_thumbs_in_progress: set = set()
+# Una generazione alla volta: il decode di un'immagine satellitare può
+# costare centinaia di MB di RAM, in parallelo metterebbe in ginocchio il server
+_skyfi_thumbs_gate = threading.BoundedSemaphore(1)
 
 
 def _skyfi_thumbs_folder() -> str:
@@ -114,60 +118,86 @@ def _skyfi_thumbs_folder() -> str:
     return folder
 
 
-def _skyfi_thumb_path(folder: str, uid: str) -> str:
+def _skyfi_thumb_paths(folder: str, uid: str) -> tuple[str, str]:
+    """(thumbnail JPEG, marker di cache negativa «niente anteprima»)."""
     safe = "".join(c for c in uid if c.isalnum() or c in "-_")
-    return os.path.join(folder, f"{safe}.jpg")
+    base = os.path.join(folder, safe)
+    return f"{base}.jpg", f"{base}.none"
 
 
-def _generate_skyfi_thumbnail(uid: str, folder: str, headers: dict) -> str | None:
-    """Thumbnail JPEG dell'anteprima ordine, generata una volta sola.
+def _generate_skyfi_thumbnail(uid: str, folder: str, headers: dict) -> None:
+    """Genera la thumbnail JPEG di un ordine e la salva su disco.
 
-    Scarica l'immagine da SkyFi solo alla prima richiesta, la riduce e la
-    salva su disco: da lì in poi si serve la cache. Se un altro thread la
-    sta già generando (batch della lista ordini), attende il file invece
-    di scaricare due volte. Ritorna il path, o None se non disponibile.
+    Gira SOLO in thread di background (mai nel thread della richiesta HTTP:
+    l'endpoint risponde 202 finché il file non c'è). Download in streaming
+    su disco con tetto di dimensione; niente anteprima possibile → marker
+    .none così non si ritenta a ogni caricamento della lista. Gli errori di
+    rete invece non lasciano marker: si ritenterà al prossimo giro.
     """
-    path = _skyfi_thumb_path(folder, uid)
-    if os.path.exists(path):
-        return path
-
+    jpg, none = _skyfi_thumb_paths(folder, uid)
+    if os.path.exists(jpg) or os.path.exists(none):
+        return
     with _skyfi_thumbs_lock:
-        generating = uid in _skyfi_thumbs_in_progress
-        if not generating:
-            _skyfi_thumbs_in_progress.add(uid)
-    if generating:
-        for _ in range(240):
-            time.sleep(0.5)
-            if os.path.exists(path):
-                return path
-            with _skyfi_thumbs_lock:
-                if uid not in _skyfi_thumbs_in_progress:
-                    return path if os.path.exists(path) else None
-        return None
+        if uid in _skyfi_thumbs_in_progress:
+            return
+        _skyfi_thumbs_in_progress.add(uid)
 
+    def _mark_none():
+        with open(none, "w"):
+            pass
+
+    download = f"{jpg}.{uuid.uuid4().hex[:8]}.dl.part"
     try:
-        r = requests.get(f"{skyfi.BASE_URL}/orders/{uid}/image", headers=headers, timeout=120)
-        if r.status_code != 200:
-            return None
-        tmp = f"{path}.{uuid.uuid4().hex[:8]}.part"
-        try:
-            from PIL import Image
+        with _skyfi_thumbs_gate:
+            if os.path.exists(jpg) or os.path.exists(none):
+                return
+            with requests.get(
+                f"{skyfi.BASE_URL}/orders/{uid}/image", headers=headers, timeout=(10, 120), stream=True
+            ) as r:
+                if r.status_code != 200:
+                    _mark_none()
+                    logger.info(f"MilSim/SkyFi: nessuna anteprima per l'ordine {uid} (HTTP {r.status_code})")
+                    return
+                if int(r.headers.get("Content-Length") or 0) > SKYFI_THUMB_MAX_DOWNLOAD:
+                    _mark_none()
+                    logger.info(f"MilSim/SkyFi: anteprima ordine {uid} troppo grande, salto")
+                    return
+                size = 0
+                with open(download, "wb") as f:
+                    for chunk in r.iter_content(256 * 1024):
+                        size += len(chunk)
+                        if size > SKYFI_THUMB_MAX_DOWNLOAD:
+                            _mark_none()
+                            logger.info(f"MilSim/SkyFi: anteprima ordine {uid} oltre il tetto, salto")
+                            return
+                        f.write(chunk)
 
-            # Le anteprime satellitari superano il limite anti-decompression-bomb
-            Image.MAX_IMAGE_PIXELS = max(Image.MAX_IMAGE_PIXELS or 0, 512_000_000)
-            img = Image.open(io.BytesIO(r.content))
-            img.thumbnail((SKYFI_THUMB_MAX_SIDE, SKYFI_THUMB_MAX_SIDE))
-            img.convert("RGB").save(tmp, "JPEG", quality=82)
-        except ImportError:
-            logger.warning("MilSim/SkyFi: Pillow non installato, anteprima in cache senza ridimensionamento")
-            with open(tmp, "wb") as f:
-                f.write(r.content)
-        os.replace(tmp, path)  # atomico: il plugin gira in più processi OTS
-        return path
+            try:
+                from PIL import Image
+            except ImportError:
+                # Senza Pillow si cachea l'originale: meglio di riscaricarlo ogni volta
+                logger.warning("MilSim/SkyFi: Pillow non installato, anteprima in cache senza ridimensionamento")
+                os.replace(download, jpg)
+                return
+            try:
+                img = Image.open(download)  # il limite anti-decompression-bomb di PIL resta attivo
+                img.draft("RGB", (SKYFI_THUMB_MAX_SIDE, SKYFI_THUMB_MAX_SIDE))
+                img.thumbnail((SKYFI_THUMB_MAX_SIDE, SKYFI_THUMB_MAX_SIDE))
+                tmp = f"{jpg}.{uuid.uuid4().hex[:8]}.part"
+                img.convert("RGB").save(tmp, "JPEG", quality=82)
+                os.replace(tmp, jpg)  # atomico: il plugin gira in più processi OTS
+                logger.info(f"MilSim/SkyFi: thumbnail dell'ordine {uid} generata")
+            except BaseException as e:
+                _mark_none()
+                logger.warning(f"MilSim/SkyFi: anteprima ordine {uid} non decodificabile ({e}), salto")
     except BaseException as e:
         logger.error(f"MilSim/SkyFi: thumbnail dell'ordine {uid} fallita: {e}")
-        return None
     finally:
+        if os.path.exists(download):
+            try:
+                os.remove(download)
+            except OSError:
+                pass
         with _skyfi_thumbs_lock:
             _skyfi_thumbs_in_progress.discard(uid)
 
@@ -2783,7 +2813,10 @@ class MilSimCompanionPlugin(Plugin):
                 folder = _skyfi_thumbs_folder()
                 headers = skyfi.headers()
                 uids = [o.get("id") or o.get("orderId") for o in data.get("orders") or []]
-                missing = [u for u in uids if u and not os.path.exists(_skyfi_thumb_path(folder, u))]
+                missing = [
+                    u for u in uids
+                    if u and not any(os.path.exists(p) for p in _skyfi_thumb_paths(folder, u))
+                ]
                 if missing:
                     threading.Thread(
                         target=lambda: [_generate_skyfi_thumbnail(u, folder, headers) for u in missing],
@@ -2844,15 +2877,26 @@ class MilSimCompanionPlugin(Plugin):
     @roles_accepted("administrator")
     @blueprint.route("/orders/<uid>/image")
     def get_preview_image(uid: str):
-        """Thumbnail JPEG dell'ordine dalla cache su disco (generata al volo
-        solo se manca; prima serviva l'immagine SkyFi intera in base64 a ogni
-        richiesta, e con le immagini grandi l'anteprima non arrivava mai)."""
+        """Thumbnail JPEG dell'ordine dalla cache su disco.
+
+        Mai lavoro pesante nel thread della richiesta: se la thumbnail non
+        c'è ancora si avvia (o è già in corso) la generazione in background
+        e si risponde 202, la UI riprova da sola dopo qualche secondo.
+        """
         try:
             folder = _skyfi_thumbs_folder()
-            path = _generate_skyfi_thumbnail(uid, folder, skyfi.headers())
-            if not path:
+            jpg, none = _skyfi_thumb_paths(folder, uid)
+            if os.path.exists(jpg):
+                return send_from_directory(folder, os.path.basename(jpg), max_age=604800)
+            if os.path.exists(none):
                 return jsonify({"success": False, "error": "Anteprima non disponibile"}), 404
-            return send_from_directory(folder, os.path.basename(path), max_age=604800)
+            threading.Thread(
+                target=_generate_skyfi_thumbnail,
+                args=(uid, folder, skyfi.headers()),
+                daemon=True,
+                name="skyfi-thumb",
+            ).start()
+            return jsonify({"success": True, "generating": True}), 202
         except BaseException as e:
             logger.error(f"MilSim/SkyFi: anteprima {uid} non servita: {e}")
             return jsonify({"success": False, "error": str(e)}), 500
