@@ -2538,16 +2538,20 @@ class MilSimCompanionPlugin(Plugin):
             except OSError:
                 pass
 
-            # save_data_package_to_db di OTS sovrascrive creator_uid con eud_uid
-            # (sempre None qui) e può lasciare submission_user nullo: registra
-            # esplicitamente l'utente corrente come mittente del pacchetto
-            data_package = db.session.execute(
-                db.session.query(DataPackage).filter_by(hash=data_package_hash)
-            ).scalar()
-            if data_package:
-                data_package.submission_user = current_user.id
-                data_package.creator_uid = current_user.username
-                db.session.commit()
+            # save_data_package_to_db di OTS può lasciare submission_user nullo:
+            # registra esplicitamente l'utente corrente come mittente ("User"
+            # nel popup di ATAK). creator_uid NON va toccato: è una FK verso
+            # euds.uid, valorizzarlo con lo username fa fallire il commit
+            try:
+                data_package = db.session.execute(
+                    db.session.query(DataPackage).filter_by(hash=data_package_hash)
+                ).scalar()
+                if data_package:
+                    data_package.submission_user = current_user.id
+                    db.session.commit()
+            except BaseException as e:
+                db.session.rollback()
+                logger.warning(f"MilSim/SkyFi: mittente non registrato sul data package {package_name}: {e}")
 
             return jsonify({"success": True, "name": package_name, "hash": data_package_hash}), 200
         except BaseException as e:
