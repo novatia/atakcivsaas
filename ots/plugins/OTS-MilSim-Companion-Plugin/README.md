@@ -147,10 +147,13 @@ partita**: il player su mappa filtrato esattamente sulla finestra
 I team sono quelli **nativi di ATAK**: ogni giocatore sceglie il colore
 squadra sul proprio telefono (ATAK: Impostazioni → Callsign → **My Team**) e
 il server lo vede da solo dal `<__group>` delle posizioni (tabella `teams` di
-OTS + `EUD.team_id`) — **nessuna anagrafica da mantenere**. Il tab **Team**
-mostra in sola lettura i team e i loro EUD.
+OTS + `EUD.team_id`) — **nessuna anagrafica da mantenere**.
 
-Al Play si scelgono i team della missione:
+Nel tab **Team** si configura la **mappatura dei ruoli**: quale colore ATAK è
+il Team A, quale il Team B e quali sono gli osservatori broadcast (salvata in
+`config.yml`); sotto, i team visti dal server con i loro EUD per il controllo
+pre-partita. Il pannello del **Play si apre già precompilato** con questa
+mappatura, modificabile per la singola partita:
 
 - **Team A / Team B** (due colori ATAK): lo spawn di un team lo vede **solo
   quel team** (+ osservatori) — il Team B non sa dove spawna il Team A;
@@ -257,6 +260,9 @@ restano invariate per compatibilità con i config esistenti.
 | `OTS_EVENTCALENDAR_GM_CALLSIGN` | `Game Master` | Firma di marker, chat e fileshare al Play |
 | `OTS_EVENTCALENDAR_GM_SERVER_ADDRESS` | `""` | Hostname/IP per i download dei data package (vuoto = host della web UI) |
 | `OTS_SKYFI_PLUGIN_API_KEY` | `""` | API key SkyFi (stessa chiave del vecchio OTS-SkyFi-Plugin) |
+| `OTS_EVENTCALENDAR_GM_TEAM_A_ID` | `0` | Team ATAK di default del Team A (id `teams` di OTS, 0 = non impostato) |
+| `OTS_EVENTCALENDAR_GM_TEAM_B_ID` | `0` | Team ATAK di default del Team B |
+| `OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS` | `[]` | Team ATAK osservatori broadcast di default |
 
 ## API (prefisso `/api/plugins/ots_milsim_companion_plugin`)
 

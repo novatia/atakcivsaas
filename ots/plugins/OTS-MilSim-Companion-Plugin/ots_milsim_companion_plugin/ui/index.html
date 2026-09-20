@@ -1301,21 +1301,25 @@ function teamDot(t) {
 async function playTemplate(id, btn) {
   const t = TEMPLATES.find(x => x.id === id);
   if (!t) return;
+  let cfg = {};
   try {
-    ATAK_TEAMS = await api("/teams");
+    [ATAK_TEAMS, cfg] = await Promise.all([api("/teams"), api("/config")]);
   } catch (e) { return toast("Errore caricamento team ATAK: " + e.message, false); }
   PLAY_TPL = t;
   const mode = REGISTRY.modes[t.mode];
   document.getElementById("play-info").textContent =
     `${t.title} — ${mode.name}, ${t.duration_minutes} min · ${t.markers.length} marker, ${t.zones.length} aree` +
     (t.packages.length ? `, ${t.packages.length} data package` : "");
-  const withMembers = ATAK_TEAMS.filter(tm => tm.members.length);
-  const options = `<option value="">— tutti (broadcast) —</option>` +
-    withMembers.map(tm => `<option value="${tm.id}">${esc(tm.name)} (${tm.members.length} EUD)</option>`).join("");
-  document.getElementById("play-team-a").innerHTML = options;
-  document.getElementById("play-team-b").innerHTML = options;
-  document.getElementById("play-observers").innerHTML = withMembers.length
-    ? withMembers.map(tm => `<label><input type="checkbox" value="${tm.id}"> ${teamDot(tm)} ${esc(tm.name)} <span class="muted">(${tm.members.length} EUD)</span></label>`).join("")
+  // Precompilato con la mappatura salvata nella tab Team, modificabile qui
+  const defA = cfg.OTS_EVENTCALENDAR_GM_TEAM_A_ID || 0;
+  const defB = cfg.OTS_EVENTCALENDAR_GM_TEAM_B_ID || 0;
+  const defObs = cfg.OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS || [];
+  const options = sel => `<option value="">— tutti (broadcast) —</option>` +
+    ATAK_TEAMS.map(tm => teamOption(tm, sel)).join("");
+  document.getElementById("play-team-a").innerHTML = options(defA);
+  document.getElementById("play-team-b").innerHTML = options(defB);
+  document.getElementById("play-observers").innerHTML = ATAK_TEAMS.length
+    ? ATAK_TEAMS.map(tm => `<label><input type="checkbox" value="${tm.id}" ${defObs.includes(tm.id) ? "checked" : ""}> ${teamDot(tm)} ${esc(tm.name)} <span class="muted">(${tm.members.length} EUD)</span></label>`).join("")
     : '<span class="muted">Nessun team ATAK: i giocatori devono impostare il colore squadra sul telefono.</span>';
   const confirmBtn = document.getElementById("play-confirm-btn");
   confirmBtn.disabled = false;
@@ -1812,20 +1816,31 @@ async function endMatch(id, title, status, btn) {
   }
 }
 
-/* ---- Tab Team: i team nativi di ATAK (sola lettura) ---- */
+/* ---- Tab Team: mappatura ruoli (Team A/B/osservatori) sui team nativi di ATAK ---- */
+function teamOption(t, selectedId) {
+  return `<option value="${t.id}" ${t.id === selectedId ? "selected" : ""}>${esc(t.name)} (${t.members.length} EUD)</option>`;
+}
+
 async function renderTeams() {
   const el = document.getElementById("content");
   el.innerHTML = "Caricamento team ATAK…";
+  let cfg = {};
   try {
-    ATAK_TEAMS = await api("/teams");
+    [ATAK_TEAMS, cfg] = await Promise.all([api("/teams"), api("/config")]);
   } catch (e) {
     el.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
     return;
   }
+  const defA = cfg.OTS_EVENTCALENDAR_GM_TEAM_A_ID || 0;
+  const defB = cfg.OTS_EVENTCALENDAR_GM_TEAM_B_ID || 0;
+  const defObs = cfg.OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS || [];
+  const options = sel => `<option value="">— non impostato —</option>` + ATAK_TEAMS.map(t => teamOption(t, sel)).join("");
+
   const withMembers = ATAK_TEAMS.filter(t => t.members.length);
   const cards = withMembers.map(t => `
     <div class="mode-card">
-      <h2 style="margin:0">${teamDot(t)} ${esc(t.name)} <span class="muted">· ${t.members.length} EUD</span></h2>
+      <h2 style="margin:0">${teamDot(t)} ${esc(t.name)} <span class="muted">· ${t.members.length} EUD</span>
+        ${t.id === defA ? '<span class="pill err">TEAM A</span>' : ""}${t.id === defB ? '<span class="pill ok" style="background:#1E88E5">TEAM B</span>' : ""}${defObs.includes(t.id) ? '<span class="pill neutral">👁 OSSERVATORI</span>' : ""}</h2>
       <table style="margin-top:8px"><tbody>
         ${t.members.map(m => `<tr>
           <td><strong>${esc(m.callsign || m.uid)}</strong> <span class="muted">${esc(m.team_role || "")}</span><br>
@@ -1836,16 +1851,45 @@ async function renderTeams() {
     </div>`).join("");
 
   el.innerHTML = `
-    <div class="toolbar">
-      <button class="btn" onclick="renderTeams()">↻ Aggiorna</button>
-      <span class="muted">Questi sono i <b>team nativi di ATAK</b>: ogni giocatore sceglie il colore squadra sul proprio
-        telefono (ATAK: Impostazioni → Callsign → My Team) e il server lo vede da solo — niente anagrafica da mantenere.
-        Al Play scegli quale colore è il Team A, quale il Team B e i team osservatori (es. il colore degli admin/HQ):
-        lo spawn di un team lo vede solo quel team, il resto va a tutti i coinvolti. I cambi di squadra valgono subito
-        («Ripubblica» a partita in corso).</span>
-    </div>
+    <h2>Mappatura team di gioco</h2>
+    <p class="muted" style="margin-top:0">I team sono quelli <b>nativi di ATAK</b>: ogni giocatore sceglie il colore
+      squadra sul telefono (ATAK: Impostazioni → Callsign → My Team) e il server lo vede da solo. Qui decidi quale
+      colore è il <b>Team A</b>, quale il <b>Team B</b> e quali sono gli <b>osservatori broadcast</b> che vedono tutto
+      (es. il colore di admin/headquarter): al Play il pannello si apre già con questa mappatura, modificabile per la
+      singola partita.</p>
+    <form class="inline" id="team-map-form">
+      <label>Team A <select id="map-team-a">${options(defA)}</select></label>
+      <label>Team B <select id="map-team-b">${options(defB)}</select></label>
+      <label>Osservatori (vedono tutto)
+        <div class="pkg-list" id="map-observers" style="max-height:110px; min-width:220px">
+          ${ATAK_TEAMS.length ? ATAK_TEAMS.map(t => `<label><input type="checkbox" value="${t.id}" ${defObs.includes(t.id) ? "checked" : ""}> ${teamDot(t)} ${esc(t.name)} <span class="muted">(${t.members.length} EUD)</span></label>`).join("")
+            : '<span class="muted">Nessun team ATAK ancora visto dal server.</span>'}
+        </div>
+      </label>
+      <button class="btn primary" type="submit">💾 Salva mappatura</button>
+    </form>
+    <h3>Team ATAK visti dal server</h3>
     ${withMembers.length ? `<div class="mode-grid">${cards}</div>`
-      : "<p class='muted'>Nessun EUD ha ancora trasmesso un colore squadra: imposta «My Team» sugli ATAK e collega i dispositivi.</p>"}`;
+      : "<p class='muted'>Nessun EUD ha ancora trasmesso un colore squadra: imposta «My Team» sugli ATAK e collega i dispositivi.</p>"}
+    <p class="muted">I cambi di squadra sui telefoni valgono subito («Ripubblica» a partita in corso).
+      <button class="btn small" onclick="renderTeams()">↻ Aggiorna</button></p>`;
+
+  document.getElementById("team-map-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const a = +document.getElementById("map-team-a").value || 0;
+    const b = +document.getElementById("map-team-b").value || 0;
+    const obs = [...document.querySelectorAll("#map-observers input:checked")].map(c => +c.value);
+    if (a && a === b) return toast("Team A e Team B non possono essere lo stesso team ATAK.", false);
+    try {
+      await api("/config", { method: "POST", body: {
+        OTS_EVENTCALENDAR_GM_TEAM_A_ID: a,
+        OTS_EVENTCALENDAR_GM_TEAM_B_ID: b,
+        OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS: obs,
+      } });
+      toast("Mappatura salvata: il Play si aprirà già configurato così.");
+      renderTeams();
+    } catch (err) { toast("Errore salvataggio: " + err.message, false); }
+  };
 }
 
 /* ---- Tab Modalità di gioco (anagrafica + config Game Master) ---- */

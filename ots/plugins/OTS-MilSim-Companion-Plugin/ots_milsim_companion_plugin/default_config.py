@@ -27,6 +27,12 @@ class DefaultConfig:
     # API key SkyFi (app.skyfi.com → Profile → API Key): stessa chiave del vecchio
     # OTS-SkyFi-Plugin, così i config.yml esistenti continuano a funzionare
     OTS_SKYFI_PLUGIN_API_KEY = ""
+    # Mappatura di default dei team ATAK (id della tabella teams di OTS),
+    # configurata dalla tab Team e precompilata nel pannello del Play.
+    # 0 = non impostato (broadcast a tutti se non si sceglie nulla al Play).
+    OTS_EVENTCALENDAR_GM_TEAM_A_ID = 0
+    OTS_EVENTCALENDAR_GM_TEAM_B_ID = 0
+    OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS = []
 
     @staticmethod
     def validate(config: dict) -> dict:
@@ -47,6 +53,12 @@ class DefaultConfig:
                         return {"success": False, "error": f"{value} is not a valid IANA timezone"}
                 if key in ("OTS_EVENTCALENDAR_GM_CALLSIGN", "OTS_EVENTCALENDAR_GM_SERVER_ADDRESS", "OTS_SKYFI_PLUGIN_API_KEY") and not isinstance(value, str):
                     return {"success": False, "error": f"{key} should be a string"}
+                if key in ("OTS_EVENTCALENDAR_GM_TEAM_A_ID", "OTS_EVENTCALENDAR_GM_TEAM_B_ID") and (not isinstance(value, int) or value < 0):
+                    return {"success": False, "error": f"{key} should be a non-negative integer (0 = non impostato)"}
+                if key == "OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS" and (
+                    not isinstance(value, list) or not all(isinstance(v, int) and v > 0 for v in value)
+                ):
+                    return {"success": False, "error": f"{key} should be a list of team ids"}
 
             return {"success": True, "error": ""}
         except BaseException as e:
