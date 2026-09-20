@@ -98,12 +98,18 @@ Resa su ATAK/WinTAK (simbologia nativa dove i colori coincidono):
 
 ### Template di missione ed editor su mappa
 
-Tab **Template missioni**: titolo, descrizione, modalità, durata, data package da
-annunciare al Play, e l'**editor su mappa** (Leaflet da CDN, layer OSM +
+Tab **Template missioni**: titolo, descrizione, modalità, durata, **campo da
+gioco** opzionale (dall'anagrafica: centra la mappa dell'editor sul campo, con
+📍, così non si cerca ogni volta), data package da annunciare al Play, e
+l'**editor su mappa** (Leaflet da CDN, layer OSM +
 satellite Esri — serve internet nel browser): si clicca il tipo di marker
 nella palette e poi sulla mappa; i marker si trascinano, le aree si disegnano
 a vertici. La palette mostra i conteggi rispetto ai limiti della modalità e il
 template si può salvare anche incompleto (il Play però richiede i minimi).
+Dalla card del template, **👁 Anteprima** mostra su mappa marker, aree e campo
+senza aprire l'editor. Con «🎯 Crea missione» attivo, i data package del
+template non vengono fileshareati al Play ma finiscono tra i **contenuti della
+missione Data Sync**: i giocatori li ricevono iscrivendosi (🎯 Assegna missione).
 
 Si è scelto l'editing da browser invece dei data package con nomi standard:
 meno passaggi e meno errori per l'utente finale, nessun round-trip

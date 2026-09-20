@@ -147,8 +147,8 @@
   .kw { display: inline-block; background: var(--tab); border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px; font-size: 11px; color: var(--muted); margin-right: 4px; }
   .pcn-status { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px;
     margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
-  #modal-backdrop, #play-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
-  #modal-backdrop.hidden, #play-backdrop.hidden { display: none; }
+  #modal-backdrop, #play-backdrop, #tpl-preview-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
+  #modal-backdrop.hidden, #play-backdrop.hidden, #tpl-preview-backdrop.hidden { display: none; }
   .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; width: min(420px, 92vw); display: flex; flex-direction: column; gap: 12px; }
   .modal h2 { margin: 0; }
   .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
@@ -216,6 +216,15 @@
     <div class="modal-actions">
       <button class="btn" onclick="closePlayModal()">Annulla</button>
       <button class="btn primary" id="play-confirm-btn" onclick="confirmPlay()">📡 Prepara missione</button>
+    </div>
+  </div>
+</div>
+<div id="tpl-preview-backdrop" class="hidden" onclick="closeTplPreview()">
+  <div class="modal" style="width:min(760px, 94vw)" onclick="event.stopPropagation()">
+    <h2 id="tpl-preview-title">Anteprima</h2>
+    <div id="tpl-preview-map" style="height:min(60vh, 480px); min-height:320px; border:1px solid var(--border); border-radius:8px"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeTplPreview()">Chiudi</button>
     </div>
   </div>
 </div>
@@ -1265,6 +1274,7 @@ async function renderTemplates() {
         <span class="pill neutral">${esc(mode.name)}</span>
       </div>
       <div class="tpl-meta">
+        ${t.field ? `📍 ${esc(t.field.name)}<br>` : ""}
         ⏱ ${t.duration_minutes} min · ${t.markers.length} marker · ${t.zones.length} aree · ${t.packages.length} data package${t.create_mission ? " · 🎯 missione" : ""}<br>
         ${legend}
         ${t.description ? "<br>" + esc(t.description) : ""}
@@ -1273,6 +1283,8 @@ async function renderTemplates() {
       <div class="tpl-actions">
         <button class="btn primary" ${playable ? "" : "disabled"} onclick="playTemplate(${t.id}, this)"
           title="${playable ? "Crea la partita e pusha marker, aree e data package a tutti gli EUD collegati" : esc(t.play_errors.join("; "))}">▶ Play</button>
+        ${t.markers.length || t.zones.length || t.field ? `<button class="btn" onclick="previewTemplate(${t.id})"
+          title="Anteprima su mappa: marker, aree e campo da gioco">👁 Anteprima</button>` : ""}
         <button class="btn" onclick="openEditor(${t.id})">✏️ Modifica</button>
         <button class="btn" onclick="duplicateTemplate(${t.id})" title="Crea una copia del template">⧉ Duplica</button>
         <button class="btn danger" onclick="deleteTemplate(${t.id}, '${esc(t.title).replace(/'/g, "\\'")}')">🗑</button>
@@ -1286,6 +1298,68 @@ async function renderTemplates() {
       <span class="muted">Un template descrive una missione: modalità, durata, marker e aree su mappa, data package da annunciare al Play.</span>
     </div>
     ${TEMPLATES.length ? `<div class="tpl-grid">${cards}</div>` : "<p class='muted'>Nessun template: creane uno con «Nuovo template».</p>"}`;
+}
+
+/* ---- Anteprima template su mappa (sola lettura) ---- */
+let TPL_PREVIEW_MAP = null;
+
+async function previewTemplate(id) {
+  const t = TEMPLATES.find(x => x.id === id);
+  if (!t) return;
+  try {
+    await ensureRegistry();
+    await loadLeaflet();
+  } catch (e) { return toast(e.message, false); }
+  const wrapLon = lon => ((lon + 180) % 360 + 360) % 360 - 180;
+
+  document.getElementById("tpl-preview-title").innerHTML =
+    `👁 ${esc(t.title)}${t.field ? ` <span class="muted" style="font-size:13px">— 📍 ${esc(t.field.name)}</span>` : ""}`;
+  document.getElementById("tpl-preview-backdrop").classList.remove("hidden");
+
+  if (TPL_PREVIEW_MAP) { try { TPL_PREVIEW_MAP.remove(); } catch (e) {} TPL_PREVIEW_MAP = null; }
+  const map = L.map("tpl-preview-map");
+  TPL_PREVIEW_MAP = map;
+  const layers = baseLayers();
+  L.control.layers(layers).addTo(map);
+  layers["Mappa (OSM)"].addTo(map);
+
+  const bounds = [];
+  t.markers.forEach(m => {
+    const mt = REGISTRY.marker_types[m.type];
+    if (!mt) return;
+    const lon = wrapLon(m.lon);
+    L.marker([m.lat, lon], {
+      icon: L.divIcon({ className: "", html: `<span class="map-shape ${mt.shape}" style="--c:${mt.color}"></span>`, iconSize: [16, 16], iconAnchor: [8, 8] }),
+    }).addTo(map).bindTooltip(m.label || mt.callsign, { direction: "top", offset: [0, -8] });
+    bounds.push([m.lat, lon]);
+  });
+  t.zones.forEach(z => {
+    const zt = REGISTRY.zone_types[z.type];
+    if (!zt) return;
+    const points = z.points.map(p => [p[0], wrapLon(p[1])]);
+    L.polygon(points, { color: zt.color, weight: 3, fillOpacity: 0.18, interactive: false }).addTo(map);
+    points.forEach(p => bounds.push(p));
+  });
+  if (t.field && t.field.latitude != null && t.field.longitude != null) {
+    L.marker([t.field.latitude, t.field.longitude], {
+      icon: L.divIcon({ className: "", html: "📍", iconSize: [20, 20], iconAnchor: [10, 18] }),
+    }).addTo(map).bindTooltip(t.field.name);
+    bounds.push([t.field.latitude, t.field.longitude]);
+  }
+
+  const fit = () => {
+    if (bounds.length) map.fitBounds(L.latLngBounds(bounds).pad(0.25));
+    else if (t.map && t.map.lat != null) map.setView([t.map.lat, t.map.lon], t.map.zoom || 15);
+    else map.setView([45.0, 9.7], 6);
+  };
+  fit();
+  // Il contenitore del modal è appena comparso: rimisura e ricentra
+  setTimeout(() => { map.invalidateSize(); fit(); }, 150);
+}
+
+function closeTplPreview() {
+  document.getElementById("tpl-preview-backdrop").classList.add("hidden");
+  if (TPL_PREVIEW_MAP) { try { TPL_PREVIEW_MAP.remove(); } catch (e) {} TPL_PREVIEW_MAP = null; }
 }
 
 async function duplicateTemplate(id) {
@@ -1406,7 +1480,7 @@ async function openEditor(id) {
   try {
     await ensureRegistry();
     await loadLeaflet();
-    PACKAGES = await api("/datapackages");
+    [PACKAGES, FIELDS] = await Promise.all([api("/datapackages"), api("/fields")]);
   } catch (e) {
     el.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
     return;
@@ -1443,6 +1517,13 @@ async function openEditor(id) {
               `<option value="${k}" ${ED.mode === k ? "selected" : ""}>${m.icon} ${esc(m.name)}</option>`).join("")}
           </select>
         </label>
+        <label class="field" title="Opzionale: selezionandolo la mappa si centra sul campo (dall'anagrafica Campi da gioco)">Campo da gioco
+          <select id="ed-field" onchange="edFieldChanged(this.value)">
+            <option value="">— nessuno —</option>
+            ${FIELDS.filter(f => f.active || (t && f.id === t.field_id)).map(f =>
+              `<option value="${f.id}" ${t && t.field_id === f.id ? "selected" : ""}>${esc(f.name)}</option>`).join("")}
+          </select>
+        </label>
         <label class="field">Durata (minuti)
           <input id="ed-duration" type="number" min="1" max="1440" value="${t ? t.duration_minutes : 30}">
         </label>
@@ -1468,25 +1549,32 @@ async function openEditor(id) {
               <td class="size">${fmtBytes(p.size)}</td>
             </tr>`).join("")}</tbody></table></div>`
             : '<p class="muted" style="margin:4px 0">Nessun data package sul server.</p>'}
-          <p class="muted" style="margin:6px 0 0; font-size:12px">Al Play gli EUD ricevono la proposta di download (fileshare) di ogni package selezionato.</p>
+          <p class="muted" style="margin:6px 0 0; font-size:12px">Al Play gli EUD ricevono la proposta di download (fileshare) di ogni package selezionato.
+            Con «🎯 Crea missione» attivo, i package finiscono invece tra i <b>contenuti della missione</b>:
+            i giocatori li scaricano iscrivendosi (🎯 Assegna missione).</p>
         </div>
       </div>
       <div id="gm-map"></div>
     </div>`;
 
-  // Mappa: centro salvato nel template, altrimenti fit sui marker, altrimenti Italia
+  // Mappa: centro salvato nel template, altrimenti fit sui marker, altrimenti
+  // il campo da gioco assegnato, altrimenti Italia
   const map = L.map("gm-map");
   ED.map = map;
   const layers = baseLayers();
   L.control.layers(layers).addTo(map);
   layers["Mappa (OSM)"].addTo(map);
+  const tplField = t && t.field_id ? FIELDS.find(f => f.id === t.field_id) : null;
   if (t && t.map && t.map.lat != null && t.map.lon != null) {
     map.setView([t.map.lat, t.map.lon], t.map.zoom || 15);
   } else if (ED.markers.length) {
     map.fitBounds(L.latLngBounds(ED.markers.map(m => [m.lat, m.lon])).pad(0.3));
+  } else if (tplField && tplField.latitude != null && tplField.longitude != null) {
+    map.setView([tplField.latitude, tplField.longitude], 16);
   } else {
     map.setView([45.0, 9.7], 6);
   }
+  if (tplField) edFieldPin(tplField);
   // Container appena inserito nel DOM (iframe/tab): rimisura come per il replay
   setTimeout(() => map.invalidateSize(), 150);
   map.on("click", e => mapClick(e.latlng));
@@ -1494,6 +1582,27 @@ async function openEditor(id) {
   ED.markers.forEach(m => addMarkerLayer(m));
   ED.zones.forEach(z => addZoneLayer(z));
   renderPalette();
+}
+
+// Cambio campo da gioco nell'editor: centra la mappa sul campo e mostra il 📍
+function edFieldChanged(fieldId) {
+  const field = FIELDS.find(f => f.id === +fieldId);
+  if (ED.fieldPin) { try { ED.map.removeLayer(ED.fieldPin); } catch (e) {} ED.fieldPin = null; }
+  if (!field) return;
+  edFieldPin(field);
+  if (field.latitude != null && field.longitude != null) {
+    ED.map.setView([field.latitude, field.longitude], Math.max(ED.map.getZoom(), 16));
+  } else {
+    toast("Il campo non ha coordinate in anagrafica: aggiungile in Campi da gioco per il centraggio.", false);
+  }
+}
+
+function edFieldPin(field) {
+  if (!ED.map || field.latitude == null || field.longitude == null) return;
+  ED.fieldPin = L.marker([field.latitude, field.longitude], {
+    icon: L.divIcon({ className: "", html: "📍", iconSize: [20, 20], iconAnchor: [10, 18] }),
+    interactive: false,
+  }).addTo(ED.map);
 }
 
 function modeDef() { return REGISTRY.modes[ED.mode]; }
@@ -1682,6 +1791,7 @@ async function saveTemplate(btn) {
     title: title,
     description: document.getElementById("ed-desc").value.trim(),
     mode: ED.mode,
+    field_id: +document.getElementById("ed-field").value || null,
     duration_minutes: +document.getElementById("ed-duration").value,
     map: { lat: +center.lat.toFixed(6), lon: +center.lng.toFixed(6), zoom: ED.map.getZoom() },
     markers: ED.markers.map(m => ({ type: m.type, label: m.label, lat: m.lat, lon: m.lon })),

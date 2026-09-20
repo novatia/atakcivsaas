@@ -248,6 +248,9 @@ class GameTemplate(db.Model):
     description = db.Column(Text, nullable=True)
     mode = db.Column(String(32), nullable=False)
     duration_minutes = db.Column(Integer, nullable=False, default=30)
+    # Campo da gioco (anagrafica ec_game_fields), opzionale: centra la mappa
+    # dell'editor sul campo e abilita l'anteprima del template
+    field_id = db.Column(Integer, ForeignKey("ec_game_fields.id"), nullable=True)
     map_lat = db.Column(Float, nullable=True)
     map_lon = db.Column(Float, nullable=True)
     map_zoom = db.Column(Integer, nullable=True)
@@ -257,6 +260,8 @@ class GameTemplate(db.Model):
     # Al Play crea anche una missione Data Sync collegata alla partita, così
     # l'admin può definirne i dataset e assegnarla ai team con l'invito
     create_mission = db.Column(Boolean, nullable=False, default=False)
+
+    field = relationship("GameField")
     created_at = db.Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -267,6 +272,8 @@ class GameTemplate(db.Model):
             "description": self.description,
             "mode": self.mode,
             "duration_minutes": self.duration_minutes,
+            "field_id": self.field_id,
+            "field": self.field.serialize() if self.field else None,
             "map": {"lat": self.map_lat, "lon": self.map_lon, "zoom": self.map_zoom},
             "markers": _loads(self.markers_json, []),
             "zones": _loads(self.zones_json, []),

@@ -426,8 +426,16 @@ def _template_payload(body: dict) -> tuple[dict | None, str | None]:
     packages = [h for h in (body.get("packages") or []) if isinstance(h, str)]
     map_conf = body.get("map") or {}
 
+    # Campo da gioco opzionale (anagrafica ec_game_fields)
+    field_id = body.get("field_id") or None
+    if field_id is not None:
+        field_id = int(field_id)
+        if not db.session.get(GameField, field_id):
+            return None, "Campo da gioco non trovato"
+
     return {
         "title": title,
+        "field_id": field_id,
         "description": body.get("description"),
         "mode": mode,
         "duration_minutes": duration,
@@ -517,6 +525,67 @@ def _match_items(match: GameMatch, uids: list[dict], targets: dict | None) -> li
             # gruppi li hanno, continuano a vedere solo la propria audience.
             result.append((event, None))
     return result
+
+
+def _attach_packages_to_mission(mission, hashes: list[str], username: str) -> list[str]:
+    """Aggancia i data package OTS come contenuti della missione Data Sync
+    (stesso flusso dell'assegnazione SkyFi: MissionContent dedup per hash +
+    MissionContentMission + MissionChange ADD_CONTENT). Nessuna copia file:
+    i package stanno già in UPLOAD_FOLDER/<hash>.zip, dove /Marti/sync/content
+    li serve. Niente CoT di notifica: al Play nessun EUD è ancora iscritto,
+    i contenuti arrivano all'iscrizione. Ritorna gli hash non trovati."""
+    missing = []
+    for file_hash in hashes:
+        package = db.session.execute(db.session.query(DataPackage).filter_by(hash=file_hash)).scalar()
+        if not package:
+            missing.append(file_hash)
+            continue
+
+        content = db.session.execute(
+            db.session.query(MissionContent).filter_by(hash=file_hash)
+        ).scalar()
+        if not content:
+            content = MissionContent()
+            content.mime_type = "application/zip"
+            content.filename = package.filename
+            content.submission_time = datetime.now(timezone.utc)
+            content.submitter = username
+            content.uid = str(uuid.uuid4())
+            content.creator_uid = username
+            content.size = package.size
+            content.expiration = -1
+            content.keywords = ["milsim", "datapackage"]
+            content.hash = file_hash
+            db.session.execute(insert(MissionContent).values(**content.serialize()))
+            db.session.commit()
+            content = db.session.execute(
+                db.session.query(MissionContent).filter_by(hash=file_hash)
+            ).scalar()
+
+        already = db.session.execute(
+            db.session.query(MissionContentMission).filter_by(
+                mission_content_id=content.id, mission_name=mission.name
+            )
+        ).first()
+        if already:
+            continue
+
+        link = MissionContentMission()
+        link.mission_name = mission.name
+        link.mission_content_id = content.id
+        db.session.add(link)
+
+        change = MissionChange()
+        change.isFederatedChange = False
+        change.change_type = MissionChange.ADD_CONTENT
+        change.content_uid = content.uid
+        change.mission_name = mission.name
+        change.timestamp = datetime.now(timezone.utc)
+        change.creator_uid = username
+        change.server_time = datetime.now(timezone.utc)
+        db.session.add(change)
+    db.session.commit()
+    return missing
 
 
 def _package_events(hashes: list[str]) -> tuple[list, list[str]]:
@@ -636,6 +705,11 @@ class MilSimCompanionPlugin(Plugin):
                         db.session.execute(text("UPDATE gm_templates SET create_mission = FALSE WHERE create_mission IS NULL"))
                         db.session.commit()
                         logger.info("MilSim: gm_templates migrata (aggiunta colonna create_mission)")
+                    # 3.12: campo da gioco (opzionale) sul template
+                    if "field_id" not in template_columns:
+                        db.session.execute(text("ALTER TABLE gm_templates ADD COLUMN field_id INTEGER"))
+                        db.session.commit()
+                        logger.info("MilSim: gm_templates migrata (aggiunta colonna field_id)")
 
                 if legacy:
                     # Un giocatore per ogni account OTS esistente, già associato
@@ -912,6 +986,16 @@ class MilSimCompanionPlugin(Plugin):
                         {
                             "success": False,
                             "error": "Il campo ha eventi associati: disattivalo invece di eliminarlo",
+                        }
+                    ),
+                    400,
+                )
+            if db.session.query(GameTemplate).filter_by(field_id=field_id).first():
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": "Il campo è usato da un template missione: disattivalo invece di eliminarlo",
                         }
                     ),
                     400,
@@ -2090,6 +2174,7 @@ class MilSimCompanionPlugin(Plugin):
                 description=template.description,
                 mode=template.mode,
                 duration_minutes=template.duration_minutes,
+                field_id=template.field_id,
                 map_lat=template.map_lat,
                 map_lon=template.map_lon,
                 map_zoom=template.map_zoom,
@@ -2197,10 +2282,15 @@ class MilSimCompanionPlugin(Plugin):
                     {"success": False, "error": "I team selezionati non hanno nessun EUD: i giocatori devono impostare il colore squadra su ATAK"}
                 ), 400
             items = _match_items(match, uids, targets)
-
-            package_events, missing = _package_events(snapshot.get("packages", []))
             all_targets = engine.audience_targets(targets, "all")
-            items.extend((event, all_targets) for event in package_events)
+
+            # Data package: col flag «Crea missione» finiscono tra i contenuti
+            # della missione (agganciati dopo il commit, sotto); altrimenti
+            # fileshare diretto agli EUD come sempre
+            missing, package_count = [], len(snapshot.get("packages", []))
+            if not template.create_mission:
+                package_events, missing = _package_events(snapshot.get("packages", []))
+                items.extend((event, all_targets) for event in package_events)
 
             mode_name = GAME_MODES[template.mode]["name"]
 
@@ -2255,10 +2345,22 @@ class MilSimCompanionPlugin(Plugin):
             db.session.add(match)
             db.session.commit()
 
+            # Con «Crea missione» i package vanno nei contenuti della missione
+            # (dopo il commit: le righe contenuto referenziano la missione)
+            if template.create_mission and match.mission_name:
+                mission_ref = db.session.execute(
+                    db.session.query(Mission).filter_by(name=match.mission_name)
+                ).scalar()
+                if mission_ref:
+                    missing = _attach_packages_to_mission(
+                        mission_ref, snapshot.get("packages", []), current_user.username
+                    )
+
             logger.info(
                 f"MilSim: missione '{match.title}' ({mode_name}) preparata da {current_user.username}: "
                 f"{len(snapshot['markers'])} marker, {len(snapshot['zones'])} aree, "
-                f"{len(package_events)} data package annunciati"
+                f"{package_count} data package "
+                + ("nella missione Data Sync" if template.create_mission else "annunciati via fileshare")
             )
             result = {"success": True, "match": match.serialize()}
             if missing:
