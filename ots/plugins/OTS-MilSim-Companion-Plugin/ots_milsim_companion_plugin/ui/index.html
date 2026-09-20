@@ -1827,13 +1827,17 @@ async function renderTeams() {
   }
   const defA = cfg.OTS_EVENTCALENDAR_GM_TEAM_A_ID || 0;
   const defB = cfg.OTS_EVENTCALENDAR_GM_TEAM_B_ID || 0;
-  const defObs = (cfg.OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS || [])[0] || 0;
+  const defObsAll = cfg.OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS || [];
+  const defObs = defObsAll[0] || 0;
   const options = (sel, none) => `<option value="">${none}</option>` + ATAK_GROUPS.map(g => groupOption(g, sel)).join("");
 
-  const cards = ATAK_GROUPS.map(g => `
+  // Le card mostrano solo i gruppi mappati (Team A/B/osservatori): gli altri
+  // gruppi del server restano selezionabili dai menu ma non fanno rumore qui
+  const mapped = ATAK_GROUPS.filter(g => g.id === defA || g.id === defB || defObsAll.includes(g.id));
+  const cards = mapped.map(g => `
     <div class="mode-card">
       <h2 style="margin:0">👥 ${esc(g.name)} <span class="muted">· ${g.eud_count} EUD</span>
-        ${g.id === defA ? '<span class="pill err">TEAM A</span>' : ""}${g.id === defB ? '<span class="pill ok" style="background:#1E88E5">TEAM B</span>' : ""}${g.id === defObs ? '<span class="pill neutral">👁 OSSERVATORI</span>' : ""}</h2>
+        ${g.id === defA ? '<span class="pill err">TEAM A</span>' : ""}${g.id === defB ? '<span class="pill ok" style="background:#1E88E5">TEAM B</span>' : ""}${defObsAll.includes(g.id) ? '<span class="pill neutral">👁 OSSERVATORI</span>' : ""}</h2>
       ${g.description ? `<p class="muted" style="margin:4px 0 0">${esc(g.description)}</p>` : ""}
       ${g.members.length ? `<table style="margin-top:8px"><tbody>
         ${g.members.map(m => `<tr>
@@ -1857,9 +1861,11 @@ async function renderTeams() {
       <label>Osservatori (vedono tutto) <select id="map-observers">${options(defObs, "— nessuno —")}</select></label>
       <button class="btn primary" type="submit">💾 Salva mappatura</button>
     </form>
-    <h3>Gruppi ATAK sul server</h3>
-    ${ATAK_GROUPS.length ? `<div class="mode-grid">${cards}</div>`
-      : "<p class='muted'>Nessun gruppo ATAK definito: creali dalla web UI di OpenTAKServer (Groups) e assegna gli utenti.</p>"}
+    <h3>Gruppi selezionati</h3>
+    ${mapped.length ? `<div class="mode-grid">${cards}</div>`
+      : ATAK_GROUPS.length
+        ? "<p class='muted'>Nessun gruppo mappato: scegli Team A, Team B e osservatori dai menu qui sopra e salva.</p>"
+        : "<p class='muted'>Nessun gruppo ATAK definito: creali dalla web UI di OpenTAKServer (Groups) e assegna gli utenti.</p>"}
     <p class="muted">Gli EUD di un gruppo sono i dispositivi degli utenti assegnati; i cambi valgono subito
       («Ripubblica» a partita in corso).
       <button class="btn small" onclick="renderTeams()">↻ Aggiorna</button></p>`;

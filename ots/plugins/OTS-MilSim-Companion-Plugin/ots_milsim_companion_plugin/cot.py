@@ -44,15 +44,26 @@ def _point(event: Element, lat: float, lon: float) -> None:
 
 
 def marker_event(uid: str, marker: dict, stale: datetime, remarks: str = "") -> Element:
+    """Marker di partita con lo stesso detail che ATAK-CIV genera per i propri
+    marker (status + usericon): senza <usericon> alcuni client mostrano il
+    marker in elenco (categoria "Other") ma non disegnano il simbolo in mappa."""
     mtype = MARKER_TYPES[marker["type"]]
     event = _base_event(uid, mtype["cot_type"], stale)
     _point(event, marker["lat"], marker["lon"])
     detail = SubElement(event, "detail")
+    SubElement(detail, "status", {"readiness": "true"})
     SubElement(detail, "contact", {"callsign": marker.get("label") or mtype["callsign"]})
-    SubElement(detail, "color", {"argb": str(mtype["argb"])})
     if mtype["spot"]:
-        # Gli spot marker prendono il colore dall'iconsetpath, non da <color>
+        # Gli spot marker prendono il colore dall'iconsetpath e da <color>
+        SubElement(detail, "color", {"argb": str(mtype["argb"])})
         SubElement(detail, "usericon", {"iconsetpath": f"COT_MAPPING_SPOTMAP/b-m-p-s-m/{mtype['argb']}"})
+    else:
+        # Simbologia 2525 nativa: il colore lo dà l'affiliazione (rombo rosso
+        # ostile, quadrato blu amico, giallo sconosciuto), <color> resta -1
+        # come nei marker piazzati da ATAK
+        affiliation = "-".join(mtype["cot_type"].split("-")[:2])  # es. "a-f"
+        SubElement(detail, "color", {"argb": "-1"})
+        SubElement(detail, "usericon", {"iconsetpath": f"COT_MAPPING_2525C/{affiliation}/{mtype['cot_type']}"})
     if remarks:
         SubElement(detail, "remarks").text = remarks
     return event
