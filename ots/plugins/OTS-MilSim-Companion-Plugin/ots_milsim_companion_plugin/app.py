@@ -1,4 +1,3 @@
-import base64
 import csv
 import hashlib
 import io
@@ -6,6 +5,8 @@ import json
 import mimetypes
 import os
 import pathlib
+import threading
+import time
 import traceback
 import uuid
 import xml.etree.ElementTree as ET
@@ -95,6 +96,80 @@ def _badges_folder() -> str:
         os.rename(legacy, folder)
     os.makedirs(folder, exist_ok=True)
     return folder
+
+
+# Lato più lungo delle thumbnail degli ordini SkyFi (le immagini originali
+# possono essere enormi: mai servirle intere alla UI)
+SKYFI_THUMB_MAX_SIDE = 640
+
+_skyfi_thumbs_lock = threading.Lock()
+_skyfi_thumbs_in_progress: set = set()
+
+
+def _skyfi_thumbs_folder() -> str:
+    folder = os.path.join(
+        app.config.get("OTS_DATA_FOLDER"), "plugins", "ots_milsim_companion_plugin", "skyfi_thumbs"
+    )
+    os.makedirs(folder, exist_ok=True)
+    return folder
+
+
+def _skyfi_thumb_path(folder: str, uid: str) -> str:
+    safe = "".join(c for c in uid if c.isalnum() or c in "-_")
+    return os.path.join(folder, f"{safe}.jpg")
+
+
+def _generate_skyfi_thumbnail(uid: str, folder: str, headers: dict) -> str | None:
+    """Thumbnail JPEG dell'anteprima ordine, generata una volta sola.
+
+    Scarica l'immagine da SkyFi solo alla prima richiesta, la riduce e la
+    salva su disco: da lì in poi si serve la cache. Se un altro thread la
+    sta già generando (batch della lista ordini), attende il file invece
+    di scaricare due volte. Ritorna il path, o None se non disponibile.
+    """
+    path = _skyfi_thumb_path(folder, uid)
+    if os.path.exists(path):
+        return path
+
+    with _skyfi_thumbs_lock:
+        generating = uid in _skyfi_thumbs_in_progress
+        if not generating:
+            _skyfi_thumbs_in_progress.add(uid)
+    if generating:
+        for _ in range(240):
+            time.sleep(0.5)
+            if os.path.exists(path):
+                return path
+            with _skyfi_thumbs_lock:
+                if uid not in _skyfi_thumbs_in_progress:
+                    return path if os.path.exists(path) else None
+        return None
+
+    try:
+        r = requests.get(f"{skyfi.BASE_URL}/orders/{uid}/image", headers=headers, timeout=120)
+        if r.status_code != 200:
+            return None
+        tmp = f"{path}.{uuid.uuid4().hex[:8]}.part"
+        try:
+            from PIL import Image
+
+            # Le anteprime satellitari superano il limite anti-decompression-bomb
+            Image.MAX_IMAGE_PIXELS = max(Image.MAX_IMAGE_PIXELS or 0, 512_000_000)
+            img = Image.open(io.BytesIO(r.content))
+            img.thumbnail((SKYFI_THUMB_MAX_SIDE, SKYFI_THUMB_MAX_SIDE))
+            img.convert("RGB").save(tmp, "JPEG", quality=82)
+        except ImportError:
+            logger.warning("MilSim/SkyFi: Pillow non installato, anteprima in cache senza ridimensionamento")
+            with open(tmp, "wb") as f:
+                f.write(r.content)
+        os.replace(tmp, path)  # atomico: il plugin gira in più processi OTS
+        return path
+    except BaseException as e:
+        logger.error(f"MilSim/SkyFi: thumbnail dell'ordine {uid} fallita: {e}")
+        return None
+    finally:
+        with _skyfi_thumbs_lock:
+            _skyfi_thumbs_in_progress.discard(uid)
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -2600,6 +2675,20 @@ class MilSimCompanionPlugin(Plugin):
                     else:
                         data["orders"] = [o for o in orders if (o.get("id") or o.get("orderId")) not in hidden]
                 data["hidden_total"] = len(hidden)
+
+                # Batch in background: pre-genera le thumbnail mancanti degli
+                # ordini in pagina, così la UI le trova già in cache su disco
+                folder = _skyfi_thumbs_folder()
+                headers = skyfi.headers()
+                uids = [o.get("id") or o.get("orderId") for o in data.get("orders") or []]
+                missing = [u for u in uids if u and not os.path.exists(_skyfi_thumb_path(folder, u))]
+                if missing:
+                    threading.Thread(
+                        target=lambda: [_generate_skyfi_thumbnail(u, folder, headers) for u in missing],
+                        daemon=True,
+                        name="skyfi-thumbs-batch",
+                    ).start()
+
                 return jsonify(data)
 
             logger.error(f"Failed to get orders: {r.text}")
@@ -2653,10 +2742,18 @@ class MilSimCompanionPlugin(Plugin):
     @roles_accepted("administrator")
     @blueprint.route("/orders/<uid>/image")
     def get_preview_image(uid: str):
-        r = requests.get(f"{skyfi.BASE_URL}/orders/{uid}/image", headers=skyfi.headers(), timeout=60)
-        if r.status_code == 200:
-            return f"data:image/png;base64,{base64.b64encode(r.content).decode('UTF-8')}", 200
-        return jsonify({"success": False, "error": f"Image download failed with status code {r.status_code}"}), r.status_code
+        """Thumbnail JPEG dell'ordine dalla cache su disco (generata al volo
+        solo se manca; prima serviva l'immagine SkyFi intera in base64 a ogni
+        richiesta, e con le immagini grandi l'anteprima non arrivava mai)."""
+        try:
+            folder = _skyfi_thumbs_folder()
+            path = _generate_skyfi_thumbnail(uid, folder, skyfi.headers())
+            if not path:
+                return jsonify({"success": False, "error": "Anteprima non disponibile"}), 404
+            return send_from_directory(folder, os.path.basename(path), max_age=604800)
+        except BaseException as e:
+            logger.error(f"MilSim/SkyFi: anteprima {uid} non servita: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
     @roles_accepted("administrator")

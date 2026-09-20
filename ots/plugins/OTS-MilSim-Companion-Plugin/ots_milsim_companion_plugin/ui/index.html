@@ -2184,8 +2184,9 @@ function orderCard(o) {
   </div>`;
 }
 
-// Le anteprime passano dal backend (CORS) come data-URI: le carico in sequenza
-// per non aprire troppe richieste verso SkyFi in parallelo
+// Le anteprime sono thumbnail JPEG in cache su disco lato server (generate
+// in batch al caricamento della lista): le carico in sequenza perché alla
+// prima visita di una pagina la generazione può richiedere qualche secondo
 async function loadPreviews(orders) {
   for (const o of orders) {
     const uid = o.id || o.orderId;
@@ -2194,9 +2195,9 @@ async function loadPreviews(orders) {
     try {
       const res = await fetch(`${API}/orders/${encodeURIComponent(uid)}/image`);
       if (!res.ok) throw new Error(res.status);
-      const dataUri = await res.text();
+      const blob = await res.blob();
       const current = document.getElementById(`preview-${uid}`);
-      if (current) current.innerHTML = `<img src="${dataUri}" alt="anteprima ${esc(o.orderCode)}">`;
+      if (current) current.innerHTML = `<img src="${URL.createObjectURL(blob)}" alt="anteprima ${esc(o.orderCode)}">`;
     } catch (e) {
       const current = document.getElementById(`preview-${uid}`);
       if (current) current.textContent = "anteprima non disponibile";
