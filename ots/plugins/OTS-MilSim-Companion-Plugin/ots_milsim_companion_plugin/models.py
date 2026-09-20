@@ -359,6 +359,31 @@ class EngineLease(db.Model):
     heartbeat = db.Column(DateTime, nullable=True)
 
 
+class SkyfiHiddenOrder(db.Model):
+    """Ordini SkyFi rimossi logicamente dalla tab SkyFi.
+
+    Su SkyFi gli ordini non si possono cancellare (es. pending che non
+    verranno mai evasi): qui si tiene l'elenco degli uid da non mostrare
+    più in GET /orders. Ripristinabili in ogni momento.
+    """
+
+    __tablename__ = "ec_skyfi_hidden_orders"
+
+    id = db.Column(Integer, primary_key=True)
+    order_uid = db.Column(String(255), nullable=False, unique=True)
+    order_code = db.Column(String(255), nullable=True)
+    hidden_by = db.Column(String(255), nullable=True)
+    hidden_at = db.Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    def serialize(self):
+        return {
+            "order_uid": self.order_uid,
+            "order_code": self.order_code,
+            "hidden_by": self.hidden_by,
+            "hidden_at": self.hidden_at.isoformat() + "Z" if self.hidden_at else None,
+        }
+
+
 PLUGIN_TABLES = [
     GameField.__table__,
     Player.__table__,
@@ -370,4 +395,5 @@ PLUGIN_TABLES = [
     GameTemplate.__table__,
     GameMatch.__table__,
     EngineLease.__table__,
+    SkyfiHiddenOrder.__table__,
 ]

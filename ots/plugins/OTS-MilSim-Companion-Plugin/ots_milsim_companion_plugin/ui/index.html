@@ -1986,7 +1986,7 @@ function fmtCost(cents) {
 }
 
 /* ---- Tab SkyFi (ordini) ---- */
-let PAGE = 0, PAGE_SIZE = 9, SEARCH = "", TOTAL = 0;
+let PAGE = 0, PAGE_SIZE = 9, SEARCH = "", TOTAL = 0, SHOW_HIDDEN = false;
 let ORDERS_BY_UID = {};
 
 // La delivery passa per vari stati SkyFi: verde = consegnato, rosso = fallito
@@ -2024,6 +2024,11 @@ async function renderOrders() {
       </label>
       <button class="btn primary">Cerca</button>
       <button class="btn" type="button" onclick="loadOrders()">↻ Aggiorna</button>
+      <label class="inline" style="flex-direction:row; align-items:center; gap:6px"
+             title="Mostra anche gli ordini rimossi dalla lista (rimozione logica)">
+        <input type="checkbox" ${SHOW_HIDDEN ? "checked" : ""}
+               onchange="SHOW_HIDDEN = this.checked; PAGE = 0; loadOrders();"> Mostra rimossi
+      </label>
       <span id="orders-total" class="muted"></span>
     </form>
     <div id="orders-box">Caricamento ordini…</div>
@@ -2051,7 +2056,7 @@ async function loadOrders() {
   box.textContent = "Caricamento ordini…";
   let data;
   try {
-    data = await api(`/orders?page=${PAGE}&page_size=${PAGE_SIZE}${SEARCH ? "&search=" + encodeURIComponent(SEARCH) : ""}`);
+    data = await api(`/orders?page=${PAGE}&page_size=${PAGE_SIZE}${SEARCH ? "&search=" + encodeURIComponent(SEARCH) : ""}${SHOW_HIDDEN ? "&show_hidden=1" : ""}`);
   } catch (e) {
     box.innerHTML = `<p>⚠️ ${esc(e.message)}</p><p class="muted">Se non hai ancora inserito l'API key SkyFi, aprila qui sotto in <b>Configurazione SkyFi</b>.</p>`;
     return;
@@ -2059,7 +2064,7 @@ async function loadOrders() {
 
   TOTAL = data.total ?? 0;
   const totalEl = document.getElementById("orders-total");
-  if (totalEl) totalEl.textContent = TOTAL ? `${TOTAL} ordini` : "";
+  if (totalEl) totalEl.textContent = (TOTAL ? `${TOTAL} ordini` : "") + (data.hidden_total ? ` · ${data.hidden_total} rimossi` : "");
   const orders = data.orders || [];
   if (!orders.length) {
     box.innerHTML = "<p>Nessun ordine trovato.</p>";
@@ -2091,7 +2096,7 @@ function orderCard(o) {
   ].filter(Boolean).map(esc).join("<br>");
 
   return `
-  <div class="order-card">
+  <div class="order-card" ${o._hidden ? 'style="opacity:.55"' : ""}>
     <div class="order-preview" id="preview-${esc(uid)}">anteprima…</div>
     <div class="order-body">
       <div class="order-head">
@@ -2108,6 +2113,11 @@ function orderCard(o) {
         ${dls.length ? `<button class="btn" onclick="openMissionModal('${esc(uid)}')"
             title="Aggiunge un asset ai contenuti di una missione Data Sync">🎯 Missione</button>` : ""}
         ${!dls.length && !o.tilesUrl ? '<span class="muted">nessun asset scaricabile (delivery non completata)</span>' : ""}
+        ${o._hidden
+          ? `<button class="btn" onclick="unhideOrder('${esc(uid)}')"
+              title="Rimette l'ordine nella lista">↩ Ripristina</button>`
+          : `<button class="btn" onclick="hideOrder('${esc(uid)}', '${esc(o.orderCode || "")}')"
+              title="Toglie l'ordine dalla lista (rimozione logica: su SkyFi resta, ripristinabile con Mostra rimossi)">🗑 Rimuovi</button>`}
       </div>
     </div>
   </div>`;
@@ -2152,6 +2162,23 @@ async function skyfiDataPackage(btn, uid) {
   } finally {
     btn.disabled = false;
   }
+}
+
+async function hideOrder(uid, orderCode) {
+  if (!confirm(`Rimuovere l'ordine ${orderCode || uid} dalla lista?\nSu SkyFi resta: è solo nascosto qui, ripristinabile con "Mostra rimossi".`)) return;
+  try {
+    await api(`/orders/${encodeURIComponent(uid)}/hide`, { method: "POST", body: { order_code: orderCode } });
+    toast(`Ordine ${orderCode || uid} rimosso dalla lista.`);
+    loadOrders();
+  } catch (e) { toast("Errore rimozione: " + e.message, false); }
+}
+
+async function unhideOrder(uid) {
+  try {
+    await api(`/orders/${encodeURIComponent(uid)}/hide`, { method: "DELETE" });
+    toast("Ordine ripristinato.");
+    loadOrders();
+  } catch (e) { toast("Errore ripristino: " + e.message, false); }
 }
 
 async function saveSkyfiConfig() {

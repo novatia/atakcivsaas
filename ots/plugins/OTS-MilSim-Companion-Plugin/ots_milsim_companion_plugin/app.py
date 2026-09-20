@@ -53,6 +53,7 @@ from .models import (
     Player,
     PlayerScore,
     Rank,
+    SkyfiHiddenOrder,
 )
 
 import importlib.metadata
@@ -2544,7 +2545,20 @@ class MilSimCompanionPlugin(Plugin):
 
             r = requests.get(f"{skyfi.BASE_URL}/orders", headers=skyfi.headers(), params=params, timeout=30)
             if r.status_code == 200:
-                return jsonify(r.json())
+                data = r.json()
+                # Rimozione logica: gli ordini nascosti spariscono dalla lista
+                # (su SkyFi non si possono cancellare). Con show_hidden=1 si
+                # mostrano tutti, marcati con _hidden per il ripristino da UI.
+                hidden = {h.order_uid for h in db.session.query(SkyfiHiddenOrder).all()}
+                if hidden:
+                    orders = data.get("orders") or []
+                    if request.args.get("show_hidden"):
+                        for o in orders:
+                            o["_hidden"] = (o.get("id") or o.get("orderId")) in hidden
+                    else:
+                        data["orders"] = [o for o in orders if (o.get("id") or o.get("orderId")) not in hidden]
+                data["hidden_total"] = len(hidden)
+                return jsonify(data)
 
             logger.error(f"Failed to get orders: {r.text}")
             return jsonify({"success": False, "error": "Controlla l'API key SkyFi e riprova"}), 400
@@ -2564,6 +2578,34 @@ class MilSimCompanionPlugin(Plugin):
         except BaseException as e:
             logger.error(f"Failed to get order {uid}: {e}")
             return jsonify({"success": False, "error": str(e)}), 400
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/orders/<uid>/hide", methods=["POST", "DELETE"])
+    def hide_order(uid: str):
+        """POST nasconde l'ordine dalla lista (rimozione logica), DELETE lo ripristina."""
+        try:
+            row = db.session.execute(
+                db.session.query(SkyfiHiddenOrder).filter_by(order_uid=uid)
+            ).scalar()
+            if request.method == "DELETE":
+                if row:
+                    db.session.delete(row)
+                    db.session.commit()
+                return jsonify({"success": True, "hidden": False}), 200
+            if not row:
+                row = SkyfiHiddenOrder(
+                    order_uid=uid,
+                    order_code=(request.json or {}).get("order_code") if request.is_json else None,
+                    hidden_by=current_user.username,
+                )
+                db.session.add(row)
+                db.session.commit()
+            return jsonify({"success": True, "hidden": True}), 200
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(f"MilSim/SkyFi: hide/unhide ordine {uid} fallito: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
     @roles_accepted("administrator")
