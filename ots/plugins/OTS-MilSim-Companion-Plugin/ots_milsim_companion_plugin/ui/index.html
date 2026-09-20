@@ -578,12 +578,16 @@ function hashReplayId() {
   const m = location.hash.match(/^#replay-(\d+)$/);
   return m ? parseInt(m[1], 10) : null;
 }
+function hashMatchReplayId() {
+  const m = location.hash.match(/^#mreplay-(\d+)$/);
+  return m ? parseInt(m[1], 10) : null;
+}
 
 function rpClock(t) {
   return new Date(t * 1000).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-async function renderReplay(id) {
+async function renderReplay(id, isMatch = false) {
   document.getElementById("tabs").style.display = "none";
   const el = document.getElementById("content");
   el.style.borderRadius = "8px";
@@ -591,27 +595,35 @@ async function renderReplay(id) {
   if (RP && RP.map) { try { RP.map.remove(); } catch (e) {} }
   RP = null;
 
+  const back = isMatch
+    ? `<button class="btn" onclick="clearEventHash(); gmGoTab('gm_matches')">← Partite</button>`
+    : `<button class="btn" onclick="goCalendar()">← Calendario</button>`;
+
   let data;
   try {
     await loadLeaflet();
-    data = await api(`/events/${id}/replay`);
+    if (isMatch) await ensureRegistry();
+    data = await api(isMatch ? `/matches/${id}/replay` : `/events/${id}/replay`);
   } catch (err) {
     el.innerHTML = `<h2>Replay non disponibile</h2><p class="muted">${esc(err.message)}</p>
-      <p><button class="btn" onclick="goCalendar()">← Torna al calendario</button></p>`;
+      <p>${back}</p>`;
     return;
   }
 
-  const ev = data.event;
+  const ev = isMatch ? data.match : data.event;
+  const meta = isMatch
+    ? `🎮 ${esc((REGISTRY.modes[ev.mode] || { name: ev.mode }).name)} · 🟢 ${fmtDT(ev.started_at)} → 🏁 ${fmtDT(ev.ended_at || ev.ends_at)}${ev.winner ? " · 🏆 " + esc(ev.winner) : ""}`
+    : `📍 ${esc(ev.field ? ev.field.name : "?")} · 🕓 ${fmtDT(ev.start_time)} → ${fmtDT(ev.end_time)}`;
   const header = `
     <div class="rp-bar">
-      <button class="btn" onclick="goCalendar()">← Calendario</button>
+      ${back}
       <strong>▶ ${esc(ev.title)}</strong>
-      <span class="muted">📍 ${esc(ev.field ? ev.field.name : "?")} · 🕓 ${fmtDT(ev.start_time)} → ${fmtDT(ev.end_time)}</span>
+      <span class="muted">${meta}</span>
     </div>`;
 
   if (!data.tracks.length) {
     el.innerHTML = header + `
-      <p style="margin-top:14px">Nessuna traccia GPS registrata nella finestra dell'evento.</p>
+      <p style="margin-top:14px">Nessuna traccia GPS registrata nella finestra ${isMatch ? "della partita (luce verde → fine)" : "dell'evento"}.</p>
       <p class="muted">Le tracce vengono salvate solo per gli EUD (ATAK/WinTAK) collegati al server
          durante la giocata, e richiedono che il processo cot_parser di OpenTAKServer sia attivo.</p>`;
     return;
@@ -1261,14 +1273,14 @@ async function playTemplate(id, btn) {
   const t = TEMPLATES.find(x => x.id === id);
   if (!t) return;
   const mode = REGISTRY.modes[t.mode];
-  if (!confirm(`Avviare la partita "${t.title}" (${mode.name}, ${t.duration_minutes} min)?\n\n` +
+  if (!confirm(`Preparare la missione "${t.title}" (${mode.name}, ${t.duration_minutes} min)?\n\n` +
       `Verranno pushati a TUTTI gli EUD collegati: ${t.markers.length} marker, ${t.zones.length} aree` +
       (t.packages.length ? `, ${t.packages.length} data package` : "") +
-      `.\nLa partenza viene annunciata nella chat generale.`)) return;
+      `.\n\nIl timer NON parte: la partita si avvia con 🚦 Inizia partita dal tab Partite (luce verde + timer del server).`)) return;
   btn.disabled = true;
   try {
     const res = await api(`/templates/${id}/play`, { method: "POST" });
-    toast(`Partita "${t.title}" avviata!` + (res.warning ? " ⚠️ " + res.warning : ""), !res.warning);
+    toast(`Missione "${t.title}" pronta: dai la luce verde da Partite.` + (res.warning ? " ⚠️ " + res.warning : ""), !res.warning);
     gmGoTab("gm_matches");
   } catch (e) {
     toast("Errore Play: " + e.message, false);
@@ -1576,6 +1588,8 @@ function fmtCountdown(seconds) {
   return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
+const END_REASONS = { time: "tempo scaduto", objective: "obiettivo", manual: "chiusa dal GM" };
+
 async function renderMatches() {
   clearInterval(MATCH_TIMER);
   const el = document.getElementById("content");
@@ -1588,22 +1602,47 @@ async function renderMatches() {
     el.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
     return;
   }
+  const ready = matches.filter(m => m.status === "ready");
   const running = matches.filter(m => m.status === "running");
-  const ended = matches.filter(m => m.status !== "running");
+  const ended = matches.filter(m => m.status === "ended");
+  const safeTitle = m => esc(m.title).replace(/'/g, "\\'");
 
-  const runningHtml = running.map(m => {
+  const readyHtml = ready.map(m => {
     const mode = REGISTRY.modes[m.mode] || { name: m.mode, icon: "❓" };
     return `
     <div class="match-card">
       <div>
+        <strong>${mode.icon} ${esc(m.title)}</strong> <span class="pill neutral">pronta</span><br>
+        <span class="muted">${esc(mode.name)} · ${m.duration_minutes} min · preparata ${fmtDT(m.created_at)} da ${esc(m.started_by || "")}</span>
+      </div>
+      <span style="flex:1"></span>
+      <button class="btn primary" onclick="startMatch(${m.id}, '${safeTitle(m)}', ${m.duration_minutes}, this)"
+        title="Luce verde: annuncio in chat a tutti gli EUD e il server fa partire il timer">🚦 Inizia partita</button>
+      <button class="btn" onclick="republishMatch(${m.id}, this)"
+        title="Ripubblica marker e aree agli EUD collegati">📡 Ripubblica</button>
+      <button class="btn danger" onclick="endMatch(${m.id}, '${safeTitle(m)}', 'ready', this)"
+        title="Annulla la missione: i marker vengono cancellati dagli EUD">🚫 Annulla</button>
+    </div>`;
+  }).join("");
+
+  const runningHtml = running.map(m => {
+    const mode = REGISTRY.modes[m.mode] || { name: m.mode, icon: "❓" };
+    const events = mode.events || {};
+    const eventButtons = Object.entries(events).map(([key, ev]) => `
+      <button class="btn" onclick="matchEvent(${m.id}, '${key}', '${esc(ev.label).replace(/'/g, "\\'")}', ${ev.ends}, this)"
+        title="${ev.ends ? "Chiude la partita prima del tempo e annuncia il vincitore" : "Solo annuncio in chat a tutti gli EUD"}">${ev.label}</button>`).join("");
+    return `
+    <div class="match-card">
+      <div>
         <strong>${mode.icon} ${esc(m.title)}</strong> <span class="pill ${m.expired ? "warn" : "ok"}">${m.expired ? "tempo scaduto" : "in corso"}</span><br>
-        <span class="muted">${esc(mode.name)} · avviata ${fmtDT(m.started_at)} da ${esc(m.started_by || "")} · fine ${fmtDT(m.ends_at)}</span>
+        <span class="muted">${esc(mode.name)} · luce verde ${fmtDT(m.started_at)} · fine ${fmtDT(m.ends_at)} · il server chiude da solo allo scadere</span>
       </div>
       <div class="countdown" data-ends="${esc(m.ends_at)}">--:--</div>
       <span style="flex:1"></span>
+      ${eventButtons}
       <button class="btn" onclick="republishMatch(${m.id}, this)"
         title="Ripubblica marker e aree: per gli EUD collegati dopo l'inizio">📡 Ripubblica</button>
-      <button class="btn danger" onclick="endMatch(${m.id}, '${esc(m.title).replace(/'/g, "\\'")}', this)"
+      <button class="btn danger" onclick="endMatch(${m.id}, '${safeTitle(m)}', 'running', this)"
         title="Chiude la partita: i marker vengono cancellati dagli EUD e la fine annunciata in chat">⏹ Termina</button>
     </div>`;
   }).join("");
@@ -1611,30 +1650,65 @@ async function renderMatches() {
   const endedHtml = ended.length ? `
     <h3>Storico</h3>
     <table>
-      <thead><tr><th>Partita</th><th>Modalità</th><th>Inizio</th><th>Fine</th><th>Avviata da</th></tr></thead>
+      <thead><tr><th>Partita</th><th>Modalità</th><th>Inizio</th><th>Fine</th><th>Esito</th><th></th></tr></thead>
       <tbody>${ended.map(m => {
         const mode = REGISTRY.modes[m.mode] || { name: m.mode };
+        const esito = [m.winner ? "🏆 " + esc(m.winner) : "", END_REASONS[m.end_reason] || ""].filter(Boolean).join(" · ");
         return `<tr><td>${esc(m.title)}</td><td>${esc(mode.name)}</td>
-          <td>${fmtDT(m.started_at)}</td><td>${fmtDT(m.ended_at || m.ends_at)}</td><td>${esc(m.started_by || "")}</td></tr>`;
+          <td>${fmtDT(m.started_at) || "<span class='muted'>mai iniziata</span>"}</td><td>${fmtDT(m.ended_at || m.ends_at)}</td>
+          <td>${esito || "<span class='muted'>—</span>"}</td>
+          <td>${m.started_at ? `<button class="btn small" onclick="location.hash='#mreplay-${m.id}'"
+            title="Rigioca su mappa i movimenti degli EUD tra luce verde e fine partita">▶ Replay</button>` : ""}</td></tr>`;
       }).join("")}</tbody>
     </table>` : "";
 
   el.innerHTML = `
     <div class="toolbar">
       <button class="btn" onclick="renderMatches()">↻ Aggiorna</button>
-      <span class="muted">Il push iniziale raggiunge gli EUD collegati in quel momento: per chi entra dopo usa «Ripubblica».
-        I marker spariscono da soli dagli ATAK alla fine della partita (stale).</span>
+      <span class="muted">▶ Play prepara la missione (marker pushati, squadre agli spawn); 🚦 Inizia partita dà la luce
+        verde e il timer lo tiene il server, che chiude e annuncia da solo allo scadere. Per chi entra dopo usa «Ripubblica».</span>
     </div>
-    ${running.length ? runningHtml : "<p class='muted'>Nessuna partita in corso: avviane una dal tab Template missioni con ▶ Play.</p>"}
+    ${ready.length ? "<h3>Pronte (in attesa della luce verde)</h3>" + readyHtml : ""}
+    ${running.length ? "<h3>In corso</h3>" + runningHtml : ""}
+    ${!ready.length && !running.length ? "<p class='muted'>Nessuna partita pronta o in corso: preparane una dal tab Template missioni con ▶ Play.</p>" : ""}
     ${endedHtml}`;
 
   const tick = () => document.querySelectorAll(".countdown").forEach(c => {
     const remaining = Math.floor((new Date(c.dataset.ends) - Date.now()) / 1000);
     c.textContent = fmtCountdown(remaining);
     c.style.color = remaining <= 0 ? "var(--absent)" : remaining < 300 ? "var(--maybe)" : "";
+    // Il server chiude la partita al tick successivo allo scadere: ricarico la lista
+    if (remaining <= -3 && !c._reloading) { c._reloading = true; setTimeout(renderMatches, 2000); }
   });
   tick();
   if (running.length) MATCH_TIMER = setInterval(tick, 1000);
+}
+
+async function startMatch(id, title, duration, btn) {
+  if (!confirm(`🚦 Dare la LUCE VERDE a "${title}"?\n\nLa partenza viene annunciata in chat a tutti gli EUD e parte il timer del server: ${duration} minuti, poi la partita viene chiusa e annunciata automaticamente.`)) return;
+  btn.disabled = true;
+  try {
+    const res = await api(`/matches/${id}/start`, { method: "POST" });
+    toast(`🟢 Luce verde: "${title}" è iniziata!` + (res.warning ? " ⚠️ " + res.warning : ""), !res.warning);
+    renderMatches();
+  } catch (e) {
+    toast("Errore: " + e.message, false);
+    btn.disabled = false;
+  }
+}
+
+async function matchEvent(id, key, label, ends, btn) {
+  if (ends && !confirm(`Confermi "${label}"?\n\nLa partita finisce PRIMA del tempo e il vincitore viene annunciato in chat a tutti gli EUD.`)) return;
+  btn.disabled = true;
+  try {
+    const res = await api(`/matches/${id}/event`, { method: "POST", body: { event: key } });
+    toast(`${label}: annunciato a tutti gli EUD.` + (res.warning ? " ⚠️ " + res.warning : ""), !res.warning);
+    if (res.ended) renderMatches();
+    else btn.disabled = false;
+  } catch (e) {
+    toast("Errore: " + e.message, false);
+    btn.disabled = false;
+  }
 }
 
 async function republishMatch(id, btn) {
@@ -1649,12 +1723,15 @@ async function republishMatch(id, btn) {
   }
 }
 
-async function endMatch(id, title, btn) {
-  if (!confirm(`Terminare la partita "${title}"?\n\nI marker vengono cancellati dagli EUD e la fine annunciata in chat.`)) return;
+async function endMatch(id, title, status, btn) {
+  const msg = status === "ready"
+    ? `Annullare la missione "${title}"?\n\nI marker vengono cancellati dagli EUD e l'annullamento annunciato in chat.`
+    : `Terminare la partita "${title}"?\n\nI marker vengono cancellati dagli EUD e la fine annunciata in chat.`;
+  if (!confirm(msg)) return;
   btn.disabled = true;
   try {
     const res = await api(`/matches/${id}/end`, { method: "POST" });
-    toast(`Partita "${title}" terminata.` + (res.warning ? " ⚠️ " + res.warning : ""), !res.warning);
+    toast(`Partita "${title}" chiusa.` + (res.warning ? " ⚠️ " + res.warning : ""), !res.warning);
     renderMatches();
   } catch (e) {
     toast("Errore: " + e.message, false);
@@ -1678,6 +1755,8 @@ async function renderModes() {
     <div class="mode-card">
       <h2>${mode.icon} ${esc(mode.name)}</h2>
       <p class="muted" style="margin:0">${esc(mode.description)}</p>
+      ${mode.victory ? `<p style="margin:6px 0 0; font-size:12.5px">🏆 ${esc(mode.victory)}</p>` : ""}
+      ${mode.events ? `<p class="muted" style="margin:6px 0 0; font-size:12.5px">Eventi in partita: ${Object.values(mode.events).map(e => esc(e.label)).join(" · ")}</p>` : ""}
       <ul>
         ${Object.entries(mode.markers).map(([mk, lim]) => {
           const mt = REGISTRY.marker_types[mk];
@@ -2156,10 +2235,12 @@ async function removeMissionContent(hash, filename, btn) {
     await refreshMe();
     renderTabs();
     const rid = hashReplayId();
+    const mrid = hashMatchReplayId();
     const id = hashEventId();
-    if (rid) await renderReplay(rid);           // replay giocata (admin)
-    else if (id) await renderEventDetail(id);   // link condiviso: solo quell'evento
-    else if (isAdmin()) await renderEvents();   // calendario completo solo per admin
+    if (rid) await renderReplay(rid);                 // replay giocata evento (admin)
+    else if (mrid) await renderReplay(mrid, true);    // replay partita (admin)
+    else if (id) await renderEventDetail(id);         // link condiviso: solo quell'evento
+    else if (isAdmin()) await renderEvents();         // calendario completo solo per admin
     else { currentTab = "leaderboard"; renderTabs(); await renderLeaderboard(); }
   } catch (err) {
     // Non autenticato (link aperto da WhatsApp senza sessione) o errore server
@@ -2175,8 +2256,10 @@ async function removeMissionContent(hash, filename, btn) {
 // Cambio hash: apri la vista del singolo evento, o torna alla vista di default
 window.addEventListener("hashchange", () => {
   const rid = hashReplayId();
+  const mrid = hashMatchReplayId();
   const id = hashEventId();
   if (rid) renderReplay(rid);
+  else if (mrid) renderReplay(mrid, true);
   else if (id) renderEventDetail(id);
   else goCalendar();
 });

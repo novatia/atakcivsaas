@@ -98,6 +98,7 @@ GAME_MODES = {
         "name": "Capture the Flag",
         "icon": "🚩",
         "description": "Due squadre, una o due bandiere da catturare e riportare al proprio spawn.",
+        "victory": "A fine tempo: vince chi ha catturato più bandiere (conteggio sul campo).",
         "markers": {
             "spawn_a": {"min": 1, "max": 4},
             "spawn_b": {"min": 1, "max": 4},
@@ -111,6 +112,29 @@ GAME_MODES = {
         "name": "Bomb Defusal",
         "icon": "💣",
         "description": "Una squadra pianta l'ordigno nel sito A o B dentro l'area valida, l'altra difende e disinnesca.",
+        "victory": "Attaccanti se l'ordigno esplode, difensori se viene disinnescato o allo scadere del tempo: la partita può finire prima del tempo.",
+        # Eventi di partita (bottoni del GM oggi, orchestratore in campo domani):
+        # se ends=True l'arbitro chiude la partita prima del tempo
+        "events": {
+            "bomb_planted": {
+                "label": "💣 Piazzata",
+                "ends": False,
+                "winner": None,
+                "chat": "💣 ORDIGNO PIAZZATO! I difensori devono trovarlo e disinnescarlo.",
+            },
+            "bomb_defused": {
+                "label": "✂️ Disinnescata",
+                "ends": True,
+                "winner": "Difensori",
+                "chat": "✂️ Ordigno disinnescato: vincono i DIFENSORI!",
+            },
+            "bomb_exploded": {
+                "label": "💥 Esplosa",
+                "ends": True,
+                "winner": "Attaccanti",
+                "chat": "💥 Ordigno esploso: vincono gli ATTACCANTI!",
+            },
+        },
         "markers": {
             "spawn_a": {"min": 1, "max": 4},
             "spawn_b": {"min": 1, "max": 4},
@@ -126,6 +150,7 @@ GAME_MODES = {
         "name": "Team Deathmatch",
         "icon": "⚔️",
         "description": "Due squadre, si vince a eliminazioni: servono solo gli spawn point.",
+        "victory": "Solo a tempo: eliminazioni contate sul campo (per ora si gioca senza tag).",
         "markers": {
             "spawn_a": {"min": 1, "max": 4},
             "spawn_b": {"min": 1, "max": 4},
@@ -138,6 +163,8 @@ GAME_MODES = {
         "name": "Dominio",
         "icon": "🏰",
         "description": "Due squadre si contendono N punti di dominio (minimo 2), ognuno con la propria area di validità: il punto è preso quando la squadra lo controlla (meccanica di cattura in arrivo).",
+        "victory": "Il primo team a 100 punti dominio, oppure chi ne ha di più allo scadere del tempo (punteggio server in arrivo: per ora conteggio sul campo).",
+        "target_score": 100,
         "markers": {
             "spawn_a": {"min": 1, "max": 4},
             "spawn_b": {"min": 1, "max": 4},

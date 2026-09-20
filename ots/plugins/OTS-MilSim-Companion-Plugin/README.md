@@ -109,22 +109,38 @@ Si è scelto l'editing da browser invece dei data package con nomi standard:
 meno passaggi e meno errori per l'utente finale, nessun round-trip
 ATAK→server, validazione immediata contro l'anagrafica della modalità.
 
-### Play e partite
+### Play, luce verde e match engine
 
-**▶ Play** su un template completo crea la partita (tab **Partite**):
+Il ciclo di vita di una partita ha due passi, gestiti dal server:
 
-1. marker e aree vengono pushati come CoT a **tutti gli EUD collegati**, con
-   `stale` = fine partita (+2'): allo scadere della durata **spariscono da
-   soli** dagli ATAK;
-2. ogni data package assegnato viene annunciato con un CoT `b-f-t-r`
-   (fileshare): gli EUD ricevono la proposta di download dal server;
-3. la partenza (titolo, modalità, durata) viene annunciata nella **chat
-   generale** (All Chat Rooms).
+1. **▶ Play** su un template completo **prepara la missione** (stato *pronta*,
+   link al template in `template_id`): marker e aree vengono pushati come CoT a
+   **tutti gli EUD collegati** (stale provvisorio di 24 h), ogni data package
+   assegnato viene annunciato con un CoT `b-f-t-r` (fileshare) e in **chat
+   generale** esce l'invito a raggiungere gli spawn. Il timer NON parte.
+2. **🚦 Inizia partita** (tab Partite) dà la **luce verde**: annuncio 🟢 in chat,
+   `started_at`/`ends_at` fissati, marker ripubblicati con lo stale vero
+   (fine partita +2') e da lì **il tempo lo tiene il server**.
 
-Nella tab Partite: countdown, **📡 Ripubblica** (stessi UID, per gli EUD
-entrati a partita in corso) e **⏹ Termina** (CoT `t-x-d-d` di cancellazione +
-annuncio in chat). Lo storico resta nel DB (`gm_matches`, con lo snapshot del
-template al momento del Play).
+Il **match engine** è un thread con tick da 1 secondo (avviato in `activate()`,
+con un lease su DB — `gm_engine_lease` — che garantisce una sola istanza attiva
+anche se OTS carica il plugin in più processi): allo scadere di `ends_at`
+chiude la partita da solo, cancella i marker dagli EUD (`t-x-d-d`) e annuncia
+🏁 l'esito deciso dall'**arbitro tipizzato** della modalità (`engine.py`):
+
+- **CTF / TDM / Dominio**: si chiude solo a tempo (esito sul campo; per
+  Dominio il punteggio server con target 100 arriverà con l'orchestratore);
+- **Bomb Defusal**: può finire **prima del tempo** — gli eventi 💣 Piazzata /
+  ✂️ Disinnescata (vincono i difensori) / 💥 Esplosa (vincono gli attaccanti)
+  sono bottoni del GM nella tab Partite oggi, e la stessa API
+  (`POST /matches/<id>/event`) domani la chiamerà l'orchestratore in campo;
+  a tempo scaduto senza esplosione vincono i difensori.
+
+Nella tab Partite: countdown live, eventi di partita, **📡 Ripubblica** (stessi
+UID, per gli EUD entrati dopo), **⏹ Termina / 🚫 Annulla** manuali; nello
+storico esito (vincitore + motivo: tempo/obiettivo/manuale) e **▶ Replay
+partita**: il player su mappa filtrato esattamente sulla finestra
+`started_at → ended_at` tenuta dal server (già in UTC come i punti CoT).
 
 Il broadcast dei CoT usa lo stesso meccanismo dell'endpoint `DELETE /api/markers`
 di OTS (exchange RabbitMQ `cot_parser` + `firehose`).
@@ -240,10 +256,13 @@ restano invariate per compatibilità con i config esistenti.
 | `GET/POST /templates` · `PUT/DELETE /templates/<id>` | admin | CRUD template di missione |
 | `POST /templates/<id>/duplicate` | admin | Copia di un template |
 | `GET /datapackages` | admin | Data package OTS disponibili |
-| `POST /templates/<id>/play` | admin | Crea la partita e pusha tutto agli EUD |
-| `GET /matches` | admin | Partite (in corso e storico) |
+| `POST /templates/<id>/play` | admin | Prepara la missione (stato *pronta*) e pusha tutto agli EUD |
+| `GET /matches` | admin | Partite (pronte, in corso e storico) |
+| `POST /matches/<id>/start` | admin | 🚦 Luce verde: annuncio + timer del server (chiusura automatica) |
+| `POST /matches/<id>/event` | admin | Evento arbitro (`{"event": "bomb_planted\|bomb_defused\|bomb_exploded"}`) |
 | `POST /matches/<id>/republish` | admin | Ripubblica marker/aree (stessi UID) |
-| `POST /matches/<id>/end` | admin | Termina: cancella i marker dagli EUD |
+| `POST /matches/<id>/end` | admin | Termina/annulla manualmente: cancella i marker dagli EUD |
+| `GET /matches/<id>/replay` | admin | Tracce GPS nella finestra `started_at → ended_at` (`?step=N`) |
 | `GET /orders` · `GET /orders/<uid>` | admin | Ordini SkyFi (paginati, `?search=`) · dettaglio |
 | `GET /orders/<uid>/image` | admin | Anteprima ordine (data-URI, via proxy) |
 | `GET /orders/<uid>/download/<tipo>` | admin | Proxy del deliverable (image/payload/cog/view-ready) |

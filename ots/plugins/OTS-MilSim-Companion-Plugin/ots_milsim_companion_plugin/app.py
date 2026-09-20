@@ -38,7 +38,7 @@ from opentakserver.models.MissionContentMission import MissionContentMission
 from opentakserver.models.user import User
 from opentakserver.plugins.Plugin import Plugin
 
-from . import cot, skyfi
+from . import cot, engine, skyfi
 from .default_config import DefaultConfig
 from .game_modes import GAME_MODES, MARKER_TYPES, serialize_registry, validate_template
 from .models import (
@@ -79,6 +79,9 @@ ALLOWED_BADGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 # Margine sullo stale dei marker di partita oltre la fine, per non farli sparire
 # dagli EUD mentre si sta ancora annunciando il risultato
 STALE_GRACE = timedelta(minutes=2)
+# Stale dei marker di una partita "pronta" (Play fatto, luce verde non ancora
+# data): abbondante, all'Inizia partita vengono ripubblicati con lo stale vero
+SETUP_STALE = timedelta(hours=24)
 
 
 def _badges_folder() -> str:
@@ -353,11 +356,63 @@ def _template_payload(body: dict) -> tuple[dict | None, str | None]:
     }, None
 
 
+def _gps_tracks(start_utc: datetime, end_utc: datetime, step: int) -> list[dict]:
+    """Tracce GPS degli EUD (tabelle points/euds di OTS) nella finestra UTC data,
+    con downsampling a max un punto ogni `step` secondi per EUD. Usato dal
+    replay evento (finestra dal calendario) e dal replay partita (started_at →
+    ended_at tenuti dal match engine)."""
+    from opentakserver.models.EUD import EUD
+    from opentakserver.models.Point import Point
+
+    callsigns = {e.uid: e.callsign for e in db.session.query(EUD).all()}
+
+    rows = (
+        db.session.query(Point)
+        .filter(Point.device_uid.isnot(None))
+        .filter(Point.timestamp >= start_utc.replace(tzinfo=None))
+        .filter(Point.timestamp <= end_utc.replace(tzinfo=None))
+        .filter(Point.latitude.isnot(None), Point.longitude.isnot(None))
+        .order_by(Point.device_uid, Point.timestamp)
+        .all()
+    )
+
+    tracks: dict[str, list] = {}
+    last_kept: dict[str, float] = {}
+    for row in rows:
+        if not row.latitude and not row.longitude:
+            continue  # (0, 0) = nessun fix GPS
+        t = row.timestamp.replace(tzinfo=timezone.utc).timestamp()
+        uid = row.device_uid
+        if uid in last_kept and t - last_kept[uid] < step:
+            continue
+        last_kept[uid] = t
+        tracks.setdefault(uid, []).append(
+            [
+                round(t, 1),
+                round(row.latitude, 6),
+                round(row.longitude, 6),
+                round(row.speed, 1) if row.speed is not None else None,
+            ]
+        )
+
+    return [
+        {"uid": uid, "callsign": callsigns.get(uid) or uid, "points": pts}
+        for uid, pts in sorted(tracks.items(), key=lambda kv: (callsigns.get(kv[0]) or kv[0]).lower())
+    ]
+
+
 def _match_events(match: GameMatch, uids: list[dict]) -> list:
-    """Ricostruisce i CoT di marker e aree della partita (Play e Ripubblica)."""
+    """Ricostruisce i CoT di marker e aree della partita (Play, Inizia, Ripubblica)."""
     snapshot = json.loads(match.snapshot_json)
-    stale = match.ends_at.replace(tzinfo=timezone.utc) + STALE_GRACE
-    remarks = f"{snapshot.get('title', match.title)} — {GAME_MODES[match.mode]['name']}, fine {match.ends_at.strftime('%H:%M')} UTC"
+    if match.ends_at:
+        stale = match.ends_at.replace(tzinfo=timezone.utc) + STALE_GRACE
+        when = f"fine {match.ends_at.strftime('%H:%M')} UTC"
+    else:
+        # Partita pronta ma non ancora iniziata: stale abbondante, verrà
+        # ripubblicato con la fine vera alla luce verde
+        stale = datetime.now(timezone.utc) + SETUP_STALE
+        when = "in attesa della luce verde"
+    remarks = f"{snapshot.get('title', match.title)} — {GAME_MODES[match.mode]['name']}, {when}"
 
     events = []
     items = [("marker", m) for m in snapshot.get("markers", [])] + [("zone", z) for z in snapshot.get("zones", [])]
@@ -435,6 +490,38 @@ class MilSimCompanionPlugin(Plugin):
                 # Crea le tabelle del plugin se non esistono (non tocca le tabelle di OTS)
                 db.metadata.create_all(bind=db.engine, tables=PLUGIN_TABLES, checkfirst=True)
 
+                # Migrazione 3.1 -> 3.2: gm_matches acquisisce il ciclo di vita
+                # pronta/in corso/terminata (created_at, end_reason, winner;
+                # started_at/ends_at diventano null finché non si dà il via)
+                if inspector.has_table("gm_matches"):
+                    match_columns = {c["name"] for c in inspector.get_columns("gm_matches")}
+                    added = []
+                    for name, ddl in (
+                        ("created_at", "ALTER TABLE gm_matches ADD COLUMN created_at TIMESTAMP"),
+                        ("end_reason", "ALTER TABLE gm_matches ADD COLUMN end_reason VARCHAR(32)"),
+                        ("winner", "ALTER TABLE gm_matches ADD COLUMN winner VARCHAR(255)"),
+                    ):
+                        if name not in match_columns:
+                            db.session.execute(text(ddl))
+                            added.append(name)
+                    if added:
+                        db.session.execute(
+                            text("UPDATE gm_matches SET created_at = started_at WHERE created_at IS NULL")
+                        )
+                        db.session.commit()
+                        logger.info(f"MilSim: gm_matches migrata (aggiunte colonne {', '.join(added)})")
+                    # Postgres: i vecchi NOT NULL su started_at/ends_at vanno tolti
+                    # (su SQLite l'ALTER non esiste: il vincolo resta solo formale)
+                    for ddl in (
+                        "ALTER TABLE gm_matches ALTER COLUMN started_at DROP NOT NULL",
+                        "ALTER TABLE gm_matches ALTER COLUMN ends_at DROP NOT NULL",
+                    ):
+                        try:
+                            db.session.execute(text(ddl))
+                            db.session.commit()
+                        except BaseException:
+                            db.session.rollback()
+
                 if legacy:
                     # Un giocatore per ogni account OTS esistente, già associato
                     linked = {p.user_id for p in db.session.query(Player).all() if p.user_id}
@@ -487,6 +574,10 @@ class MilSimCompanionPlugin(Plugin):
 
             if not app.config.get("OTS_SKYFI_PLUGIN_API_KEY"):
                 logger.warning(f"{self.name}: API key SkyFi non configurata (OTS_SKYFI_PLUGIN_API_KEY): il tab SkyFi non funzionerà")
+
+            # Match engine: tiene il tempo delle partite (tick 1 s) e le chiude
+            # allo scadere; il lease su DB garantisce una sola istanza attiva
+            engine.start_engine(app)
 
             logger.info(f"Successfully Loaded {self.name}")
         except BaseException as e:
@@ -1124,9 +1215,6 @@ class MilSimCompanionPlugin(Plugin):
         try:
             from zoneinfo import ZoneInfo
 
-            from opentakserver.models.EUD import EUD
-            from opentakserver.models.Point import Point
-
             event = db.session.get(CalendarEvent, event_id)
             if not event:
                 return jsonify({"success": False, "error": "Evento non trovato"}), 404
@@ -1140,49 +1228,13 @@ class MilSimCompanionPlugin(Plugin):
             start_utc = event.start_time.replace(tzinfo=tz).astimezone(timezone.utc)
             end_utc = event.end_time.replace(tzinfo=tz).astimezone(timezone.utc)
 
-            callsigns = {e.uid: e.callsign for e in db.session.query(EUD).all()}
-
-            rows = (
-                db.session.query(Point)
-                .filter(Point.device_uid.isnot(None))
-                .filter(Point.timestamp >= start_utc.replace(tzinfo=None))
-                .filter(Point.timestamp <= end_utc.replace(tzinfo=None))
-                .filter(Point.latitude.isnot(None), Point.longitude.isnot(None))
-                .order_by(Point.device_uid, Point.timestamp)
-                .all()
-            )
-
-            tracks: dict[str, list] = {}
-            last_kept: dict[str, float] = {}
-            for row in rows:
-                if not row.latitude and not row.longitude:
-                    continue  # (0, 0) = nessun fix GPS
-                t = row.timestamp.replace(tzinfo=timezone.utc).timestamp()
-                uid = row.device_uid
-                if uid in last_kept and t - last_kept[uid] < step:
-                    continue
-                last_kept[uid] = t
-                tracks.setdefault(uid, []).append(
-                    [
-                        round(t, 1),
-                        round(row.latitude, 6),
-                        round(row.longitude, 6),
-                        round(row.speed, 1) if row.speed is not None else None,
-                    ]
-                )
-
             return jsonify(
                 {
                     "event": event.serialize(),
                     "start": start_utc.timestamp(),
                     "end": end_utc.timestamp(),
                     "step": step,
-                    "tracks": [
-                        {"uid": uid, "callsign": callsigns.get(uid) or uid, "points": pts}
-                        for uid, pts in sorted(
-                            tracks.items(), key=lambda kv: (callsigns.get(kv[0]) or kv[0]).lower()
-                        )
-                    ],
+                    "tracks": _gps_tracks(start_utc, end_utc, step),
                 }
             )
         except BaseException as e:
@@ -1978,15 +2030,16 @@ class MilSimCompanionPlugin(Plugin):
             if errors:
                 return jsonify({"success": False, "error": "Template incompleto: " + "; ".join(errors)}), 400
 
-            now = _utcnow()
+            # Il Play prepara la missione (stato "ready"): marker, aree e data
+            # package vengono pushati subito così le squadre raggiungono gli
+            # spawn; il timer parte solo con POST /matches/<id>/start
             match = GameMatch(
                 template_id=template.id,
                 title=template.title,
                 mode=template.mode,
                 duration_minutes=template.duration_minutes,
-                started_at=now,
-                ends_at=now + timedelta(minutes=template.duration_minutes),
-                status="running",
+                created_at=_utcnow(),
+                status="ready",
                 started_by=current_user.username,
                 snapshot_json=json.dumps(snapshot),
             )
@@ -2008,7 +2061,10 @@ class MilSimCompanionPlugin(Plugin):
             events.extend(package_events)
 
             mode_name = GAME_MODES[template.mode]["name"]
-            chat = f"🎮 Partita iniziata: {template.title} ({mode_name}), durata {template.duration_minutes} minuti."
+            chat = (
+                f"🎮 Missione pronta: {template.title} ({mode_name}, {template.duration_minutes} minuti). "
+                f"Raggiungete gli spawn e attendete la luce verde."
+            )
             if template.description:
                 chat += f" {template.description}"
             events.append(cot.geochat_event(chat, _gm_sender_uid(), _gm_callsign()))
@@ -2022,7 +2078,7 @@ class MilSimCompanionPlugin(Plugin):
             db.session.commit()
 
             logger.info(
-                f"MilSim: partita '{match.title}' ({mode_name}) avviata da {current_user.username}: "
+                f"MilSim: missione '{match.title}' ({mode_name}) preparata da {current_user.username}: "
                 f"{len(snapshot['markers'])} marker, {len(snapshot['zones'])} aree, "
                 f"{len(package_events)} data package annunciati"
             )
@@ -2054,6 +2110,96 @@ class MilSimCompanionPlugin(Plugin):
 
     @staticmethod
     @roles_accepted("administrator")
+    @blueprint.route("/matches/<int:match_id>/start", methods=["POST"])
+    def start_match(match_id: int):
+        """Luce verde: fissa inizio/fine, ripubblica i marker con lo stale vero
+        (stessi UID) e annuncia la partenza; da qui il match engine tiene il
+        tempo e chiude la partita da solo allo scadere."""
+        try:
+            match = db.session.get(GameMatch, match_id)
+            if not match:
+                return jsonify({"success": False, "error": "Partita non trovata"}), 404
+            if match.status != "ready":
+                return jsonify({"success": False, "error": "La partita è già iniziata o terminata"}), 400
+
+            now = _utcnow()
+            match.started_at = now
+            match.ends_at = now + timedelta(minutes=match.duration_minutes)
+            match.status = "running"
+
+            uids = json.loads(match.cot_uids_json)
+            events = _match_events(match, uids)
+            mode_name = GAME_MODES.get(match.mode, {}).get("name", match.mode)
+            fine = match.ends_at.strftime("%H:%M")
+            events.append(
+                cot.geochat_event(
+                    f"🟢 LUCE VERDE — la partita {match.title} ({mode_name}) è INIZIATA! "
+                    f"Durata {match.duration_minutes} minuti, fine alle {fine} UTC.",
+                    _gm_sender_uid(),
+                    _gm_callsign(),
+                )
+            )
+            if not cot.broadcast(events):
+                db.session.rollback()
+                return jsonify(
+                    {"success": False, "error": "Push agli EUD fallito (RabbitMQ non raggiungibile): partita non avviata"}
+                ), 502
+
+            db.session.commit()
+            logger.info(f"MilSim: luce verde su '{match.title}' da {current_user.username}, fine {fine} UTC")
+            return jsonify({"success": True, "match": match.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(f"MilSim: failed to start match {match_id}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/matches/<int:match_id>/event", methods=["POST"])
+    def match_event(match_id: int):
+        """Evento di partita per l'arbitro della modalità (es. Bomb Defusal:
+        bomb_planted / bomb_defused / bomb_exploded). Oggi lo preme il Game
+        Master dalla UI, domani lo chiamerà l'orchestratore in campo: se
+        l'evento decreta la vittoria la partita finisce prima del tempo."""
+        try:
+            match = db.session.get(GameMatch, match_id)
+            if not match:
+                return jsonify({"success": False, "error": "Partita non trovata"}), 404
+            if match.status != "running":
+                return jsonify({"success": False, "error": "La partita non è in corso"}), 400
+
+            event_key = (request.json or {}).get("event")
+            events = engine.match_events_for(match.mode)
+            spec = events.get(event_key)
+            if not spec:
+                valid = ", ".join(events) or "nessuno per questa modalità"
+                return jsonify({"success": False, "error": f"Evento non valido: {event_key} (validi: {valid})"}), 400
+
+            if spec["ends"]:
+                chat = f"{spec['chat']} Partita terminata: {match.title}."
+                broadcast_ok = engine.finish_match(match, "objective", spec["winner"], chat)
+                logger.info(
+                    f"MilSim: partita '{match.title}' chiusa per obiettivo ({event_key}) da {current_user.username}"
+                )
+            else:
+                broadcast_ok = cot.broadcast(
+                    [cot.geochat_event(spec["chat"], _gm_sender_uid(), _gm_callsign())]
+                )
+                logger.info(f"MilSim: evento {event_key} su '{match.title}' da {current_user.username}")
+
+            result = {"success": True, "ended": spec["ends"], "match": match.serialize()}
+            if not broadcast_ok:
+                result["warning"] = "Annuncio agli EUD fallito (RabbitMQ non raggiungibile)"
+            return jsonify(result)
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(f"MilSim: failed match event on {match_id}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
     @blueprint.route("/matches/<int:match_id>/republish", methods=["POST"])
     def republish_match(match_id: int):
         """Ripubblica marker e aree con gli stessi UID: per gli EUD entrati a
@@ -2062,9 +2208,9 @@ class MilSimCompanionPlugin(Plugin):
             match = db.session.get(GameMatch, match_id)
             if not match:
                 return jsonify({"success": False, "error": "Partita non trovata"}), 404
-            if match.status != "running":
+            if match.status not in ("ready", "running"):
                 return jsonify({"success": False, "error": "La partita è già terminata"}), 400
-            if match.ends_at <= _utcnow():
+            if match.ends_at and match.ends_at <= _utcnow():
                 return jsonify({"success": False, "error": "La partita è scaduta: i marker non vengono ripubblicati"}), 400
 
             uids = json.loads(match.cot_uids_json)
@@ -2080,25 +2226,22 @@ class MilSimCompanionPlugin(Plugin):
     @roles_accepted("administrator")
     @blueprint.route("/matches/<int:match_id>/end", methods=["POST"])
     def end_match(match_id: int):
+        """Chiusura manuale dal GM: annulla una partita pronta o termina una
+        partita in corso (il fine-tempo automatico lo gestisce il match engine)."""
         try:
             match = db.session.get(GameMatch, match_id)
             if not match:
                 return jsonify({"success": False, "error": "Partita non trovata"}), 404
-            if match.status != "running":
+            if match.status not in ("ready", "running"):
                 return jsonify({"success": False, "error": "La partita è già terminata"}), 400
 
-            uids = json.loads(match.cot_uids_json)
-            events = [cot.delete_event(u["uid"], u["cot_type"] or "a-u-G") for u in uids]
-            events.append(
-                cot.geochat_event(f"🏁 Partita terminata: {match.title}.", _gm_sender_uid(), _gm_callsign())
-            )
-            broadcast_ok = cot.broadcast(events)
+            if match.status == "ready":
+                chat = f"🚫 Missione annullata: {match.title}."
+            else:
+                chat = f"🏁 Partita terminata dal Game Master: {match.title}."
+            broadcast_ok = engine.finish_match(match, "manual", None, chat)
 
-            match.status = "ended"
-            match.ended_at = _utcnow()
-            db.session.commit()
-
-            logger.info(f"MilSim: partita '{match.title}' terminata da {current_user.username}")
+            logger.info(f"MilSim: partita '{match.title}' chiusa manualmente da {current_user.username}")
             result = {"success": True, "match": match.serialize()}
             if not broadcast_ok:
                 result["warning"] = (
@@ -2109,6 +2252,41 @@ class MilSimCompanionPlugin(Plugin):
         except BaseException as e:
             db.session.rollback()
             logger.error(f"MilSim: failed to end match {match_id}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/matches/<int:match_id>/replay")
+    def match_replay(match_id: int):
+        """Replay della partita: stesse tracce GPS del replay evento, ma la
+        finestra è esattamente started_at → ended_at tenuti dal server (già in
+        UTC come i punti CoT: nessuna conversione di fuso)."""
+        try:
+            match = db.session.get(GameMatch, match_id)
+            if not match:
+                return jsonify({"success": False, "error": "Partita non trovata"}), 404
+            if not match.started_at:
+                return jsonify({"success": False, "error": "La partita non è mai stata avviata: nessuna finestra da rigiocare"}), 400
+
+            try:
+                step = max(0, int(request.args.get("step", 5)))
+            except ValueError:
+                step = 5
+
+            start_utc = match.started_at.replace(tzinfo=timezone.utc)
+            end_utc = (match.ended_at or match.ends_at or _utcnow()).replace(tzinfo=timezone.utc)
+
+            return jsonify(
+                {
+                    "match": match.serialize(),
+                    "start": start_utc.timestamp(),
+                    "end": end_utc.timestamp(),
+                    "step": step,
+                    "tracks": _gps_tracks(start_utc, end_utc, step),
+                }
+            )
+        except BaseException as e:
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 500
 

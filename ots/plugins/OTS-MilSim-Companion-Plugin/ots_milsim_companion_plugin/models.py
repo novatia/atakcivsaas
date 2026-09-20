@@ -17,7 +17,8 @@ from opentakserver.extensions import db
 import json
 
 RSVP_STATUSES = ("not_configured", "present", "absent", "maybe")
-MATCH_STATUSES = ("running", "ended")
+MATCH_STATUSES = ("ready", "running", "ended")
+MATCH_END_REASONS = ("time", "objective", "manual")
 
 
 def _loads(value: str | None, fallback):
@@ -275,6 +276,9 @@ class GameTemplate(db.Model):
 class GameMatch(db.Model):
     """Partita creata dal Play di un template.
 
+    Ciclo di vita: "ready" (Play: missione preparata, marker pushati),
+    "running" (Inizia partita: luce verde + timer tenuto dal server),
+    "ended" (tempo scaduto/obiettivo/manuale, chiusa dal match engine o dal GM).
     snapshot_json congela il template al momento del Play (il template può poi
     cambiare o sparire); cot_uids_json ricorda gli UID dei CoT pushati, per
     ripubblicarli o cancellarli dagli EUD al termine.
@@ -287,32 +291,53 @@ class GameMatch(db.Model):
     title = db.Column(String(255), nullable=False)
     mode = db.Column(String(32), nullable=False)
     duration_minutes = db.Column(Integer, nullable=False)
-    started_at = db.Column(DateTime, nullable=False, default=datetime.utcnow)
-    ends_at = db.Column(DateTime, nullable=False)
+    created_at = db.Column(DateTime, nullable=False, default=datetime.utcnow)
+    started_at = db.Column(DateTime, nullable=True)   # null finché non si dà la luce verde
+    ends_at = db.Column(DateTime, nullable=True)      # calcolata all'Inizia partita
     ended_at = db.Column(DateTime, nullable=True)
-    status = db.Column(String(16), nullable=False, default="running")
+    status = db.Column(String(16), nullable=False, default="ready")
     started_by = db.Column(String(255), nullable=True)
+    end_reason = db.Column(String(32), nullable=True)  # time | objective | manual
+    winner = db.Column(String(255), nullable=True)
     snapshot_json = db.Column(Text, nullable=False, default="{}")
     cot_uids_json = db.Column(Text, nullable=False, default="[]")  # [{uid, cot_type}]
 
     def serialize(self):
         now = datetime.utcnow()
-        remaining = int((self.ends_at - now).total_seconds()) if self.ends_at else 0
+        remaining = int((self.ends_at - now).total_seconds()) if self.ends_at else None
         return {
             "id": self.id,
             "template_id": self.template_id,
             "title": self.title,
             "mode": self.mode,
             "duration_minutes": self.duration_minutes,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "started_at": self.started_at.isoformat() + "Z" if self.started_at else None,
             "ends_at": self.ends_at.isoformat() + "Z" if self.ends_at else None,
             "ended_at": self.ended_at.isoformat() + "Z" if self.ended_at else None,
             "status": self.status,
             "started_by": self.started_by,
-            "remaining_seconds": max(0, remaining) if self.status == "running" else 0,
-            "expired": self.status == "running" and remaining <= 0,
+            "end_reason": self.end_reason,
+            "winner": self.winner,
+            "remaining_seconds": max(0, remaining) if (self.status == "running" and remaining is not None) else 0,
+            "expired": self.status == "running" and remaining is not None and remaining <= 0,
             "snapshot": _loads(self.snapshot_json, {}),
         }
+
+
+class EngineLease(db.Model):
+    """Lease del match engine: una sola istanza del plugin alla volta fa i tick.
+
+    OTS può caricare i plugin in più processi (main, cot_parser, eud_handler):
+    il thread del match engine gira ovunque, ma solo chi detiene il lease
+    (riga id=1, heartbeat rinnovato a ogni tick) esegue davvero la logica.
+    """
+
+    __tablename__ = "gm_engine_lease"
+
+    id = db.Column(Integer, primary_key=True)  # sempre 1
+    holder = db.Column(String(64), nullable=True)
+    heartbeat = db.Column(DateTime, nullable=True)
 
 
 PLUGIN_TABLES = [
@@ -325,4 +350,5 @@ PLUGIN_TABLES = [
     PlayerScore.__table__,
     GameTemplate.__table__,
     GameMatch.__table__,
+    EngineLease.__table__,
 ]
