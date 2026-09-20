@@ -2656,15 +2656,26 @@ class MilSimCompanionPlugin(Plugin):
                 pass
 
             # save_data_package_to_db di OTS può lasciare submission_user nullo:
-            # registra esplicitamente l'utente corrente come mittente ("User"
-            # nel popup di ATAK). creator_uid NON va toccato: è una FK verso
-            # euds.uid, valorizzarlo con lo username fa fallire il commit
+            # registra esplicitamente l'utente corrente come mittente. La build
+            # ATAK in uso mostra come "User" il CreatorUid (null → scritta
+            # "null"): è una FK verso euds.uid (lo username fa fallire il
+            # commit), quindi ci va l'ultimo dispositivo dell'utente corrente
             try:
+                from opentakserver.models.EUD import EUD
+
                 data_package = db.session.execute(
                     db.session.query(DataPackage).filter_by(hash=data_package_hash)
                 ).scalar()
                 if data_package:
                     data_package.submission_user = current_user.id
+                    eud = (
+                        db.session.query(EUD)
+                        .filter_by(user_id=current_user.id)
+                        .order_by(EUD.last_event_time.desc().nulls_last())
+                        .first()
+                    )
+                    if eud:
+                        data_package.creator_uid = eud.uid
                     db.session.commit()
             except BaseException as e:
                 db.session.rollback()
