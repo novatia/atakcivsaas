@@ -124,7 +124,7 @@ Il ciclo di vita di una partita ha due passi, gestiti dal server:
    Missioni o da ATAK, e con **🎯 Assegna missione** (accanto alla luce verde,
    nel tab **Sessione**) gli EUD dei team ricevono l'invito `t-x-m-i` con
    token a iscriversi.
-2. **🚦 Inizia partita** (tab Partite) dà la **luce verde**: annuncio 🟢 in chat,
+2. **🚦 Inizia partita** (tab Sessione) dà la **luce verde**: annuncio 🟢 in chat,
    `started_at`/`ends_at` fissati, marker ripubblicati con lo stale vero
    (fine partita +2') e da lì **il tempo lo tiene il server**.
 
@@ -138,7 +138,7 @@ chiude la partita da solo, cancella i marker dagli EUD (`t-x-d-d`) e annuncia
   Dominio il punteggio server con target 100 arriverà con l'orchestratore);
 - **Bomb Defusal**: può finire **prima del tempo** — gli eventi 💣 Piazzata /
   ✂️ Disinnescata (vincono i difensori) / 💥 Esplosa (vincono gli attaccanti)
-  sono bottoni del GM nella tab Partite oggi, e la stessa API
+  sono bottoni del GM nella tab Sessione oggi, e la stessa API
   (`POST /matches/<id>/event`) domani la chiamerà l'orchestratore in campo;
   a tempo scaduto senza esplosione vincono i difensori.
 
