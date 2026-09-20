@@ -117,6 +117,13 @@
   .palette button.placing { outline: 2px solid var(--accent); }
   .pkg-list { max-height: 160px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
   .pkg-list label { display: flex; gap: 6px; align-items: center; font-size: 12.5px; }
+  .pkg-scroll { max-height: 200px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+  .pkg-table { width: 100%; border-collapse: collapse; table-layout: fixed; margin: 0; }
+  .pkg-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); font-size: 12.5px; vertical-align: middle; }
+  .pkg-table tr:last-child td { border-bottom: none; }
+  .pkg-table td.chk { width: 28px; padding-right: 0; }
+  .pkg-table td.name { overflow-wrap: anywhere; }
+  .pkg-table td.size { width: 72px; text-align: right; color: var(--muted); white-space: nowrap; }
   .draw-hint { background: var(--tab); border: 1px dashed var(--border); border-radius: 6px; padding: 8px 10px; font-size: 12.5px; }
   .match-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   .countdown { font-size: 20px; font-variant-numeric: tabular-nums; font-weight: 700; }
@@ -1447,16 +1454,19 @@ async function openEditor(id) {
           <textarea id="ed-desc" rows="2" placeholder="regole, briefing…">${esc(t ? t.description || "" : "")}</textarea>
         </label>
         <div>
-          <h3 style="margin-top:4px">Marker e aree <span class="muted">(clicca il tipo, poi la mappa)</span></h3>
+          <h3 style="margin-top:4px">Marker e aree <span class="muted">(clicca il tipo, poi la mappa; clic su un marker piazzato per rinominarlo o rimuoverlo)</span></h3>
           <div class="palette" id="ed-palette"></div>
           <div class="draw-hint" id="ed-hint" style="display:none"></div>
         </div>
         <div>
           <h3>Data package al Play</h3>
-          ${PACKAGES.length ? `<div class="pkg-list">${PACKAGES.map(p => `
-            <label><input type="checkbox" value="${esc(p.hash)}" ${ED.packages.has(p.hash) ? "checked" : ""}
-              onchange="this.checked ? ED.packages.add(this.value) : ED.packages.delete(this.value)">
-              ${esc(p.filename)} <span class="muted">(${fmtBytes(p.size)})</span></label>`).join("")}</div>`
+          ${PACKAGES.length ? `<div class="pkg-scroll"><table class="pkg-table"><tbody>${PACKAGES.map((p, i) => `
+            <tr>
+              <td class="chk"><input type="checkbox" id="pkg-${i}" value="${esc(p.hash)}" ${ED.packages.has(p.hash) ? "checked" : ""}
+                onchange="this.checked ? ED.packages.add(this.value) : ED.packages.delete(this.value)"></td>
+              <td class="name"><label for="pkg-${i}" style="cursor:pointer">${esc(p.filename)}</label></td>
+              <td class="size">${fmtBytes(p.size)}</td>
+            </tr>`).join("")}</tbody></table></div>`
             : '<p class="muted" style="margin:4px 0">Nessun data package sul server.</p>'}
           <p class="muted" style="margin:6px 0 0; font-size:12px">Al Play gli EUD ricevono la proposta di download (fileshare) di ogni package selezionato.</p>
         </div>
@@ -1619,9 +1629,12 @@ function addMarkerLayer(marker) {
   layer.on("click", () => {
     const idx = ED.markers.indexOf(marker);
     layer.bindPopup(`<b>${esc(mt.label)}</b><br>
-      <input id="mk-label" value="${esc(marker.label || "")}" placeholder="${esc(mt.callsign)}" style="margin:6px 0; width:170px">
-      <br><button class="btn" onclick="setMarkerLabel(${idx})">OK</button>
+      <label style="font-size:11.5px; color:var(--muted)">Nome (comparirà sugli EUD)</label><br>
+      <input id="mk-label" value="${esc(marker.label || "")}" placeholder="${esc(mt.callsign)}" style="margin:4px 0 6px; width:180px"
+        onkeydown="if(event.key==='Enter'){event.preventDefault(); setMarkerLabel(${idx});}">
+      <br><button class="btn primary" onclick="setMarkerLabel(${idx})">💾 OK</button>
       <button class="btn danger" onclick="removeMarker(${idx})">🗑 Rimuovi</button>`).openPopup();
+    setTimeout(() => { const inp = document.getElementById("mk-label"); if (inp) inp.focus(); }, 50);
   });
   marker._layer = layer;
 }

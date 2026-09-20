@@ -111,7 +111,7 @@ GAME_MODES = {
         "markers": {
             "spawn_a": {"min": 1, "max": 4},
             "spawn_b": {"min": 1, "max": 4},
-            "flag": {"min": 1, "max": 2},
+            "flag": {"min": 1, "max": 8},
         },
         "zones": {
             "field_boundary": {"min": 0, "max": 1},

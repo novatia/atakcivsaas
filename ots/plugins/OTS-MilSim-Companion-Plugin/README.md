@@ -76,7 +76,7 @@ ogni modalità dichiara i tipi di marker e di area richiesti (con min/max).
 
 | Modalità | Marker richiesti | Aree |
 |---|---|---|
-| 🚩 **Capture the Flag** | Spawn A, Spawn B, 1–2 Bandiere | Perimetro campo (opz.) |
+| 🚩 **Capture the Flag** | Spawn A, Spawn B, 1–8 Bandiere (rinominabili) | Perimetro campo (opz.) |
 | 💣 **Bomb Defusal** | Spawn A, Spawn B, Bomb site A, Bomb site B | **Area valida ordigni**, perimetro (opz.) |
 | ⚔️ **Team Deathmatch** | Spawn A, Spawn B | Perimetro campo (opz.) |
 | 🏰 **Dominio** | Spawn A, Spawn B, 2–8 Punti di dominio | **Un'area di validità per ogni punto** (verificato al Play), perimetro (opz.) |
