@@ -146,13 +146,19 @@ def geochat_event(text: str, sender_uid: str, callsign: str) -> Element:
     return event
 
 
-def broadcast(events: list[Element]) -> bool:
-    """Pubblica gli eventi su cot_parser (persistenza) e firehose (tutti gli EUD).
+def deliver(items: list[tuple[Element, set | list | None]]) -> bool:
+    """Pubblica una lista di (evento, destinatari).
+
+    destinatari None = broadcast storico: cot_parser (persistenza + smistamento
+    di OTS a tutti i gruppi/anonimi) e firehose. Altrimenti consegna mirata:
+    un publish sull'exchange "dms" di OTS per ogni uid EUD destinatario (la
+    coda di ogni EUD è legata a dms con routing key = il proprio uid), che
+    scavalca i gruppi di OTS e vale subito anche per gli EUD già collegati.
 
     Ritorna False se RabbitMQ non è raggiungibile: il chiamante decide se
-    considerarlo fatale (Play) o solo un avviso.
+    considerarlo fatale (Play/Inizia) o solo un avviso.
     """
-    if not events:
+    if not items:
         return True
     try:
         credentials = pika.PlainCredentials(
@@ -165,13 +171,22 @@ def broadcast(events: list[Element]) -> bool:
         )
         channel = connection.channel()
         properties = pika.BasicProperties(expiration=app.config.get("OTS_RABBITMQ_TTL"))
-        for event in events:
+        for event, targets in items:
             body = json.dumps({"cot": tostring(event).decode("utf-8"), "uid": app.config["OTS_NODE_ID"]})
-            channel.basic_publish(exchange="cot_parser", routing_key="cot_parser", body=body, properties=properties)
-            channel.basic_publish(exchange="firehose", routing_key="", body=body, properties=properties)
+            if targets is None:
+                channel.basic_publish(exchange="cot_parser", routing_key="cot_parser", body=body, properties=properties)
+                channel.basic_publish(exchange="firehose", routing_key="", body=body, properties=properties)
+            else:
+                for eud_uid in targets:
+                    channel.basic_publish(exchange="dms", routing_key=eud_uid, body=body, properties=properties)
         channel.close()
         connection.close()
         return True
     except BaseException as e:
-        logger.error(f"MilSim: broadcast CoT fallito: {e}")
+        logger.error(f"MilSim: pubblicazione CoT fallita: {e}")
         return False
+
+
+def broadcast(events: list[Element]) -> bool:
+    """Broadcast storico a tutti gli EUD (cot_parser + firehose)."""
+    return deliver([(event, None) for event in events])

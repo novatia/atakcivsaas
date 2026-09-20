@@ -40,7 +40,7 @@ from opentakserver.plugins.Plugin import Plugin
 
 from . import cot, engine, skyfi
 from .default_config import DefaultConfig
-from .game_modes import GAME_MODES, MARKER_TYPES, serialize_registry, validate_template
+from .game_modes import GAME_MODES, MARKER_TYPES, ZONE_TYPES, serialize_registry, validate_template
 from .models import (
     PLUGIN_TABLES,
     RSVP_STATUSES,
@@ -50,6 +50,8 @@ from .models import (
     GameField,
     GameMatch,
     GameTemplate,
+    GmGroup,
+    GmGroupEud,
     Player,
     PlayerScore,
     Rank,
@@ -401,8 +403,10 @@ def _gps_tracks(start_utc: datetime, end_utc: datetime, step: int) -> list[dict]
     ]
 
 
-def _match_events(match: GameMatch, uids: list[dict]) -> list:
-    """Ricostruisce i CoT di marker e aree della partita (Play, Inizia, Ripubblica)."""
+def _match_items(match: GameMatch, uids: list[dict], targets: dict | None) -> list:
+    """(CoT, destinatari) di marker e aree della partita (Play, Inizia,
+    Ripubblica): ogni elemento va alla sua audience (spawn solo al proprio
+    team + osservatori); targets None = broadcast a tutti."""
     snapshot = json.loads(match.snapshot_json)
     if match.ends_at:
         stale = match.ends_at.replace(tzinfo=timezone.utc) + STALE_GRACE
@@ -414,15 +418,16 @@ def _match_events(match: GameMatch, uids: list[dict]) -> list:
         when = "in attesa della luce verde"
     remarks = f"{snapshot.get('title', match.title)} — {GAME_MODES[match.mode]['name']}, {when}"
 
-    events = []
+    result = []
     items = [("marker", m) for m in snapshot.get("markers", [])] + [("zone", z) for z in snapshot.get("zones", [])]
     for entry, item in zip(uids, items):
         kind, data = item
         if kind == "marker":
-            events.append(cot.marker_event(entry["uid"], data, stale, remarks))
+            event = cot.marker_event(entry["uid"], data, stale, remarks)
         else:
-            events.append(cot.zone_event(entry["uid"], data, stale, remarks))
-    return events
+            event = cot.zone_event(entry["uid"], data, stale, remarks)
+        result.append((event, engine.audience_targets(targets, entry.get("audience", "all"))))
+    return result
 
 
 def _package_events(hashes: list[str]) -> tuple[list, list[str]]:
@@ -500,6 +505,10 @@ class MilSimCompanionPlugin(Plugin):
                         ("created_at", "ALTER TABLE gm_matches ADD COLUMN created_at TIMESTAMP"),
                         ("end_reason", "ALTER TABLE gm_matches ADD COLUMN end_reason VARCHAR(32)"),
                         ("winner", "ALTER TABLE gm_matches ADD COLUMN winner VARCHAR(255)"),
+                        # 3.2 -> 3.3: destinatari per gruppo (Team A/B, osservatori)
+                        ("team_a_group_id", "ALTER TABLE gm_matches ADD COLUMN team_a_group_id INTEGER"),
+                        ("team_b_group_id", "ALTER TABLE gm_matches ADD COLUMN team_b_group_id INTEGER"),
+                        ("observers_json", "ALTER TABLE gm_matches ADD COLUMN observers_json TEXT"),
                     ):
                         if name not in match_columns:
                             db.session.execute(text(ddl))
@@ -2030,6 +2039,17 @@ class MilSimCompanionPlugin(Plugin):
             if errors:
                 return jsonify({"success": False, "error": "Template incompleto: " + "; ".join(errors)}), 400
 
+            # Gruppi destinatari (opzionali): senza, broadcast a tutti come sempre
+            body = request.json or {}
+            team_a_id = body.get("team_a_group_id") or None
+            team_b_id = body.get("team_b_group_id") or None
+            observer_ids = [int(g) for g in (body.get("observer_group_ids") or [])]
+            for group_id in filter(None, [team_a_id, team_b_id, *observer_ids]):
+                if not db.session.get(GmGroup, int(group_id)):
+                    return jsonify({"success": False, "error": f"Gruppo non trovato: {group_id}"}), 400
+            if team_a_id and team_a_id == team_b_id:
+                return jsonify({"success": False, "error": "Team A e Team B non possono essere lo stesso gruppo"}), 400
+
             # Il Play prepara la missione (stato "ready"): marker, aree e data
             # package vengono pushati subito così le squadre raggiungono gli
             # spawn; il timer parte solo con POST /matches/<id>/start
@@ -2041,24 +2061,36 @@ class MilSimCompanionPlugin(Plugin):
                 created_at=_utcnow(),
                 status="ready",
                 started_by=current_user.username,
+                team_a_group_id=int(team_a_id) if team_a_id else None,
+                team_b_group_id=int(team_b_id) if team_b_id else None,
+                observers_json=json.dumps(observer_ids),
                 snapshot_json=json.dumps(snapshot),
             )
 
-            # UID stabili per marker e aree: servono per ripubblicare e cancellare
+            # UID stabili per marker e aree (con la loro audience): servono per
+            # ripubblicare e cancellare presso gli stessi destinatari
             run = uuid.uuid4().hex[:10]
-            uids = [
-                {"uid": f"GM.{run}.m{i}", "cot_type": None}
-                for i in range(len(snapshot["markers"]) + len(snapshot["zones"]))
-            ]
+            uids = []
             for i, marker in enumerate(snapshot["markers"]):
-                uids[i]["cot_type"] = MARKER_TYPES[marker["type"]]["cot_type"]
-            for j in range(len(snapshot["zones"])):
-                uids[len(snapshot["markers"]) + j]["cot_type"] = "u-d-f"
+                mtype = MARKER_TYPES[marker["type"]]
+                uids.append({"uid": f"GM.{run}.m{i}", "cot_type": mtype["cot_type"],
+                             "audience": mtype.get("audience", "all")})
+            for j, zone in enumerate(snapshot["zones"]):
+                ztype = ZONE_TYPES[zone["type"]]
+                uids.append({"uid": f"GM.{run}.m{len(snapshot['markers']) + j}", "cot_type": "u-d-f",
+                             "audience": ztype.get("audience", "all")})
             match.cot_uids_json = json.dumps(uids)
-            events = _match_events(match, uids)
+
+            targets = engine.resolve_targets(match)
+            if targets is not None and not targets["all"]:
+                return jsonify(
+                    {"success": False, "error": "I gruppi selezionati non hanno nessun EUD: aggiungi i membri nel tab Team"}
+                ), 400
+            items = _match_items(match, uids, targets)
 
             package_events, missing = _package_events(snapshot.get("packages", []))
-            events.extend(package_events)
+            all_targets = engine.audience_targets(targets, "all")
+            items.extend((event, all_targets) for event in package_events)
 
             mode_name = GAME_MODES[template.mode]["name"]
             chat = (
@@ -2067,9 +2099,9 @@ class MilSimCompanionPlugin(Plugin):
             )
             if template.description:
                 chat += f" {template.description}"
-            events.append(cot.geochat_event(chat, _gm_sender_uid(), _gm_callsign()))
+            items.append((cot.geochat_event(chat, _gm_sender_uid(), _gm_callsign()), all_targets))
 
-            if not cot.broadcast(events):
+            if not cot.deliver(items):
                 return jsonify(
                     {"success": False, "error": "Push agli EUD fallito (RabbitMQ non raggiungibile): partita non creata"}
                 ), 502
@@ -2101,12 +2133,168 @@ class MilSimCompanionPlugin(Plugin):
     @blueprint.route("/matches", methods=["GET"])
     def get_matches():
         try:
-            matches = db.session.query(GameMatch).order_by(GameMatch.started_at.desc()).limit(100).all()
-            return jsonify([m.serialize() for m in matches])
+            matches = db.session.query(GameMatch).order_by(GameMatch.created_at.desc()).limit(100).all()
+            group_names = {g.id: g.name for g in db.session.query(GmGroup).all()}
+            results = []
+            for match in matches:
+                data = match.serialize()
+                data["groups"] = {
+                    "team_a": group_names.get(match.team_a_group_id),
+                    "team_b": group_names.get(match.team_b_group_id),
+                    "observers": [group_names[g] for g in data["observer_group_ids"] if g in group_names],
+                }
+                results.append(data)
+            return jsonify(results)
         except BaseException as e:
             logger.error(f"MilSim: failed to get matches: {e}")
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # Anagrafica gruppi di gioco (Team A/B, osservatori) e EUD noti
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/euds", methods=["GET"])
+    def get_euds():
+        """EUD conosciuti dal server (per assegnarli ai gruppi)."""
+        try:
+            from opentakserver.models.EUD import EUD
+
+            euds = db.session.query(EUD).order_by(EUD.callsign).all()
+            return jsonify(
+                [
+                    {
+                        "uid": e.uid,
+                        "callsign": e.callsign,
+                        "last_event_time": e.last_event_time.isoformat() + "Z" if e.last_event_time else None,
+                    }
+                    for e in euds
+                ]
+            )
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/groups", methods=["GET"])
+    def get_groups():
+        try:
+            groups = db.session.query(GmGroup).order_by(GmGroup.name).all()
+            return jsonify([g.serialize() for g in groups])
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/groups", methods=["POST"])
+    def create_group():
+        try:
+            name = ((request.json or {}).get("name") or "").strip()
+            if not name:
+                return jsonify({"success": False, "error": "Il nome del gruppo è obbligatorio"}), 400
+            if db.session.query(GmGroup).filter(db.func.lower(GmGroup.name) == name.lower()).first():
+                return jsonify({"success": False, "error": "Esiste già un gruppo con questo nome"}), 400
+            group = GmGroup(name=name)
+            db.session.add(group)
+            db.session.commit()
+            return jsonify({"success": True, "group": group.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/groups/<int:group_id>", methods=["PUT"])
+    def update_group(group_id: int):
+        try:
+            group = db.session.get(GmGroup, group_id)
+            if not group:
+                return jsonify({"success": False, "error": "Gruppo non trovato"}), 404
+            name = ((request.json or {}).get("name") or "").strip()
+            if name:
+                group.name = name
+            db.session.commit()
+            return jsonify({"success": True, "group": group.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/groups/<int:group_id>", methods=["DELETE"])
+    def delete_group(group_id: int):
+        try:
+            group = db.session.get(GmGroup, group_id)
+            if not group:
+                return jsonify({"success": False, "error": "Gruppo non trovato"}), 404
+            # Un gruppo usato da una partita non conclusa non si può eliminare
+            in_use = (
+                db.session.query(GameMatch)
+                .filter(GameMatch.status.in_(("ready", "running")))
+                .filter(
+                    db.or_(
+                        GameMatch.team_a_group_id == group_id,
+                        GameMatch.team_b_group_id == group_id,
+                        GameMatch.observers_json.contains(str(group_id)),
+                    )
+                )
+                .first()
+            )
+            if in_use:
+                return jsonify(
+                    {"success": False, "error": f"Il gruppo è usato dalla partita '{in_use.title}' non ancora conclusa"}
+                ), 400
+            db.session.delete(group)
+            db.session.commit()
+            return jsonify({"success": True})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/groups/<int:group_id>/members", methods=["POST"])
+    def add_group_member(group_id: int):
+        try:
+            group = db.session.get(GmGroup, group_id)
+            if not group:
+                return jsonify({"success": False, "error": "Gruppo non trovato"}), 404
+            uid = ((request.json or {}).get("uid") or "").strip()
+            if not uid:
+                return jsonify({"success": False, "error": "uid dell'EUD obbligatorio"}), 400
+            if db.session.query(GmGroupEud).filter_by(group_id=group_id, eud_uid=uid).first():
+                return jsonify({"success": False, "error": "EUD già nel gruppo"}), 400
+            db.session.add(GmGroupEud(group_id=group_id, eud_uid=uid))
+            db.session.commit()
+            return jsonify({"success": True, "group": group.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/groups/<int:group_id>/members", methods=["DELETE"])
+    def remove_group_member(group_id: int):
+        try:
+            uid = ((request.json or {}).get("uid") or "").strip()
+            member = db.session.query(GmGroupEud).filter_by(group_id=group_id, eud_uid=uid).first()
+            if not member:
+                return jsonify({"success": False, "error": "EUD non presente nel gruppo"}), 404
+            db.session.delete(member)
+            db.session.commit()
+            return jsonify({"success": True})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
 
     @staticmethod
     @roles_accepted("administrator")
@@ -2127,19 +2315,23 @@ class MilSimCompanionPlugin(Plugin):
             match.ends_at = now + timedelta(minutes=match.duration_minutes)
             match.status = "running"
 
+            targets = engine.resolve_targets(match)
             uids = json.loads(match.cot_uids_json)
-            events = _match_events(match, uids)
+            items = _match_items(match, uids, targets)
             mode_name = GAME_MODES.get(match.mode, {}).get("name", match.mode)
             fine = match.ends_at.strftime("%H:%M")
-            events.append(
-                cot.geochat_event(
-                    f"🟢 LUCE VERDE — la partita {match.title} ({mode_name}) è INIZIATA! "
-                    f"Durata {match.duration_minutes} minuti, fine alle {fine} UTC.",
-                    _gm_sender_uid(),
-                    _gm_callsign(),
+            items.append(
+                (
+                    cot.geochat_event(
+                        f"🟢 LUCE VERDE — la partita {match.title} ({mode_name}) è INIZIATA! "
+                        f"Durata {match.duration_minutes} minuti, fine alle {fine} UTC.",
+                        _gm_sender_uid(),
+                        _gm_callsign(),
+                    ),
+                    engine.audience_targets(targets, "all"),
                 )
             )
-            if not cot.broadcast(events):
+            if not cot.deliver(items):
                 db.session.rollback()
                 return jsonify(
                     {"success": False, "error": "Push agli EUD fallito (RabbitMQ non raggiungibile): partita non avviata"}
@@ -2183,8 +2375,10 @@ class MilSimCompanionPlugin(Plugin):
                     f"MilSim: partita '{match.title}' chiusa per obiettivo ({event_key}) da {current_user.username}"
                 )
             else:
-                broadcast_ok = cot.broadcast(
-                    [cot.geochat_event(spec["chat"], _gm_sender_uid(), _gm_callsign())]
+                targets = engine.resolve_targets(match)
+                broadcast_ok = cot.deliver(
+                    [(cot.geochat_event(spec["chat"], _gm_sender_uid(), _gm_callsign()),
+                      engine.audience_targets(targets, "all"))]
                 )
                 logger.info(f"MilSim: evento {event_key} su '{match.title}' da {current_user.username}")
 
@@ -2214,7 +2408,8 @@ class MilSimCompanionPlugin(Plugin):
                 return jsonify({"success": False, "error": "La partita è scaduta: i marker non vengono ripubblicati"}), 400
 
             uids = json.loads(match.cot_uids_json)
-            if not cot.broadcast(_match_events(match, uids)):
+            targets = engine.resolve_targets(match)
+            if not cot.deliver(_match_items(match, uids, targets)):
                 return jsonify({"success": False, "error": "Push agli EUD fallito (RabbitMQ non raggiungibile)"}), 502
             return jsonify({"success": True, "republished": len(uids)})
         except BaseException as e:

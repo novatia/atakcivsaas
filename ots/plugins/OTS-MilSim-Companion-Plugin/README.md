@@ -142,8 +142,29 @@ storico esito (vincitore + motivo: tempo/obiettivo/manuale) e **▶ Replay
 partita**: il player su mappa filtrato esattamente sulla finestra
 `started_at → ended_at` tenuta dal server (già in UTC come i punti CoT).
 
-Il broadcast dei CoT usa lo stesso meccanismo dell'endpoint `DELETE /api/markers`
-di OTS (exchange RabbitMQ `cot_parser` + `firehose`).
+### Team e destinatari dei CoT
+
+Tab **Team**: anagrafica dei **gruppi di gioco** (es. Team Alpha, Team Bravo,
+Admins, Headquarter), con gli **EUD** conosciuti dal server come membri.
+Al Play si scelgono i gruppi della missione:
+
+- **Team A / Team B**: lo spawn di un team lo vede **solo quel team**
+  (+ osservatori) — il Team B non sa dove spawna il Team A;
+- **bandiere, bomb site, punti di dominio, aree, chat e data package** vanno a
+  tutti i gruppi coinvolti (l'audience è dichiarata per tipo di marker
+  nell'anagrafica, campo `audience` in `game_modes.py`);
+- **osservatori** (broadcast): gruppi che vedono tutto, es. Admins o HQ;
+- senza gruppi selezionati la missione va **a tutti** gli EUD (comportamento
+  storico).
+
+La consegna mirata pubblica ogni CoT sull'exchange **`dms`** di OTS con
+routing key = uid dell'EUD (la coda di ogni EUD è legata lì): non dipende dai
+gruppi/canali nativi di OTS e i cambi di membri valgono subito, anche a
+partita in corso con «Ripubblica». Il broadcast senza gruppi usa invece
+`cot_parser` + `firehose` come l'endpoint `DELETE /api/markers` di OTS.
+Nota: i CoT mirati non passano dal `cot_parser`, quindi non vengono
+persistiti nella tabella markers di OTS (lo stato della partita vive nel
+plugin).
 
 ### SkyFi: ordini e asset satellitari (tab SkyFi)
 
@@ -256,7 +277,10 @@ restano invariate per compatibilità con i config esistenti.
 | `GET/POST /templates` · `PUT/DELETE /templates/<id>` | admin | CRUD template di missione |
 | `POST /templates/<id>/duplicate` | admin | Copia di un template |
 | `GET /datapackages` | admin | Data package OTS disponibili |
-| `POST /templates/<id>/play` | admin | Prepara la missione (stato *pronta*) e pusha tutto agli EUD |
+| `GET /euds` | admin | EUD conosciuti dal server (per i gruppi) |
+| `GET/POST /groups` · `PUT/DELETE /groups/<id>` | admin | Anagrafica gruppi di gioco |
+| `POST/DELETE /groups/<id>/members` | admin | `{"uid"}`: aggiunge/rimuove un EUD dal gruppo |
+| `POST /templates/<id>/play` | admin | Prepara la missione (stato *pronta*) e pusha ai destinatari; body opzionale `{"team_a_group_id", "team_b_group_id", "observer_group_ids"}` |
 | `GET /matches` | admin | Partite (pronte, in corso e storico) |
 | `POST /matches/<id>/start` | admin | 🚦 Luce verde: annuncio + timer del server (chiusura automatica) |
 | `POST /matches/<id>/event` | admin | Evento arbitro (`{"event": "bomb_planted\|bomb_defused\|bomb_exploded"}`) |

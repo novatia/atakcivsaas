@@ -299,8 +299,14 @@ class GameMatch(db.Model):
     started_by = db.Column(String(255), nullable=True)
     end_reason = db.Column(String(32), nullable=True)  # time | objective | manual
     winner = db.Column(String(255), nullable=True)
+    # Gruppi destinatari: null/vuoto = broadcast a tutti gli EUD (comportamento
+    # storico). Con i gruppi, i CoT viaggiano mirati sull'exchange "dms" di OTS:
+    # gli spawn li vede solo il proprio team (+ osservatori), il resto tutti i coinvolti.
+    team_a_group_id = db.Column(Integer, ForeignKey("gm_groups.id"), nullable=True)
+    team_b_group_id = db.Column(Integer, ForeignKey("gm_groups.id"), nullable=True)
+    observers_json = db.Column(Text, nullable=False, default="[]")  # [id gruppi osservatori]
     snapshot_json = db.Column(Text, nullable=False, default="{}")
-    cot_uids_json = db.Column(Text, nullable=False, default="[]")  # [{uid, cot_type}]
+    cot_uids_json = db.Column(Text, nullable=False, default="[]")  # [{uid, cot_type, audience}]
 
     def serialize(self):
         now = datetime.utcnow()
@@ -319,10 +325,51 @@ class GameMatch(db.Model):
             "started_by": self.started_by,
             "end_reason": self.end_reason,
             "winner": self.winner,
+            "team_a_group_id": self.team_a_group_id,
+            "team_b_group_id": self.team_b_group_id,
+            "observer_group_ids": _loads(self.observers_json, []),
             "remaining_seconds": max(0, remaining) if (self.status == "running" and remaining is not None) else 0,
             "expired": self.status == "running" and remaining is not None and remaining <= 0,
             "snapshot": _loads(self.snapshot_json, {}),
         }
+
+
+class GmGroup(db.Model):
+    """Anagrafica dei gruppi di gioco: Team A/B di una partita e gruppi
+    "osservatori" broadcast (es. Admins, Headquarter) che vedono tutto.
+
+    I membri sono EUD (uid degli ATAK/WinTAK): la consegna mirata pubblica i
+    CoT sull'exchange "dms" di OTS con routing key = uid, quindi vale subito
+    anche per gli EUD già collegati (nessuna riconnessione necessaria).
+    """
+
+    __tablename__ = "gm_groups"
+
+    id = db.Column(Integer, primary_key=True)
+    name = db.Column(String(255), nullable=False, unique=True)
+    created_at = db.Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    members = relationship("GmGroupEud", back_populates="group", cascade="all, delete-orphan")
+
+    def serialize(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "members": [m.eud_uid for m in self.members],
+        }
+
+
+class GmGroupEud(db.Model):
+    """Appartenenza di un EUD a un gruppo di gioco."""
+
+    __tablename__ = "gm_group_euds"
+    __table_args__ = (UniqueConstraint("group_id", "eud_uid", name="uq_gm_group_eud"),)
+
+    id = db.Column(Integer, primary_key=True)
+    group_id = db.Column(Integer, ForeignKey("gm_groups.id"), nullable=False)
+    eud_uid = db.Column(String(255), nullable=False)
+
+    group = relationship("GmGroup", back_populates="members")
 
 
 class EngineLease(db.Model):
@@ -349,6 +396,8 @@ PLUGIN_TABLES = [
     Rank.__table__,
     PlayerScore.__table__,
     GameTemplate.__table__,
+    GmGroup.__table__,
+    GmGroupEud.__table__,
     GameMatch.__table__,
     EngineLease.__table__,
 ]

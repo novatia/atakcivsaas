@@ -25,7 +25,7 @@ from opentakserver.extensions import db, logger
 
 from . import cot
 from .game_modes import GAME_MODES
-from .models import EngineLease, GameMatch
+from .models import EngineLease, GameMatch, GmGroupEud
 
 TICK_SECONDS = 1
 LEASE_TIMEOUT = timedelta(seconds=10)
@@ -102,18 +102,71 @@ def match_events_for(mode: str) -> dict:
 
 
 # ----------------------------------------------------------------------
+# Destinatari: gruppi della partita -> uid degli EUD
+# ----------------------------------------------------------------------
+
+
+def resolve_targets(match: GameMatch) -> dict | None:
+    """Risolve i gruppi della partita in insiemi di uid EUD, al momento
+    dell'invio (i cambi di membri valgono subito, es. con «Ripubblica»).
+
+    None = partita senza gruppi: broadcast storico a tutti. Altrimenti
+    {"team_a": spawn A + osservatori, "team_b": spawn B + osservatori,
+    "all": tutti i coinvolti} — è la mappa delle audience dei marker.
+    """
+    observer_ids = json.loads(match.observers_json or "[]")
+    if not (match.team_a_group_id or match.team_b_group_id or observer_ids):
+        return None
+
+    def members(group_id) -> set:
+        if not group_id:
+            return set()
+        rows = db.session.query(GmGroupEud).filter_by(group_id=group_id).all()
+        return {row.eud_uid for row in rows}
+
+    team_a = members(match.team_a_group_id)
+    team_b = members(match.team_b_group_id)
+    observers: set = set()
+    for group_id in observer_ids:
+        observers |= members(group_id)
+
+    return {
+        "team_a": team_a | observers,
+        "team_b": team_b | observers,
+        "all": team_a | team_b | observers,
+    }
+
+
+def audience_targets(targets: dict | None, audience: str):
+    """Destinatari per una audience ("team_a"/"team_b"/"all"); None = broadcast."""
+    if targets is None:
+        return None
+    return targets.get(audience) or targets["all"]
+
+
+# ----------------------------------------------------------------------
 # Chiusura partita (usata dal tick, dagli eventi e dal Termina manuale)
 # ----------------------------------------------------------------------
 
 
 def finish_match(match: GameMatch, end_reason: str, winner: str | None, chat_text: str) -> bool:
-    """Chiude la partita: cancella i marker dagli EUD, annuncia in chat e
-    salva esito/timestamp. Ritorna False se il broadcast è fallito (la
-    partita viene chiusa comunque: i marker spariranno con lo stale)."""
+    """Chiude la partita: cancella i marker dagli EUD che li avevano ricevuti
+    (stessa audience dell'invio), annuncia in chat ai coinvolti e salva
+    esito/timestamp. Ritorna False se la pubblicazione è fallita (la partita
+    viene chiusa comunque: i marker spariranno con lo stale)."""
+    targets = resolve_targets(match)
     uids = json.loads(match.cot_uids_json or "[]")
-    events = [cot.delete_event(u["uid"], u["cot_type"] or "a-u-G") for u in uids]
-    events.append(cot.geochat_event(chat_text, _sender_uid(), _callsign()))
-    broadcast_ok = cot.broadcast(events)
+    items = [
+        (
+            cot.delete_event(u["uid"], u["cot_type"] or "a-u-G"),
+            audience_targets(targets, u.get("audience", "all")),
+        )
+        for u in uids
+    ]
+    items.append(
+        (cot.geochat_event(chat_text, _sender_uid(), _callsign()), audience_targets(targets, "all"))
+    )
+    broadcast_ok = cot.deliver(items)
 
     match.status = "ended"
     match.ended_at = _utcnow()

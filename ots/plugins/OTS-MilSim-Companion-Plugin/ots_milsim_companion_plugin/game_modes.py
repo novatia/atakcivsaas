@@ -24,6 +24,7 @@ MARKER_TYPES = {
         "argb": argb("FFE53935"),
         "callsign": "SPAWN A",
         "spot": False,
+        "audience": "team_a",         # lo vede solo il Team A (+ osservatori)
     },
     "spawn_b": {
         "label": "Spawn Team B",
@@ -33,6 +34,7 @@ MARKER_TYPES = {
         "argb": argb("FF1E88E5"),
         "callsign": "SPAWN B",
         "spot": False,
+        "audience": "team_b",
     },
     "flag": {
         "label": "Bandiera",
@@ -42,6 +44,7 @@ MARKER_TYPES = {
         "argb": argb("FFFFD800"),
         "callsign": "BANDIERA",
         "spot": False,
+        "audience": "all",            # in CTF tutti sanno dove sta la bandiera
     },
     "bomb_site_a": {
         "label": "Bomb site A",
@@ -51,6 +54,7 @@ MARKER_TYPES = {
         "argb": argb("FF9C27B0"),
         "callsign": "BOMB A",
         "spot": True,
+        "audience": "all",            # entrambi i team conoscono i siti di detonazione
     },
     "bomb_site_b": {
         "label": "Bomb site B",
@@ -60,6 +64,7 @@ MARKER_TYPES = {
         "argb": argb("FF9C27B0"),
         "callsign": "BOMB B",
         "spot": True,
+        "audience": "all",
     },
     "dom_point": {
         "label": "Punto di dominio",
@@ -69,6 +74,7 @@ MARKER_TYPES = {
         "argb": argb("FFFB8C00"),
         "callsign": "DOM",
         "spot": True,
+        "audience": "all",
     },
 }
 
@@ -78,18 +84,21 @@ ZONE_TYPES = {
         "color": "#9C27B0",
         "stroke_argb": argb("FF9C27B0"),
         "fill_argb": argb("409C27B0"),   # stesso colore, alpha 25%
+        "audience": "all",
     },
     "dom_area": {
         "label": "Area punto di dominio",
         "color": "#FB8C00",
         "stroke_argb": argb("FFFB8C00"),
         "fill_argb": argb("40FB8C00"),
+        "audience": "all",
     },
     "field_boundary": {
         "label": "Perimetro campo",
         "color": "#43A047",
         "stroke_argb": argb("FF43A047"),
         "fill_argb": argb("2043A047"),
+        "audience": "all",
     },
 }
 

@@ -140,8 +140,8 @@
   .kw { display: inline-block; background: var(--tab); border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px; font-size: 11px; color: var(--muted); margin-right: 4px; }
   .pcn-status { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px;
     margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
-  #modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
-  #modal-backdrop.hidden { display: none; }
+  #modal-backdrop, #play-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
+  #modal-backdrop.hidden, #play-backdrop.hidden { display: none; }
   .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; width: min(420px, 92vw); display: flex; flex-direction: column; gap: 12px; }
   .modal h2 { margin: 0; }
   .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
@@ -181,6 +181,24 @@
     <div class="modal-actions">
       <button class="btn" onclick="closeMissionModal()">Annulla</button>
       <button class="btn primary" id="assign-btn" onclick="assignToMission()">Assegna</button>
+    </div>
+  </div>
+</div>
+<div id="play-backdrop" class="hidden" onclick="closePlayModal()">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h2>▶ Prepara missione</h2>
+    <div id="play-info" class="muted"></div>
+    <label>Team A <select id="play-team-a"></select></label>
+    <label>Team B <select id="play-team-b"></select></label>
+    <label>Osservatori (vedono tutto: es. Admins, Headquarter)
+      <div id="play-observers" class="pkg-list" style="max-height:110px"></div>
+    </label>
+    <p class="muted" style="margin:0">Senza gruppi la missione viene trasmessa a <b>tutti</b> gli EUD collegati.
+      Con i gruppi: lo <b>spawn A</b> lo vede solo il Team A (+ osservatori), lo <b>spawn B</b> solo il Team B;
+      bandiere, bomb site, punti di dominio, aree, chat e data package vanno a tutti i coinvolti.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closePlayModal()">Annulla</button>
+      <button class="btn primary" id="play-confirm-btn" onclick="confirmPlay()">📡 Prepara missione</button>
     </div>
   </div>
 </div>
@@ -255,6 +273,7 @@ const TABS = [
   { id: "gm_templates", label: "Template missioni", admin: true, render: () => { clearEventHash(); renderTemplates(); } },
   { id: "gm_matches", label: "Partite", admin: true, render: () => { clearEventHash(); renderMatches(); } },
   { id: "gm_modes", label: "Modalità di gioco", admin: true, render: () => { clearEventHash(); renderModes(); } },
+  { id: "gm_teams", label: "Team", admin: true, render: () => { clearEventHash(); renderTeams(); } },
   { id: "skyfi", label: "SkyFi", admin: true, render: () => { clearEventHash(); renderOrders(); } },
   { id: "missions", label: "Missioni", admin: true, render: () => { clearEventHash(); renderMissions(); } },
   { id: "leaderboard", label: "Classifica", admin: false, render: () => { clearEventHash(); renderLeaderboard(); } },
@@ -1269,22 +1288,61 @@ async function deleteTemplate(id, title) {
   } catch (e) { toast("Errore: " + e.message, false); }
 }
 
+// Il Play apre il modal di preparazione: scelta dei gruppi destinatari
+// (Team A/B, osservatori) o broadcast a tutti; il timer parte solo con 🚦
+let PLAY_TPL = null, GM_GROUPS = [];
+
 async function playTemplate(id, btn) {
   const t = TEMPLATES.find(x => x.id === id);
   if (!t) return;
-  const mode = REGISTRY.modes[t.mode];
-  if (!confirm(`Preparare la missione "${t.title}" (${mode.name}, ${t.duration_minutes} min)?\n\n` +
-      `Verranno pushati a TUTTI gli EUD collegati: ${t.markers.length} marker, ${t.zones.length} aree` +
-      (t.packages.length ? `, ${t.packages.length} data package` : "") +
-      `.\n\nIl timer NON parte: la partita si avvia con 🚦 Inizia partita dal tab Partite (luce verde + timer del server).`)) return;
-  btn.disabled = true;
   try {
-    const res = await api(`/templates/${id}/play`, { method: "POST" });
-    toast(`Missione "${t.title}" pronta: dai la luce verde da Partite.` + (res.warning ? " ⚠️ " + res.warning : ""), !res.warning);
+    GM_GROUPS = await api("/groups");
+  } catch (e) { return toast("Errore caricamento gruppi: " + e.message, false); }
+  PLAY_TPL = t;
+  const mode = REGISTRY.modes[t.mode];
+  document.getElementById("play-info").textContent =
+    `${t.title} — ${mode.name}, ${t.duration_minutes} min · ${t.markers.length} marker, ${t.zones.length} aree` +
+    (t.packages.length ? `, ${t.packages.length} data package` : "");
+  const options = `<option value="">— tutti (broadcast) —</option>` +
+    GM_GROUPS.map(g => `<option value="${g.id}">${esc(g.name)} (${g.members.length} EUD)</option>`).join("");
+  document.getElementById("play-team-a").innerHTML = options;
+  document.getElementById("play-team-b").innerHTML = options;
+  document.getElementById("play-observers").innerHTML = GM_GROUPS.length
+    ? GM_GROUPS.map(g => `<label><input type="checkbox" value="${g.id}"> ${esc(g.name)} <span class="muted">(${g.members.length} EUD)</span></label>`).join("")
+    : '<span class="muted">Nessun gruppo definito: crea i team nel tab Team.</span>';
+  const confirmBtn = document.getElementById("play-confirm-btn");
+  confirmBtn.disabled = false;
+  confirmBtn.textContent = "📡 Prepara missione";
+  document.getElementById("play-backdrop").classList.remove("hidden");
+}
+
+function closePlayModal() {
+  document.getElementById("play-backdrop").classList.add("hidden");
+  PLAY_TPL = null;
+}
+
+async function confirmPlay() {
+  if (!PLAY_TPL) return;
+  const teamA = document.getElementById("play-team-a").value;
+  const teamB = document.getElementById("play-team-b").value;
+  const observers = [...document.querySelectorAll("#play-observers input:checked")].map(c => +c.value);
+  if (teamA && teamA === teamB) return toast("Team A e Team B non possono essere lo stesso gruppo.", false);
+  const btn = document.getElementById("play-confirm-btn");
+  btn.disabled = true;
+  btn.textContent = "Push in corso…";
+  try {
+    const res = await api(`/templates/${PLAY_TPL.id}/play`, { method: "POST", body: {
+      team_a_group_id: teamA ? +teamA : null,
+      team_b_group_id: teamB ? +teamB : null,
+      observer_group_ids: observers,
+    } });
+    toast(`Missione "${PLAY_TPL.title}" pronta: dai la luce verde da Partite.` + (res.warning ? " ⚠️ " + res.warning : ""), !res.warning);
+    closePlayModal();
     gmGoTab("gm_matches");
   } catch (e) {
     toast("Errore Play: " + e.message, false);
     btn.disabled = false;
+    btn.textContent = "📡 Prepara missione";
   }
 }
 
@@ -1590,6 +1648,14 @@ function fmtCountdown(seconds) {
 
 const END_REASONS = { time: "tempo scaduto", objective: "obiettivo", manual: "chiusa dal GM" };
 
+function matchGroupsLine(m) {
+  const g = m.groups || {};
+  if (!g.team_a && !g.team_b && !(g.observers || []).length) return "📢 broadcast a tutti gli EUD";
+  const parts = [`👥 A: ${esc(g.team_a || "tutti")} · B: ${esc(g.team_b || "tutti")}`];
+  if ((g.observers || []).length) parts.push(`👁 ${g.observers.map(esc).join(", ")}`);
+  return parts.join(" · ");
+}
+
 async function renderMatches() {
   clearInterval(MATCH_TIMER);
   const el = document.getElementById("content");
@@ -1613,7 +1679,7 @@ async function renderMatches() {
     <div class="match-card">
       <div>
         <strong>${mode.icon} ${esc(m.title)}</strong> <span class="pill neutral">pronta</span><br>
-        <span class="muted">${esc(mode.name)} · ${m.duration_minutes} min · preparata ${fmtDT(m.created_at)} da ${esc(m.started_by || "")}</span>
+        <span class="muted">${esc(mode.name)} · ${m.duration_minutes} min · preparata ${fmtDT(m.created_at)} da ${esc(m.started_by || "")}<br>${matchGroupsLine(m)}</span>
       </div>
       <span style="flex:1"></span>
       <button class="btn primary" onclick="startMatch(${m.id}, '${safeTitle(m)}', ${m.duration_minutes}, this)"
@@ -1635,7 +1701,7 @@ async function renderMatches() {
     <div class="match-card">
       <div>
         <strong>${mode.icon} ${esc(m.title)}</strong> <span class="pill ${m.expired ? "warn" : "ok"}">${m.expired ? "tempo scaduto" : "in corso"}</span><br>
-        <span class="muted">${esc(mode.name)} · luce verde ${fmtDT(m.started_at)} · fine ${fmtDT(m.ends_at)} · il server chiude da solo allo scadere</span>
+        <span class="muted">${esc(mode.name)} · luce verde ${fmtDT(m.started_at)} · fine ${fmtDT(m.ends_at)} · il server chiude da solo allo scadere<br>${matchGroupsLine(m)}</span>
       </div>
       <div class="countdown" data-ends="${esc(m.ends_at)}">--:--</div>
       <span style="flex:1"></span>
@@ -1737,6 +1803,95 @@ async function endMatch(id, title, status, btn) {
     toast("Errore: " + e.message, false);
     btn.disabled = false;
   }
+}
+
+/* ---- Tab Team: gruppi di gioco (Team A/B e osservatori) ---- */
+let TEAM_EUDS = [];
+
+async function renderTeams() {
+  const el = document.getElementById("content");
+  el.innerHTML = "Caricamento gruppi…";
+  try {
+    [GM_GROUPS, TEAM_EUDS] = await Promise.all([api("/groups"), api("/euds")]);
+  } catch (e) {
+    el.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
+    return;
+  }
+  const callsigns = {};
+  TEAM_EUDS.forEach(e => callsigns[e.uid] = e.callsign || e.uid);
+  const eudLabel = uid => callsigns[uid] ? `${esc(callsigns[uid])} <span class="muted">(${esc(uid)})</span>` : esc(uid);
+
+  const groupCards = GM_GROUPS.map(g => {
+    const freeEuds = TEAM_EUDS.filter(e => !g.members.includes(e.uid));
+    return `
+    <div class="mode-card">
+      <div style="display:flex; align-items:baseline; gap:8px">
+        <h2 style="margin:0">👥 ${esc(g.name)}</h2>
+        <span class="muted">${g.members.length} EUD</span>
+        <span style="flex:1"></span>
+        <button class="btn small danger" onclick="deleteGroup(${g.id}, '${esc(g.name).replace(/'/g, "\\'")}')">🗑 Elimina</button>
+      </div>
+      ${g.members.length ? `<table style="margin-top:8px"><tbody>
+        ${g.members.map(uid => `<tr><td>${eudLabel(uid)}</td>
+          <td style="text-align:right"><button class="btn small" onclick="removeGroupMember(${g.id}, '${esc(uid).replace(/'/g, "\\'")}')">Rimuovi</button></td></tr>`).join("")}
+      </tbody></table>` : '<p class="muted" style="margin:8px 0 0">Nessun EUD nel gruppo.</p>'}
+      ${freeEuds.length ? `
+      <form class="inline" style="margin:10px 0 0" onsubmit="event.preventDefault(); addGroupMember(${g.id}, this.eud.value);">
+        <label>Aggiungi EUD
+          <select name="eud">${freeEuds.map(e => `<option value="${esc(e.uid)}">${esc(e.callsign || e.uid)}</option>`).join("")}</select>
+        </label>
+        <button class="btn primary">＋ Aggiungi</button>
+      </form>` : ""}
+    </div>`;
+  }).join("");
+
+  el.innerHTML = `
+    <p class="muted" style="margin-top:0">I gruppi decidono <b>chi riceve cosa</b> quando prepari una missione:
+      al Play scegli il gruppo del Team A, quello del Team B e gli osservatori broadcast (es. Admins, Headquarter)
+      che vedono tutto. Lo spawn di un team lo vede solo quel team; bandiere, bomb site, punti di dominio e aree
+      vanno a tutti i coinvolti. Senza gruppi la missione viene trasmessa a tutti gli EUD collegati.
+      I membri sono gli EUD conosciuti dal server (${TEAM_EUDS.length}): i cambi valgono subito, anche a partita
+      in corso con «Ripubblica».</p>
+    <h3>Nuovo gruppo</h3>
+    <form class="inline" id="group-form">
+      <label>Nome <input name="name" required placeholder="es. Team Alpha, Admins, Headquarter"></label>
+      <button class="btn primary" type="submit">＋ Crea gruppo</button>
+    </form>
+    ${GM_GROUPS.length ? `<div class="mode-grid">${groupCards}</div>` : "<p class='muted'>Nessun gruppo: creane uno (es. Team Alpha, Team Bravo, Admins).</p>"}`;
+
+  document.getElementById("group-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api("/groups", { method: "POST", body: Object.fromEntries(new FormData(e.target).entries()) });
+      toast("Gruppo creato");
+      renderTeams();
+    } catch (err) { toast(err.message, false); }
+  };
+}
+
+async function addGroupMember(groupId, uid) {
+  try {
+    await api(`/groups/${groupId}/members`, { method: "POST", body: { uid } });
+    toast("EUD aggiunto al gruppo");
+    renderTeams();
+  } catch (e) { toast(e.message, false); }
+}
+
+async function removeGroupMember(groupId, uid) {
+  try {
+    await api(`/groups/${groupId}/members`, { method: "DELETE", body: { uid } });
+    toast("EUD rimosso dal gruppo");
+    renderTeams();
+  } catch (e) { toast(e.message, false); }
+}
+
+async function deleteGroup(groupId, name) {
+  if (!confirm(`Eliminare il gruppo "${name}"?`)) return;
+  try {
+    await api(`/groups/${groupId}`, { method: "DELETE" });
+    toast("Gruppo eliminato");
+    renderTeams();
+  } catch (e) { toast(e.message, false); }
 }
 
 /* ---- Tab Modalità di gioco (anagrafica + config Game Master) ---- */
