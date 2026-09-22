@@ -109,6 +109,27 @@ fi
 
 # ------------------------- Restart servizio -------------------------
 step "Riavvio ${OTS_SERVICE}"
+
+# Il riavvio SCOLLEGA TUTTI GLI EUD: opentakserver-eud-handler.service ha
+# PartOf=opentakserver.service, quindi systemd lo riavvia insieme al servizio
+# principale e ogni connessione TCP sulla 8089 cade. Gli ATAK si riconnettono
+# da soli, ma non all'istante: un telefono in background può metterci minuti,
+# e nel frattempo smette anche di rilanciare i tag Meshtastic. Mai installare
+# a partita in corso.
+CONNECTED_EUDS=$(ss -Htn state established "( sport = :8089 )" 2>/dev/null | wc -l)
+if [ "${CONNECTED_EUDS:-0}" -gt 0 ]; then
+    warn "Ci sono ${CONNECTED_EUDS} EUD collegati sulla 8089: il riavvio li scollegherà tutti."
+    if [ -t 0 ] && [ "${ASSUME_YES:-0}" != "1" ]; then
+        read -r -p "Procedere comunque? [s/N] " REPLY
+        case "${REPLY}" in
+            s|S|y|Y) ;;
+            *) die "Annullato. Rilancia a partita finita, o con ASSUME_YES=1 per non chiedere." ;;
+        esac
+    else
+        warn "Nessun terminale interattivo (o ASSUME_YES=1): procedo."
+    fi
+fi
+
 systemctl restart "${OTS_SERVICE}"
 log "Attendo l'avvio del servizio..."
 sleep 5

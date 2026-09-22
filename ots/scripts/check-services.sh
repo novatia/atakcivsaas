@@ -35,6 +35,17 @@ STATE_FILE=/var/lib/ots-health/state
 UNITS="rabbitmq-server opentakserver opentakserver-cot-parser opentakserver-eud-handler"
 
 [ -f "$ENV_FILE" ] && . "$ENV_FILE"
+
+# Nome del database: si legge da dove sta la verità, cioè la configurazione di
+# OpenTAKServer, invece di indovinare «opentakserver» (su questo server è
+# diverso, e il controllo sui CoT restava muto finché non lo si scopriva a
+# mano). Si estrae SOLO l'ultimo pezzo della URI: la riga contiene anche la
+# password del DB e non deve finire da nessuna parte.
+OTS_CONFIG=${OTS_CONFIG:-/home/ots/ots/config.yml}
+if [ -z "${OTS_DB_NAME:-}" ] && [ -r "$OTS_CONFIG" ]; then
+    OTS_DB_NAME=$(sed -n 's/^[[:space:]]*SQLALCHEMY_DATABASE_URI[[:space:]]*:[[:space:]]*//p' "$OTS_CONFIG" \
+        | head -n1 | tr -d '"'"'"' ' | sed 's/?.*$//; s#.*/##')
+fi
 OTS_DB_NAME=${OTS_DB_NAME:-opentakserver}
 COT_STALE_MINUTES=${COT_STALE_MINUTES:-10}
 HOST=$(hostname -s 2>/dev/null || hostname)
