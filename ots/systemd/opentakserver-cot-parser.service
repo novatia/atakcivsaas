@@ -8,7 +8,15 @@ PartOf=opentakserver.service
 User=ots
 WorkingDirectory=/home/ots/ots
 ExecStart=/home/ots/.opentakserver_venv/bin/cot_parser
-Restart=on-failure
+# Restart=always, NON on-failure: il main di cot_parser forka un figlio e poi
+# fa os.waitpid() su di lui; quando il figlio muore (connessione RabbitMQ
+# caduta, eccezione nel suo ioloop...) la waitpid ritorna, main() finisce e il
+# processo padre esce con codice 0. Per systemd è un'uscita RIUSCITA, quindi
+# con on-failure il parser resta morto in silenzio: nessun CoT viene più
+# smistato ai gruppi né scritto a DB, e gli EUD smettono di vedersi fra loro
+# senza un solo errore nei log. Successo verificato sul server il 2026-09-22:
+# «Deactivated successfully» senza nessuno «Stopping» che lo precedesse.
+Restart=always
 RestartSec=5s
 StandardOutput=append:/home/ots/ots/logs/opentakserver.log
 StandardError=append:/home/ots/ots/logs/opentakserver.log

@@ -67,13 +67,39 @@ ots/
 ### Troubleshooting
 
 - **EUD connessi ma invisibili in mappa / tabelle `cot` e `points` vuote**: il main di OTS
-  non avvia il processo `cot_parser` (che consuma i CoT da RabbitMQ e li scrive nel DB),
-  nonostante `OTS_COT_PARSER_PROCESSES: 1` in `config.yml`. Soluzione: unit dedicata —
+  non avvia il processo `cot_parser` (che consuma i CoT da RabbitMQ, li scrive nel DB e
+  soprattutto li **smista ai gruppi** con `route_cot`), nonostante
+  `OTS_COT_PARSER_PROCESSES: 1` in `config.yml`. Soluzione: unit dedicata —
   ```bash
   cp ots/systemd/opentakserver-cot-parser.service /etc/systemd/system/
   systemctl daemon-reload && systemctl enable --now opentakserver-cot-parser
   ```
   Dopo ogni upgrade verificare che giri: `ps aux | grep cot_parser`.
+
+- **`cot_parser` muore da solo e systemd non lo riavvia** (osservato il 2026-09-22 dopo
+  12 ore di esercizio). Il `main()` di cot_parser forka un figlio e poi fa `os.waitpid()`
+  su di lui: quando il figlio muore, la waitpid ritorna, `main()` finisce e il **padre esce
+  con codice 0**. Per systemd è un'uscita riuscita, quindi con `Restart=on-failure` l'unit
+  resta `inactive (dead)` in silenzio. Firma nel journal: un `Deactivated successfully`
+  **senza** nessun `Stopping` che lo precede.
+
+  L'unit nel repo usa quindi `Restart=always`. Se la tua copia in
+  `/etc/systemd/system/` è vecchia, riallineala:
+  ```bash
+  cp ots/systemd/opentakserver-cot-parser.service /etc/systemd/system/
+  systemctl daemon-reload && systemctl restart opentakserver-cot-parser
+  ```
+
+  **Come si manifesta**: gli EUD sono connessi, il traffico CoT arriva (il monitor
+  Meshtastic di MilSim Companion continua a mostrarlo, perché il firehose lo alimenta
+  `eud_handler`), ma nessun EUD vede più gli altri e la tabella `cot` smette di crescere.
+  Diagnosi in due comandi:
+  ```bash
+  ps aux | grep -c "[c]ot_parser"
+  sudo -u postgres psql opentakserver -c "SELECT sender_uid, type, timestamp FROM cot ORDER BY id DESC LIMIT 5;"
+  ```
+  Se il primo dà `0` e l'ultima riga di `cot` è vecchia, è questo. Bug upstream da
+  segnalare: il padre dovrebbe uscire con codice diverso da zero quando il figlio muore.
 
 ### Documentazione
 
