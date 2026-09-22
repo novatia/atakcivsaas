@@ -31,6 +31,7 @@ from sqlalchemy import insert
 from opentakserver.blueprints.marti_api.data_package_marti_api import create_data_package_zip
 from opentakserver.extensions import db, logger
 from opentakserver.models.DataPackage import DataPackage
+from opentakserver.models.EUD import EUD
 from opentakserver.models.Mission import Mission
 from opentakserver.models.MissionChange import MissionChange
 from opentakserver.models.MissionContent import MissionContent
@@ -2468,32 +2469,196 @@ class MilSimCompanionPlugin(Plugin):
 
             usernames = {u.id: u.username for u in db.session.query(User).all()}
 
-            # Utenti (abilitati) per gruppo, qualunque direzione IN/OUT
-            users_by_group: dict[int, set] = {}
+            # Utenti (abilitati) per gruppo, con le direzioni presenti.
+            # In OTS l'appartenenza è per UTENTE, non per EUD (groups_users:
+            # user_id + group_id + direction): OUT = l'EUD riceve il traffico
+            # del gruppo, IN = i CoT dell'EUD vengono smistati a quel gruppo.
+            users_by_group: dict[int, dict[int, set]] = {}
             for membership in db.session.query(GroupUser).filter_by(enabled=True).all():
-                users_by_group.setdefault(membership.group_id, set()).add(membership.user_id)
+                directions = users_by_group.setdefault(membership.group_id, {}).setdefault(
+                    membership.user_id, set()
+                )
+                directions.add(membership.direction)
 
             result = []
             for group in db.session.query(Group).order_by(Group.name).all():
                 members = []
-                for user_id in sorted(users_by_group.get(group.id, set())):
+                users = []
+                for user_id, directions in sorted(users_by_group.get(group.id, {}).items()):
                     user_euds = euds_by_user.get(user_id, [])
                     for eud in user_euds:
-                        members.append({**eud, "username": usernames.get(user_id)})
+                        members.append({**eud, "user_id": user_id, "username": usernames.get(user_id)})
                     if not user_euds:
                         # Utente nel gruppo ma senza EUD registrati: mostralo comunque
-                        members.append({"uid": None, "callsign": None, "username": usernames.get(user_id), "last_event_time": None})
+                        members.append({"uid": None, "callsign": None, "user_id": user_id,
+                                        "username": usernames.get(user_id), "last_event_time": None})
+                    users.append(
+                        {
+                            "user_id": user_id,
+                            "username": usernames.get(user_id),
+                            "directions": sorted(directions),
+                            "euds": user_euds,
+                        }
+                    )
                 result.append(
                     {
                         "id": group.id,
                         "name": group.name,
                         "description": group.description,
                         "members": members,
+                        "users": users,
                         "eud_count": sum(1 for m in members if m["uid"]),
                     }
                 )
             return jsonify(result)
         except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+
+    # ------------------------------------------------------------------
+    # Composizione delle squadre: utenti dentro/fuori dai gruppi TAK
+    # ------------------------------------------------------------------
+    #
+    # In OpenTAKServer l'appartenenza è per UTENTE, non per EUD: la tabella
+    # `groups_users` ha (user_id, group_id, direction) e la docstring dell'API
+    # di OTS lo dice esplicitamente — «this will allow all the user's EUDs to
+    # subscribe and unsubscribe». Quindi si assegna un utente e lo seguono
+    # tutti i suoi dispositivi; non esiste un modo di mettere in squadra un
+    # singolo EUD lasciando fuori gli altri dello stesso utente.
+    #
+    # Si scrivono entrambe le direzioni, come serve a una squadra vera:
+    #   OUT = gli EUD dell'utente RICEVONO il traffico del gruppo
+    #   IN  = i CoT degli EUD dell'utente vengono smistati a quel gruppo
+    # (rispettivamente EudHandler per i binding delle code e route_cot per lo
+    # smistamento, verificati sul sorgente di OTS 1.7.13).
+
+    @staticmethod
+    def _group_membership_guard():
+        """None se si può procedere, altrimenti la risposta di errore."""
+        if app.config.get("OTS_ENABLE_LDAP"):
+            return jsonify({
+                "success": False,
+                "error": "LDAP attivo: i gruppi si gestiscono sul server LDAP, non da qui",
+            }), 400
+        return None
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/groups/<int:group_id>/members", methods=["POST"])
+    def add_group_member(group_id: int):
+        """Aggiunge un utente (e quindi tutti i suoi EUD) al gruppo."""
+        try:
+            from opentakserver.models.Group import Group
+            from opentakserver.models.GroupUser import GroupUser
+
+            guard = MilSimCompanionPlugin._group_membership_guard()
+            if guard:
+                return guard
+
+            group = db.session.get(Group, group_id)
+            if not group:
+                return jsonify({"success": False, "error": "Gruppo inesistente"}), 404
+
+            body = request.json or {}
+            user = None
+            if body.get("user_id"):
+                user = db.session.get(User, int(body["user_id"]))
+            elif body.get("username"):
+                user = db.session.query(User).filter_by(username=body["username"]).first()
+            if not user:
+                return jsonify({"success": False, "error": "Utente inesistente"}), 400
+
+            added = []
+            for direction in (Group.IN, Group.OUT):
+                existing = (
+                    db.session.query(GroupUser)
+                    .filter_by(user_id=user.id, group_id=group.id, direction=direction)
+                    .first()
+                )
+                if existing:
+                    if not existing.enabled:
+                        existing.enabled = True
+                        added.append(direction)
+                    continue
+                membership = GroupUser()
+                membership.user_id = user.id
+                membership.group_id = group.id
+                membership.direction = direction
+                membership.enabled = True
+                db.session.add(membership)
+                added.append(direction)
+            db.session.commit()
+
+            # Le code degli EUD già collegati vanno legate adesso: OTS lo fa
+            # solo alla connessione, quindi senza questo l'utente entrerebbe in
+            # squadra ma non riceverebbe nulla fino al riavvio di ATAK.
+            eud_uids = [e.uid for e in db.session.query(EUD).filter_by(user_id=user.id).all()]
+            bound, warnings = cot.group_bindings(eud_uids, group.name, bind=True)
+
+            logger.info(
+                f"MilSim: {user.username} aggiunto al gruppo {group.name} "
+                f"({len(eud_uids)} EUD, {bound} code legate)"
+            )
+            return jsonify({
+                "success": True,
+                "username": user.username,
+                "group": group.name,
+                "directions": added,
+                "euds": len(eud_uids),
+                "bound": bound,
+                "warnings": warnings,
+            })
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/groups/<int:group_id>/members/<int:user_id>", methods=["DELETE"])
+    def remove_group_member(group_id: int, user_id: int):
+        """Toglie l'utente (e quindi i suoi EUD) dal gruppo, sbindando le code."""
+        try:
+            from opentakserver.models.Group import Group
+            from opentakserver.models.GroupUser import GroupUser
+
+            guard = MilSimCompanionPlugin._group_membership_guard()
+            if guard:
+                return guard
+
+            group = db.session.get(Group, group_id)
+            if not group:
+                return jsonify({"success": False, "error": "Gruppo inesistente"}), 404
+            user = db.session.get(User, user_id)
+            if not user:
+                return jsonify({"success": False, "error": "Utente inesistente"}), 404
+
+            # Prima si sbinda (servono ancora gli EUD), poi si cancella
+            eud_uids = [e.uid for e in db.session.query(EUD).filter_by(user_id=user.id).all()]
+            unbound, warnings = cot.group_bindings(eud_uids, group.name, bind=False)
+
+            removed = (
+                db.session.query(GroupUser)
+                .filter_by(user_id=user.id, group_id=group.id)
+                .delete()
+            )
+            db.session.commit()
+
+            logger.info(
+                f"MilSim: {user.username} rimosso dal gruppo {group.name} "
+                f"({removed} membership, {unbound} code slegate)"
+            )
+            return jsonify({
+                "success": True,
+                "username": user.username,
+                "group": group.name,
+                "removed": removed,
+                "unbound": unbound,
+                "warnings": warnings,
+            })
+        except BaseException as e:
+            db.session.rollback()
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 500
 

@@ -256,3 +256,59 @@ def deliver(items: list[tuple[Element, set | list | None]]) -> bool:
 def broadcast(events: list[Element]) -> bool:
     """Broadcast storico a tutti gli EUD (cot_parser + firehose)."""
     return deliver([(event, None) for event in events])
+
+
+def group_bindings(eud_uids: list[str], group_name: str, bind: bool = True) -> tuple[int, list[str]]:
+    """Lega (o slega) le code degli EUD all'exchange `groups` del gruppo.
+
+    Serve perché OTS lega le code SOLO alla connessione dell'EUD
+    (`EudHandler`, routing key `<gruppo>.OUT` per ogni membership OUT):
+    aggiungere un utente a un gruppo scrive la riga in `groups_users` ma NON
+    ha effetto sugli EUD già collegati finché non si riconnettono. Togliendo
+    un utente OTS invece sbinda subito (`group_api.remove_user_from_group`):
+    qui si fa la stessa cosa anche in aggiunta, così la squadra vale
+    all'istante.
+
+    Un EUD che non si è mai collegato non ha una coda: il bind fallisce e
+    chiude il canale. Si usa quindi un canale per EUD e si raccolgono gli
+    avvisi invece di far fallire tutta l'operazione — quell'EUD verrà legato
+    da solo al primo collegamento.
+
+    Ritorna (quanti legati/slegati, avvisi).
+    """
+    if not eud_uids:
+        return 0, []
+    routing_key = f"{group_name}.{'OUT'}"
+    done, warnings = 0, []
+    connection = None
+    try:
+        credentials = pika.PlainCredentials(
+            app.config.get("OTS_RABBITMQ_USERNAME"), app.config.get("OTS_RABBITMQ_PASSWORD")
+        )
+        connection = pika.BlockingConnection(
+            pika.ConnectionParameters(
+                host=app.config.get("OTS_RABBITMQ_SERVER_ADDRESS"), credentials=credentials
+            )
+        )
+        for uid in eud_uids:
+            try:
+                channel = connection.channel()
+                if bind:
+                    channel.queue_bind(exchange="groups", queue=uid, routing_key=routing_key)
+                else:
+                    channel.queue_unbind(exchange="groups", queue=uid, routing_key=routing_key)
+                channel.close()
+                done += 1
+            except BaseException as e:
+                warnings.append(f"{uid}: {e}")
+                logger.warning(f"MilSim: binding gruppo {group_name} per {uid} non riuscito: {e}")
+    except BaseException as e:
+        logger.error(f"MilSim: RabbitMQ non raggiungibile per i binding di gruppo: {e}")
+        warnings.append(str(e))
+    finally:
+        try:
+            if connection and connection.is_open:
+                connection.close()
+        except BaseException:
+            pass
+    return done, warnings

@@ -156,6 +156,34 @@ partita**: il player su mappa filtrato esattamente sulla finestra
 
 ### Team e destinatari dei CoT
 
+**Composizione delle squadre (dalla 3.13.1).** La tab si chiama *Mappatura Team* e
+oltre a scegliere Team A / Team B / osservatori permette di **aggiungere e togliere
+utenti dai gruppi** senza passare dalla pagina Groups di OpenTAKServer.
+
+Due cose da sapere, entrambe imposte da come OTS modella i gruppi:
+
+- **L'appartenenza è per utente, non per EUD.** La tabella `groups_users` ha
+  `(user_id, group_id, direction)` e la stessa API di OTS lo dichiara: *«this will
+  allow all the user's EUDs to subscribe and unsubscribe»*. Aggiungendo un utente
+  entrano in squadra **tutti i suoi dispositivi**; per avere due EUD della stessa
+  persona in squadre diverse servono due account OTS.
+- **Si scrivono entrambe le direzioni.** `OUT` = gli EUD dell'utente ricevono il
+  traffico del gruppo (binding della coda in `EudHandler`), `IN` = i CoT di quegli
+  EUD vengono smistati a quel gruppo (`route_cot`). Una squadra con una sola
+  direzione funziona a metà, e la UI la segnala con un badge.
+
+**Effetto immediato anche sugli EUD collegati.** OpenTAKServer lega le code al
+gruppo *solo quando l'EUD si connette*: con la sua API, aggiungere un utente a un
+gruppo non cambia nulla finché non si riavvia ATAK (togliendolo invece sbinda
+subito). Il plugin fa il `queue_bind` sull'exchange `groups` nel momento stesso
+dell'aggiunta, così il cambio di squadra vale all'istante. Un EUD che non si è mai
+collegato non ha ancora una coda: il bind non riesce, la UI lo dice e quel
+dispositivo verrà legato da solo al primo avvio.
+
+Con LDAP attivo (`OTS_ENABLE_LDAP`) la modifica è rifiutata, come fa OTS: i gruppi
+si gestiscono sul server LDAP.
+
+
 I destinatari sono i **gruppi ATAK** definiti sul server: la tabella `groups`
 di OpenTAKServer, gestita dalla pagina **Groups** della web UI di OTS (lì si
 creano i gruppi e si assegnano gli utenti; il plugin li **legge soltanto**).
@@ -390,6 +418,8 @@ restano invariate per compatibilità con i config esistenti.
 | `GET /missions/<nome>/contents/<hash>/download` · `/preview` | admin | Download / anteprima immagine di un contenuto |
 | `DELETE /missions/<nome>/contents/<hash>` | admin | Rimuove il contenuto dalla missione (notifica EUD) |
 | `GET /pcn/status` | admin | Semaforo WMS PCN (una GetMap di prova per servizio) |
+| `POST /groups/<id>/members` | admin | Aggiunge un utente (e tutti i suoi EUD) al gruppo, direzioni IN+OUT, con bind immediato delle code |
+| `DELETE /groups/<id>/members/<user_id>` | admin | Toglie l'utente dal gruppo e sbinda le code |
 | `GET /meshtastic/state?since=<seq>` | admin | Snapshot del monitor (card, semafori, tag) + delta del log eventi |
 | `GET /meshtastic/tags/<key>` | admin | Dettaglio tag: anagrafica, strade di ricezione, traccia di routing, pacchetti recenti |
 | `POST /meshtastic/tags/<key>` | admin | Dichiarazione manuale di canale/gruppo per quel tag |
