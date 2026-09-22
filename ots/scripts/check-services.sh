@@ -110,15 +110,26 @@ fi
 # `cot` ferma = lo smistamento è rotto anche se tutte le unit sono verdi.
 # Senza EUD collegati la tabella è ferma per forza: niente allarme.
 EUD_CONNECTIONS=$(ss -Htn state established '( sport = :8089 )' 2>/dev/null | wc -l)
-if [ "${EUD_CONNECTIONS:-0}" -gt 0 ] && command -v psql >/dev/null 2>&1; then
-    COT_AGE=$(sudo -u postgres psql -tAc \
-        "SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() AT TIME ZONE 'UTC' - MAX(timestamp)))::bigint, -1) FROM cot;" \
-        "$OTS_DB_NAME" 2>/dev/null | tr -d '[:space:]')
-    # Query fallita (nome DB diverso, permessi, DB non Postgres): si salta il
-    # controllo invece di inventare un allarme
-    if [ -n "$COT_AGE" ] && [ "$COT_AGE" -ge 0 ] 2>/dev/null; then
-        if [ "$COT_AGE" -gt $((COT_STALE_MINUTES * 60)) ]; then
+COT_CHECK="saltato (nessun EUD collegato: la tabella è ferma per forza)"
+
+if [ "${EUD_CONNECTIONS:-0}" -gt 0 ]; then
+    if ! command -v psql >/dev/null 2>&1; then
+        COT_CHECK="saltato (psql non disponibile: DB non Postgres?)"
+    else
+        COT_AGE=$(sudo -u postgres psql -tAc \
+            "SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() AT TIME ZONE 'UTC' - MAX(timestamp)))::bigint, -1) FROM cot;" \
+            "$OTS_DB_NAME" 2>/dev/null | tr -d '[:space:]')
+        if [ -z "$COT_AGE" ] || ! [ "$COT_AGE" -ge 0 ] 2>/dev/null; then
+            # Un controllo che non riesce a girare va DETTO, non taciuto: è il
+            # controllo più importante dei tre e senza di esso la sentinella
+            # dichiara «tutto a posto» avendo guardato solo le unit.
+            COT_CHECK="NON ESEGUITO: query fallita sul DB «$OTS_DB_NAME» — imposta OTS_DB_NAME in $ENV_FILE"
+            add_problem "$COT_CHECK"
+        elif [ "$COT_AGE" -gt $((COT_STALE_MINUTES * 60)) ]; then
+            COT_CHECK="ultimo CoT $((COT_AGE / 60)) minuti fa"
             add_problem "$EUD_CONNECTIONS EUD collegati ma nessun CoT scritto da $((COT_AGE / 60)) minuti: smistamento fermo"
+        else
+            COT_CHECK="ultimo CoT ${COT_AGE}s fa"
         fi
     fi
 fi
@@ -142,4 +153,7 @@ if [ -n "$PREVIOUS" ]; then
     notify "✅ Tutti i servizi OTS sono tornati a posto."
 fi
 [ "$DRY" -eq 0 ] && : > "$STATE_FILE"
-echo "[$HOST ots] tutto a posto ($EUD_CONNECTIONS EUD collegati)"
+# Si dichiara SEMPRE cosa è stato controllato davvero: «tutto a posto» senza
+# dire quali controlli hanno girato è la stessa bugia per omissione che si
+# vuole evitare.
+echo "[$HOST ots] tutto a posto · unit: $(echo $UNITS | wc -w) verificate · EUD collegati: $EUD_CONNECTIONS · CoT: $COT_CHECK"
