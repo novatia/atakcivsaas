@@ -1270,9 +1270,84 @@ function showImportResult(result) {
 }
 
 /* ---------------- Manutenzione (admin) ---------------- */
+/* ---- Stato servizi critici (tab Manutenzione) ---- */
+const HEALTH_LABELS = {
+  rabbitmq: "RabbitMQ",
+  cot_parser: "Smistamento CoT (cot_parser)",
+  cot_flow: "Scrittura CoT a database",
+  euds: "EUD collegati",
+  plugin_plugin: "Plugin MilSim",
+  plugin_rabbitmq: "Connessione RabbitMQ del plugin",
+  plugin_firehose: "Osservatore firehose",
+  plugin_mqtt: "Osservatore MQTT",
+  plugin_meshtastic_native: "Meshtastic nativo di OTS",
+};
+const HEALTH_ORDER = ["cot_parser", "cot_flow", "euds", "rabbitmq",
+                      "plugin_plugin", "plugin_firehose", "plugin_mqtt", "plugin_meshtastic_native"];
+
+async function renderHealth() {
+  const box = document.getElementById("health-box");
+  if (!box) return;
+  box.innerHTML = "<p class='muted'>Interrogazione servizi in corso…</p>";
+  let data;
+  try {
+    data = await api("/maintenance/health");
+  } catch (e) {
+    box.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
+    return;
+  }
+  const overall = { ok: ["ok", "Tutto a posto"], warn: ["warn", "Da controllare"],
+                    error: ["err", "Problema"] }[data.overall] || ["neutral", "Sconosciuto"];
+
+  const keys = HEALTH_ORDER.filter(k => data.checks[k])
+    .concat(Object.keys(data.checks).filter(k => !HEALTH_ORDER.includes(k)));
+
+  const rows = keys.map(k => {
+    const c = data.checks[k];
+    const led = { ok: "ok", warn: "warn", error: "error", off: "off" }[c.state] || "off";
+    return `<tr>
+      <td style="width:1%"><span class="msh-led ${led}"></span></td>
+      <td><strong>${esc(HEALTH_LABELS[k] || k)}</strong></td>
+      <td class="muted" style="overflow-wrap:anywhere">${esc(c.detail || "")}</td>
+    </tr>`;
+  }).join("");
+
+  const euds = (data.euds || []).map(e => `<tr>
+      <td style="width:1%"><span class="msh-led ${e.connected === null ? "off" : (e.connected ? "ok" : "error")}"></span></td>
+      <td><strong>${esc(e.callsign || "?")}</strong><br><span class="muted" style="font-size:11.5px; overflow-wrap:anywhere">${esc(e.uid)}</span></td>
+      <td class="muted">${e.connected === null ? "coda assente (mai collegato)" : (e.connected ? "collegato" : "non collegato")}${
+        e.pending ? ` · ${e.pending} messaggi in attesa` : ""}</td>
+      <td class="muted" style="text-align:right">${fmtDT(e.last_event_time)}</td>
+    </tr>`).join("");
+
+  box.innerHTML = `
+    <div class="toolbar">
+      <span class="pill ${overall[0]}">${overall[1]}</span>
+      <span class="muted">verificato in ${data.took_ms} ms</span>
+      <span style="flex:1"></span>
+      <button class="btn small" onclick="renderHealth()">↻ Ricontrolla</button>
+    </div>
+    <div class="msh-wrap"><table class="msh-table"><tbody>${rows}</tbody></table></div>
+    <h3>Dispositivi</h3>
+    <p class="muted" style="margin-top:0">«Collegato» qui significa che la coda RabbitMQ di quell'EUD ha un
+      consumer attivo: è il fatto, non l'ultima posizione ricevuta.</p>
+    <div class="msh-wrap"><table class="msh-table"><tbody>${euds || `<tr><td class="muted">Nessun EUD registrato.</td></tr>`}</tbody></table></div>
+    <p class="muted">Il plugin gira come utente <code>ots</code> e non può usare <code>systemctl</code>:
+      lo stato viene dedotto da RabbitMQ, che è un segnale più forte — una unit «attiva» con il processo
+      morto darebbe comunque zero consumer sulla coda. Per riavviare un servizio serve il server.</p>`;
+}
+
 async function renderMaintenance() {
   const el = document.getElementById("content");
-  el.innerHTML = "<h2>Manutenzione dati OpenTAKServer</h2><div id='maint'>Caricamento…</div>";
+  el.innerHTML = `
+    <h2>Stato servizi</h2>
+    <p class="muted" style="margin-top:0">Il quadro dei servizi da cui dipende tutto il resto:
+      se lo smistamento CoT è fermo gli EUD smettono di vedersi fra loro <b>senza nessun errore</b>
+      da nessuna parte, ed è il primo posto da guardare quando «non si vede niente in mappa».</p>
+    <div id="health-box"></div>
+    <h2 style="margin-top:26px">Manutenzione dati OpenTAKServer</h2>
+    <div id='maint'>Caricamento…</div>`;
+  renderHealth();
   const stats = await api("/maintenance/stats");
   document.getElementById("maint").innerHTML = `
     <p class="muted">Svuota le tabelle di OpenTAKServer quando si accumulano dati di test o vecchi.

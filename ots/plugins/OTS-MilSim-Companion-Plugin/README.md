@@ -347,6 +347,38 @@ da un telefono di ALPHA sarà quindi visto da BRAVO *e* da ALPHA; chi non sta in
 nessuno dei due non lo vede. Per evitare la doppia consegna, quando il gruppo
 mappato coincide con quello dell'EUD sorgente il plugin non ripubblica.
 
+### Stato servizi (tab Manutenzione)
+
+Il quadro dei servizi da cui dipende tutto il resto, senza aprire una sessione SSH.
+
+Il plugin gira come utente `ots` dentro il processo web: **non può usare
+`systemctl`**. Ma non serve — a RabbitMQ si possono fare domande migliori di
+«l'unit è attiva?»:
+
+- `queue_declare(passive=True)` sulla coda **`cot_parser`** dice quanti
+  **consumer** ci sono e quanti messaggi sono in attesa. Zero consumer significa
+  che nessuno sta smistando i CoT, ed è il guasto vero: una unit «active» con il
+  processo figlio morto darebbe comunque zero qui.
+- la stessa domanda sulla coda di un EUD dice se quel dispositivo è **davvero
+  collegato**, senza `ss` da root. «Collegato» qui è un fatto, non una deduzione
+  dall'ultima posizione ricevuta.
+
+Cosa mostra: smistamento CoT, scrittura a database (età dell'ultimo CoT),
+EUD collegati, RabbitMQ, e gli osservatori del plugin (firehose e MQTT).
+Sotto, la tabella dei dispositivi con chi è collegato e quanti messaggi ha in
+attesa in coda.
+
+I giudizi sono calibrati per non gridare al lupo: senza EUD collegati la
+tabella `cot` è ferma per forza e non viene segnalata; una coda EUD inesistente
+vuol dire «mai collegato», non «guasto»; una coda che si accumula con un
+consumer attivo è un avviso, non un errore. Stanno in `health.py` come funzioni
+pure e sono coperti dai test.
+
+Per **riavviare** un servizio serve comunque il server: la pagina dice cosa non
+va e con quale comando, ma non ha i privilegi per farlo. La riparazione
+automatica è compito di `ots/scripts/check-services.sh` (vedi il README del
+repo), che gira come root da un timer.
+
 ## Installazione
 
 Sul server, da root (lo stesso script fa anche l'update alle versioni successive
@@ -452,6 +484,7 @@ restano invariate per compatibilità con i config esistenti.
 | `GET /missions/<nome>/contents/<hash>/download` · `/preview` | admin | Download / anteprima immagine di un contenuto |
 | `DELETE /missions/<nome>/contents/<hash>` | admin | Rimuove il contenuto dalla missione (notifica EUD) |
 | `GET /pcn/status` | admin | Semaforo WMS PCN (una GetMap di prova per servizio) |
+| `GET /maintenance/health` | admin | Stato dei servizi critici: coda cot_parser, flusso CoT, EUD davvero collegati |
 | `POST /groups/<id>/members` | admin | Aggiunge un utente (e tutti i suoi EUD) al gruppo, direzioni IN+OUT, con bind immediato delle code |
 | `DELETE /groups/<id>/members/<user_id>` | admin | Toglie l'utente dal gruppo e sbinda le code |
 | `GET /meshtastic/state?since=<seq>` | admin | Snapshot del monitor (card, semafori, tag) + delta del log eventi |

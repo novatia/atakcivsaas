@@ -39,7 +39,7 @@ from opentakserver.models.MissionContentMission import MissionContentMission
 from opentakserver.models.user import User
 from opentakserver.plugins.Plugin import Plugin
 
-from . import cot, engine, mesh, skyfi, teams
+from . import cot, engine, health, mesh, skyfi, teams
 from .default_config import DefaultConfig
 from .game_modes import GAME_MODES, MARKER_TYPES, ZONE_TYPES, serialize_registry, validate_template
 from .models import (
@@ -1746,6 +1746,24 @@ class MilSimCompanionPlugin(Plugin):
                     "markers": db.session.query(Marker).count(),
                 }
             )
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/maintenance/health")
+    def maintenance_health():
+        """Stato dei servizi critici, senza dover aprire una sessione SSH.
+
+        Il plugin gira come utente `ots` e non può usare systemctl: interroga
+        RabbitMQ, che risponde a domande migliori — quanti consumer ha la coda
+        `cot_parser` (zero = i CoT non vengono smistati a nessuno) e quali code
+        EUD hanno un consumer attivo (cioè quali dispositivi sono davvero
+        collegati). Vedi health.py per il perché.
+        """
+        try:
+            return jsonify(health.report(app.config, db, mesh))
         except BaseException as e:
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 500
