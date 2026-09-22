@@ -98,6 +98,21 @@ def test_relay_cot_riconosciuto_come_meshtastic():
     assert descriptor["node_id"] is None
 
 
+def test_indice_di_canale_dichiarato_dal_plugin_atak():
+    """`<__meshtastic/>` oggi è vuoto, ma se un giorno dichiarasse il canale
+    quello È l'indice vero (0-7) e va letto."""
+    cot = relay_cot().replace('<__meshtastic/>', '<__meshtastic channel="3"/>')
+    descriptor = mesh.detect(cot, "ANDROID-abc")
+    assert descriptor["channel_index"] == 3
+    assert descriptor["channel_metadata_present"] is True
+
+
+def test_indice_di_canale_fuori_range_non_viene_accettato():
+    """Meshtastic ha 8 canali: un 8 non è un indice, è un hash finito lì."""
+    cot = relay_cot().replace('<__meshtastic/>', '<__meshtastic channel="8"/>')
+    assert mesh.detect(cot, "ANDROID-abc")["channel_index"] is None
+
+
 def test_cot_normale_di_un_eud_non_e_un_tag():
     assert mesh.detect(eud_self_cot(), "ANDROID-abc") is None
 
@@ -586,6 +601,49 @@ def test_canale_imparato_da_mqtt_riusato_per_il_relay(env):
     assert trace["channel_name"] == "BRAVO"
     assert trace["channel_source"] == "mqtt_correlation"
     assert channel.published[0]["routing_key"] == "BRAVO.OUT"
+
+
+def test_il_channel_del_pacchetto_e_un_hash_non_un_indice(env):
+    """`MeshPacket.channel` sull'uplink MQTT è l'hash del canale: il firmware
+    ce lo mette in Router::perhapsEncode («channel should be the hash, no
+    longer the index») e MQTT::onSend pubblica quel pacchetto. L'indice da lì
+    non arriva: deve restare sconosciuto, non diventare 0."""
+    observer = mesh.MqttObserver(None)
+    observer.ingest("LongFast", "!bbad0ac8", {"channel_hash": 8, "portnum": "POSITION_APP"})
+
+    tag = mesh.REGISTRY.tags["!bbad0ac8"]
+    assert tag.channel_hash == 8
+    assert tag.channel_index is None
+    # Il nome invece è buono: viene dal topic MQTT, non dal protobuf
+    assert tag.channel_name == "LongFast"
+    assert mesh.REGISTRY.node_channels["!bbad0ac8"]["index"] is None
+    assert mesh.REGISTRY.node_channels["!bbad0ac8"]["hash"] == 8
+
+
+def test_una_mappatura_per_indice_non_combacia_con_un_hash():
+    """8 non è un indice di canale: una mappatura per indice non deve
+    agganciarlo nemmeno se il numero coincide."""
+    assert mesh.match_mapping({"name": None, "index": 8}, [Mapping(group_id=1, channel_index=8)]) is None
+    assert mesh.match_mapping({"name": None, "index": 1}, [Mapping(group_id=1, channel_index=1)]) is not None
+
+
+def test_hash_del_canale_non_instrada_per_indice(env):
+    """Il tag arriva via MQTT su un canale non mappato (hash 8) e poi via
+    relay: la mappatura per indice 0 non deve agganciarlo."""
+    env["mappings"] = [Mapping(group_id=2, channel_index=0)]
+    env["eud_groups"] = {"ANDROID-abc": [1]}
+
+    observer = mesh.MqttObserver(None)
+    observer.ingest("CHARLIE", "!bbad0ac8", {"channel_hash": 8})
+
+    channel = FakeChannel()
+    mesh.handle_cot(channel, firehose(relay_cot(uid="!bbad0ac8"), "ANDROID-abc"))
+
+    trace = mesh.REGISTRY.tags["!bbad0ac8"].last_routing
+    assert trace["channel_name"] == "CHARLIE"
+    assert trace["channel_index"] is None
+    assert trace["mapping"] is None
+    assert channel.published == []
 
 
 # ----------------------------------------------------------------------

@@ -123,8 +123,18 @@ rilanciato), quindi non compare nella lista EUD della web UI di OTS; compare in
   `basic_deliver.routing_key.split(".")[3]` (riga 150). Lo schema costruito in
   uscita è `"{OTS_MESHTASTIC_TOPIC}.2.e.{canale}."` (riga 222), cioè il topic
   MQTT `<topic>/2/e/<canale>/<!nodeid>` con `/` → `.`.
-- L'indice di canale è in `mp.channel`; RSSI/SNR/hop sono in `mp.rx_rssi`,
-  `mp.rx_snr`, `mp.hop_limit`/`mp.hop_start`.
+- **`mp.channel` NON è l'indice del canale**: su questo feed è l'**hash** del
+  canale. Il firmware lo scrive in `Router::perhapsEncode` («Now that we are
+  encrypting the packet channel should be the hash (no longer the index)») e
+  `MQTT::onSend` pubblica proprio il pacchetto cifrato quando l'uplink MQTT è
+  cifrato, cioè con l'impostazione di default. In produzione si vede `LongFast`
+  con `channel = 8`: 8 è l'hash, l'indice di `LongFast` è 0. Anche il `.proto`
+  avverte che l'indice «is inherently a local concept and meaningless to send
+  between nodes» — sarebbe comunque l'indice del gateway, non del tag.
+  Conseguenza per il plugin: dal Path B **l'indice non arriva** (resta `None`,
+  mai 0), il canale si conosce per **nome** dalla routing key, e l'hash si
+  conserva solo come dato diagnostico (visibile nel dettaglio del tag).
+- RSSI/SNR/hop sono in `mp.rx_rssi`, `mp.rx_snr`, `mp.hop_limit`/`mp.hop_start`.
 - Genera CoT con `<takv platform="Meshtastic" os="Meshtastic"
   meshtastic_id="...">` e `<contact endpoint="MQTT">` (riga 276-300).
 - **Instradamento: un unico gruppo fisso.** `protobuf_to_cot()` (riga 710)

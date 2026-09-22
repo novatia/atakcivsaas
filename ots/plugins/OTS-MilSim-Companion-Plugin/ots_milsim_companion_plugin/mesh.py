@@ -70,6 +70,19 @@ SECRET_PATTERN = re.compile(
 )
 REDACTED = "[REDACTED]"
 
+# Meshtastic ha 8 canali: gli indici validi vanno da 0 a 7. L'hash del canale,
+# che è quello che viaggia in `MeshPacket.channel` sul feed MQTT (vedi
+# `decode_service_envelope`), è un byte qualsiasi: il range serve a non
+# scambiare un hash per un indice.
+MAX_CHANNEL_INDEX = 7
+
+
+def is_channel_index(value) -> bool:
+    """Vero solo per un indice di canale Meshtastic plausibile (0-7)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return False
+    return 0 <= value <= MAX_CHANNEL_INDEX
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -210,6 +223,8 @@ def detect(xml: str, sender_uid: str | None) -> dict | None:
         "gps": "none",
         "channel_index": None,
         "channel_name": None,
+        # Hash del canale: dato diagnostico del feed MQTT, mai un indice.
+        "channel_hash": None,
     }
 
     # Se un giorno il plugin ATAK aggiungesse gli attributi a <__meshtastic>
@@ -218,9 +233,13 @@ def detect(xml: str, sender_uid: str | None) -> dict | None:
         for key in ("channel", "channel_index", "channelIndex"):
             if mesh_tag.get(key) is not None:
                 try:
-                    descriptor["channel_index"] = int(mesh_tag.get(key))
+                    value = int(mesh_tag.get(key))
                 except ValueError:
-                    pass
+                    break
+                # Questo È l'indice vero, dichiarato dal plugin ATAK, non
+                # l'hash del protobuf: si accetta solo se sta in 0-7.
+                if is_channel_index(value):
+                    descriptor["channel_index"] = value
                 break
         for key in ("channel_name", "channelName"):
             if mesh_tag.get(key):
@@ -332,8 +351,9 @@ class Tag:
     __slots__ = (
         "key", "node_id", "uid", "callsign", "long_name", "short_name", "role",
         "team", "device", "firmware", "channel_index", "channel_name",
-        "channel_source", "latitude", "longitude", "altitude", "speed", "course",
-        "gps", "battery", "voltage", "rssi", "snr", "hop_count", "first_seen",
+        "channel_hash", "channel_source", "latitude", "longitude", "altitude",
+        "speed", "course", "gps", "battery", "voltage", "rssi", "snr",
+        "hop_count", "first_seen",
         "last_seen", "last_position", "paths", "packets", "rx_count",
         "duplicate_count", "last_routing", "last_error", "position_precision",
         "_last_cot_key", "_persist_due",
@@ -353,6 +373,7 @@ class Tag:
         self.firmware = None
         self.channel_index = None
         self.channel_name = None
+        self.channel_hash = None
         self.channel_source = None
         self.latitude = None
         self.longitude = None
@@ -402,6 +423,11 @@ class Tag:
             value = descriptor.get(field)
             if value:
                 setattr(self, field, value)
+
+        # L'hash non è un canale: si registra sempre, ma da solo non basta a
+        # dire su che canale è il tag (non si risale dall'hash al nome).
+        if descriptor.get("channel_hash") is not None:
+            self.channel_hash = descriptor["channel_hash"]
 
         if descriptor.get("channel_name") or descriptor.get("channel_index") is not None:
             self.channel_name = descriptor.get("channel_name") or self.channel_name
@@ -470,6 +496,7 @@ class Tag:
             "firmware": self.firmware,
             "channel_index": self.channel_index,
             "channel_name": self.channel_name,
+            "channel_hash": self.channel_hash,
             "channel_source": self.channel_source,
             "latitude": self.latitude,
             "longitude": self.longitude,
@@ -751,7 +778,10 @@ def match_mapping(channel: dict, mappings: list):
             continue
         if name and (mapping.channel_name or "").strip().lower() == name:
             return mapping
-        if index is not None and mapping.channel_index is not None and mapping.channel_index == index:
+        # Solo un indice vero (0-7) partecipa al confronto: l'hash del canale
+        # non è un indice e combacerebbe per sbaglio con la mappatura di un
+        # canale che non c'entra nulla.
+        if is_channel_index(index) and mapping.channel_index == index:
             return mapping
     return None
 
@@ -1201,8 +1231,11 @@ class MqttObserver(_Consumer):
 
     def ingest(self, channel_name: str | None, node_id: str, info: dict) -> None:
         REGISTRY.node_channels[node_id] = {
+            # Dal feed MQTT il canale si conosce per NOME (sta nella routing
+            # key): l'indice non arriva, quindi la correlazione va per nome.
             "name": channel_name,
             "index": info.get("channel_index"),
+            "hash": info.get("channel_hash"),
             "learned_at": _utcnow().isoformat(),
         }
         descriptor = {
@@ -1212,6 +1245,7 @@ class MqttObserver(_Consumer):
             "source_eud": info.get("gateway"),
             "channel_name": channel_name,
             "channel_index": info.get("channel_index"),
+            "channel_hash": info.get("channel_hash"),
             "channel_metadata_present": True,
             "cot_type": None,
             "time": info.get("packet_id"),
@@ -1299,7 +1333,17 @@ def decode_service_envelope(body: bytes) -> dict | None:
     info = {
         "node_id": f"!{node_number:08x}" if node_number else None,
         "gateway": envelope.gateway_id or None,
-        "channel_index": packet.channel if packet.channel else 0,
+        # `MeshPacket.channel` NON è l'indice del canale su questo feed: il
+        # firmware ci mette l'hash. In `Router::perhapsEncode`: «Now that we
+        # are encrypting the packet channel should be the hash (no longer the
+        # index)», e `MQTT::onSend` pubblica proprio quel pacchetto cifrato
+        # quando l'uplink è cifrato (l'impostazione di default). Anche il
+        # .proto avverte che l'indice «is inherently a local concept and
+        # meaningless to send between nodes»: sarebbe l'indice del gateway,
+        # non del tag. Quindi l'indice qui resta ignoto — None, non 0.
+        # Lo 0 del protobuf non si distingue da «campo assente» → None.
+        "channel_hash": packet.channel or None,
+        "channel_index": None,
         "packet_id": str(packet.id),
         "rssi": packet.rx_rssi or None,
         "snr": round(packet.rx_snr, 2) if packet.rx_snr else None,

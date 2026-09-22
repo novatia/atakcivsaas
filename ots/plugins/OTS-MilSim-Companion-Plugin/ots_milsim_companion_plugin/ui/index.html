@@ -3098,6 +3098,9 @@ function mshPaintDetail(tag) {
       <div><div class="k">RSSI</div>${mshVal(tag.rssi !== null ? tag.rssi + " dBm" : null)}</div>
       <div><div class="k">SNR</div>${mshVal(mshNum(tag.snr, " dB"))}</div>
       <div><div class="k">Hop count</div>${mshVal(tag.hop_count)}</div>
+      <div><div class="k">Channel hash</div>${tag.channel_hash !== null && tag.channel_hash !== undefined
+        ? `<span class="v">${tag.channel_hash}<span class="muted"> (hash del canale nel pacchetto, NON l'indice)</span></span>`
+        : `<span class="v na">non disponibile</span>`}</div>
       <div><div class="k">Firmware</div>${mshVal(tag.firmware)}</div>
       <div><div class="k">Pacchetti ricevuti</div><span class="v">${tag.rx_count}${tag.duplicate_count ? ` (${tag.duplicate_count} duplicati)` : ""}</span></div>
     </div>
