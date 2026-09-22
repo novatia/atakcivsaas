@@ -123,7 +123,16 @@ if [ "${EUD_CONNECTIONS:-0}" -gt 0 ]; then
             "SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() AT TIME ZONE 'UTC' - MAX(timestamp)))::bigint, -1) FROM cot;" \
             "$OTS_DB_NAME" 2>&1)
         COT_AGE=$(printf '%s' "$COT_OUT" | tr -d '[:space:]')
-        if [ -z "$COT_AGE" ] || ! [ "$COT_AGE" -ge 0 ] 2>/dev/null; then
+        if [ "$COT_AGE" = "-1" ]; then
+            # La query ha risposto: e' la TABELLA a essere vuota (MAX(timestamp)
+            # NULL -> il COALESCE rende -1). Non e' un errore dello script, ed e'
+            # un'informazione diversa -- puo' voler dire che il job di retention
+            # ha appena ripulito tutto, oppure che non e' mai arrivato un CoT.
+            COT_CHECK="tabella cot vuota"
+            if [ "${EUD_CONNECTIONS:-0}" -gt 0 ]; then
+                add_problem "$EUD_CONNECTIONS EUD collegati ma la tabella cot e' vuota: nessun CoT e' mai stato scritto"
+            fi
+        elif [ -z "$COT_AGE" ] || ! [ "$COT_AGE" -ge 0 ] 2>/dev/null; then
             # Un controllo che non riesce a girare va DETTO, non taciuto: è il
             # controllo più importante dei tre e senza di esso la sentinella
             # dichiara «tutto a posto» avendo guardato solo le unit.
