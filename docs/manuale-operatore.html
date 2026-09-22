@@ -186,7 +186,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MO-TAK-002 · Rev 16 · 2026-09-15</span><span>Per operatori da smartphone</span></div>
+    <div class="doc-meta"><span>MO-TAK-002 · Rev 17 · 2026-09-22</span><span>Per operatori da smartphone</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Operatore<br>Tactical Scout Codogno</h1>
@@ -330,6 +330,15 @@
     <div class="warn"><span class="tag">Le mappe non compaiono nel selettore?</span><p>Succede in due casi: l'import non ha smistato gli XML, oppure <strong>il pacchetto l'hai creato tu</strong> col Data Package tool — che confeziona e invia, ma <strong>non installa</strong> nulla sul tuo WinTAK. La soluzione è la stessa: chiudi WinTAK e copia i file <code>.xml</code> delle mappe in <code>C:\ProgramData\WinTAK\Imagery</code> (cartella nascosta: attiva «Elementi nascosti» in Esplora file), poi riavvia. Se non hai più gli XML sciolti, WinTAK li tiene in <code>%APPDATA%\WinTAK\Data Packages\files\&lt;uid&gt;\</code>, e lo zip pronto da distribuire in <code>%APPDATA%\WinTAK\Data Packages\</code> (caso reale del gruppo, risolto così a settembre 2026).</p></div>
     <div class="note"><span class="tag">Zoom limitato = normale</span><p>Le sorgenti PCN coprono solo certi livelli di zoom (es. la IGM 25.000 rende tra zoom 13 e 16): se a zoom più larghi o più stretti vedi la mappa nera o vuota non è un guasto, sei solo fuori dal range della sorgente — cambia scala o sorgente.</p></div>
     <div class="note"><span class="tag">Se lo zip lo prepari a mano</span><p>La struttura conta: al primo livello dello zip devono esserci direttamente gli <code>.xml</code> e la cartella <code>MANIFEST\manifest.xml</code> — <strong>non</strong> una cartella che li contiene. Se zippi la cartella intera invece del suo contenuto, l'import fallisce senza spiegazioni.</p></div>
+    <h3>Condividere disegni e marker con un data package</h3>
+    <p>Le aree disegnate in WinTAK (poligoni, linee, cerchi, rettangoli — in Overlay Manager sotto <strong>Shapes → Drawing Objects</strong>) e i marker si distribuiscono al gruppo con un data package, insieme a eventuali file (briefing PDF, immagini).</p>
+    <ol>
+      <li>Apri il <strong>Data Package tool</strong> e crea un pacchetto nuovo con un nome chiaro (es. <code>Campi Castelnuovo</code>).</li>
+      <li>Aggiungi gli oggetti: selezionandoli sulla mappa oppure spuntandoli dalla lista dell'Overlay Manager.</li>
+      <li>Invialo: <strong>Send</strong> ai contatti/gruppo connessi, oppure <strong>Upload to Server</strong> — così resta tra i data package del server e gli ATAK lo scaricano quando vogliono.</li>
+    </ol>
+    <p>Per una singola area basta il menu radiale dell'oggetto, icona di invio. Chi riceve importa una <strong>copia</strong>: se poi modifichi il disegno, va rimandato il pacchetto.</p>
+    <div class="warn"><span class="tag">Su ATAK compaiono righe «Map Item — Not Found»?</span><p>Ogni oggetto ha una <strong>scadenza</strong> (<em>stale</em>) e WinTAK dà ai disegni solo <strong>7 giorni</strong> dalla creazione (i marker invece un anno). Se impacchetti aree disegnate più di una settimana fa, ATAK all'import le considera scadute e le scarta: il pacchetto si scarica, ma al posto delle aree restano righe vuote «Map Item» con la scritta rossa <strong>Not Found</strong>, mentre i marker compaiono regolarmente. Per evitarlo, <strong>prepara il pacchetto a ridosso della giocata</strong>. Se le aree devono durare a lungo, passa lo zip all'amministratore: si corregge riscrivendo la scadenza dei singoli oggetti, senza ridisegnare nulla (caso reale del gruppo, settembre 2026: aree disegnate il 18 febbraio, scadute il 25).</p></div>
   </section>
 
   <section id="s8">
@@ -467,6 +476,10 @@
         <td>Alla connessione manca il certificato client: l'enrollment non è mai partito o è fallito. Cancella la connessione e ricreala da zero con «Enroll for Client Certificate» attivo (sez. 7).</td>
       </tr>
       <tr>
+        <td>Scarico un data package con aree disegnate: in lista ci sono righe «Map Item — Not Found» e le aree non sono in mappa</td>
+        <td>Le aree erano scadute: WinTAK dà ai disegni solo 7 giorni di validità. Rifai il pacchetto con disegni recenti, o chiedi all'amministratore di correggere la scadenza (sez. 7).</td>
+      </tr>
+      <tr>
         <td>Scansiono il QR del server ma si apre il browser con un errore</td>
         <td>La fotocamera non gestisce i link <code>tak://</code> e li scarica sul browser, che non sa aprirli. Usa <strong>Binary Eye</strong> (sez. 2): scansiona e tocca «Apri». In alternativa scarica lo zip dalla web UI del server e importalo da Tools → Import → Local SD.</td>
       </tr>
@@ -475,7 +488,7 @@
   </section>
 
   <footer>
-    <span>MO-TAK-002 · Rev 16</span>
+    <span>MO-TAK-002 · Rev 17</span>
     <span>Compagno del Manuale Operatore TAK (MO-TAK-001)</span>
   </footer>
 </div>
