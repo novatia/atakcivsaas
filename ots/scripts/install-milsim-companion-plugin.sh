@@ -155,6 +155,18 @@ for port in 8080 8443; do
     fi
 done
 
+# Monitor Meshtastic (3.13.0+): il consumer si lega all'exchange firehose di
+# RabbitMQ. Se non si connette, la tab Meshtastic resta vuota senza dirlo
+# a voce alta: meglio accorgersene qui.
+if grep -qi "MilSim mesh: firehose connesso a RabbitMQ" "${OTS_DATA}/logs/opentakserver.log" 2>/dev/null; then
+    log "Monitor Meshtastic: connesso al firehose"
+else
+    warn "Monitor Meshtastic: nessuna conferma di connessione al firehose."
+    warn "  grep -i 'MilSim mesh' ${OTS_DATA}/logs/opentakserver.log | tail"
+    warn "  (se il monitor e' disabilitato in config.yml e' normale: OTS_MILSIM_MESH_ENABLED)"
+fi
+
 step "Fatto"
 log "UI del plugin: https://<server>/api/plugins/ots_milsim_companion_plugin/ui"
+log "Monitor Meshtastic: tab «Meshtastic»; mappature canale->gruppo: tab «Canali Meshtastic»"
 log "Per disinstallare: sudo -u ${OTS_USER} ${PIP} uninstall --yes ${PLUGIN_DISTRO} && systemctl restart ${OTS_SERVICE}"

@@ -154,6 +154,75 @@
   .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
   .modal select { width: 100%; }
   .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  /* ---- Meshtastic Live Monitor ---- */
+  .msh-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .msh-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--panel); }
+  .msh-card .k { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .msh-card .v { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
+  .msh-card.alert { border-color: var(--maybe); }
+  .msh-card.alert .v { color: var(--maybe); }
+  .msh-card.bad { border-color: var(--absent); }
+  .msh-card.bad .v { color: var(--absent); }
+  .msh-health { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  .msh-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 99px; padding: 4px 10px; font-size: 12px; background: var(--panel); }
+  .msh-led { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--neutral); }
+  .msh-led.ok { background: var(--present); }
+  .msh-led.error { background: var(--absent); }
+  .msh-led.off { background: var(--neutral); }
+  .msh-status { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; font-size: 12px; }
+  .msh-status .msh-led { width: 8px; height: 8px; }
+  .msh-status.live { color: var(--present); }
+  .msh-status.live .msh-led { background: var(--present); }
+  .msh-status.recent { color: var(--maybe); }
+  .msh-status.recent .msh-led { background: var(--maybe); }
+  .msh-status.stale { color: var(--muted); }
+  .msh-status.stale .msh-led { background: var(--neutral); }
+  table.msh-table td, table.msh-table th { padding: 6px 8px; font-size: 12.5px; white-space: nowrap; }
+  table.msh-table tbody tr { cursor: pointer; }
+  table.msh-table tbody tr:hover { background: var(--btn-hover); }
+  table.msh-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .msh-unknown { color: var(--maybe); font-weight: 600; }
+  .msh-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+  .msh-console { background: #0d1117; color: #d7dde4; border: 1px solid var(--border); border-radius: 8px;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; line-height: 1.55;
+    height: 260px; overflow: auto; padding: 8px 10px; }
+  :root[data-theme="light"] .msh-console { background: #11161c; }
+  .msh-console .t { color: #7d8794; }
+  .msh-console .l-info { color: #d7dde4; }
+  .msh-console .l-error { color: #ff8c8c; }
+  .msh-console .l-debug { color: #7d8794; }
+  .msh-kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px 18px; }
+  .msh-kv div { border-bottom: 1px solid var(--border); padding-bottom: 6px; min-width: 0; }
+  .msh-kv .k { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .msh-kv .v { font-size: 14px; word-break: break-word; }
+  .msh-kv .v.na { color: var(--muted); font-style: italic; }
+  .msh-trace { border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 6px; padding: 10px 12px; }
+  .msh-trace.fallback { border-left-color: var(--maybe); }
+  .msh-trace.bad { border-left-color: var(--absent); }
+  .msh-trace ol { margin: 6px 0 0; padding-left: 20px; }
+  .msh-trace li { margin: 2px 0; }
+  pre.msh-raw { background: var(--input); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
+    font-size: 11.5px; overflow: auto; max-height: 340px; margin: 6px 0 0; white-space: pre; }
+  pre.msh-raw mark { background: var(--highlight-glow); color: inherit; font-weight: 600; }
+  .msh-pkt { border-bottom: 1px solid var(--border); padding: 6px 0; font-size: 12.5px; }
+  .msh-pkt summary { cursor: pointer; list-style: none; display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+  .msh-pkt summary::-webkit-details-marker { display: none; }
+  .msh-pkt summary::before { content: "▸"; color: var(--muted); }
+  .msh-pkt[open] summary::before { content: "▾"; }
+  .msh-pkt .mono { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; color: var(--muted); }
+  .msh-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0 8px; }
+  .msh-bar input[type="search"] { min-width: 180px; }
+  .msh-bar label.check { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--text); }
+  .msh-bar label.check input { width: auto; }
+  @media (max-width: 720px) {
+    /* Su telefono le card stanno a due per riga e le colonne secondarie della
+       tabella spariscono: il monitor deve restare leggibile in campo */
+    .msh-cards { grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; }
+    .msh-card { padding: 8px 10px; }
+    .msh-card .v { font-size: 22px; }
+    table.msh-table th.opt, table.msh-table td.opt { display: none; }
+    .msh-console { height: 200px; }
+  }
 </style>
 <script>
   // Applica subito il tema salvato per evitare il flash chiaro/scuro al caricamento
@@ -300,6 +369,8 @@ const TABS = [
   { id: "gm_matches", label: "Sessione", admin: true, render: () => { clearEventHash(); renderMatches(); } },
   { id: "gm_modes", label: "Modalità di gioco", admin: true, render: () => { clearEventHash(); renderModes(); } },
   { id: "gm_teams", label: "Team", admin: true, render: () => { clearEventHash(); renderTeams(); } },
+  { id: "meshtastic", label: "Meshtastic", admin: true, render: () => { clearEventHash(); renderMeshtastic(); } },
+  { id: "mesh_channels", label: "Canali Meshtastic", admin: true, render: () => { clearEventHash(); renderMeshChannels(); } },
   { id: "skyfi", label: "SkyFi", admin: true, render: () => { clearEventHash(); renderOrders(); } },
   { id: "missions", label: "Missioni", admin: true, render: () => { clearEventHash(); renderMissions(); } },
   { id: "leaderboard", label: "Classifica", admin: false, render: () => { clearEventHash(); renderLeaderboard(); } },
@@ -327,6 +398,7 @@ function renderTabs() {
       if (ED && !confirm("Stai modificando un template di missione: uscire senza salvare?")) return;
       ED = null;
       clearInterval(MATCH_TIMER);
+      stopMeshPolling();
       currentTab = tab.id; renderTabs(); tab.render();
     };
     nav.appendChild(btn);
@@ -2614,6 +2686,552 @@ async function removeMissionContent(hash, filename, btn) {
     btn.disabled = false;
   }
 }
+
+/* ================= Meshtastic Live Monitor =================
+   Aggiornamento automatico con polling incrementale: lo stato dei tag vive in
+   memoria sul server, il log eventi torna solo dal `seq` gia' visto in poi.
+   Niente WebSocket: OTS gira su socketio/eventlet e una connessione SSE per
+   ogni admin aperto terrebbe occupato un worker per tutta la sessione.       */
+
+let MSH = {
+  timer: null, since: 0, data: null, paused: false, autoscroll: true,
+  filters: { text: "", status: "", source: "", errorsOnly: false },
+  logFilters: { tag: "", channel: "", group: "", source: "", type: "", errorsOnly: false },
+  lines: [], detail: null, groups: [],
+};
+const MSH_POLL_MS = 2000;
+
+function stopMeshPolling() {
+  if (MSH.timer) { clearInterval(MSH.timer); MSH.timer = null; }
+}
+function mshAgo(seconds) {
+  if (seconds === null || seconds === undefined) return "—";
+  if (seconds < 60) return Math.round(seconds) + "s";
+  if (seconds < 3600) return Math.round(seconds / 60) + "m";
+  if (seconds < 86400) return Math.round(seconds / 3600) + "h";
+  return Math.round(seconds / 86400) + "g";
+}
+function mshNum(value, suffix = "", digits = 1) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  if (!isFinite(n)) return null;
+  return (digits ? n.toFixed(digits) : String(Math.round(n))) + suffix;
+}
+/* Solo i valori realmente disponibili: mai inventare un dato che il transport
+   non porta (il relay ATAK non porta node id, RSSI, SNR, canale...) */
+function mshVal(value, fallback = "non disponibile") {
+  return (value === null || value === undefined || value === "")
+    ? `<span class="v na">${fallback}</span>` : `<span class="v">${esc(value)}</span>`;
+}
+function mshChannelText(tag) {
+  if (tag.manual_channel_name || tag.manual_channel_index !== null && tag.manual_channel_index !== undefined) {
+    const label = tag.manual_channel_name || ("#" + tag.manual_channel_index);
+    return `<span title="Dichiarato manualmente dall'amministratore">${esc(label)} ✎</span>`;
+  }
+  if (tag.channel_name) return esc(tag.channel_name) + (tag.channel_index !== null && tag.channel_index !== undefined ? ` (${tag.channel_index})` : "");
+  if (tag.channel_index !== null && tag.channel_index !== undefined) return "#" + tag.channel_index;
+  return `<span class="msh-unknown" title="Il canale Meshtastic non arriva nel CoT rilanciato da ATAK">⚠ UNKNOWN</span>`;
+}
+function mshStatusChip(status) {
+  const label = { live: "LIVE", recent: "RECENT", stale: "STALE" }[status] || status;
+  return `<span class="msh-status ${status}"><span class="msh-led"></span>${label}</span>`;
+}
+
+async function renderMeshtastic() {
+  stopMeshPolling();
+  MSH.detail = null;
+  MSH.since = 0;
+  MSH.lines = [];
+  const el = document.getElementById("content");
+  el.innerHTML = "Caricamento monitor Meshtastic…";
+  try {
+    MSH.data = await api("/meshtastic/state?since=0");
+  } catch (e) {
+    el.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
+    return;
+  }
+  mshPaintShell();
+  mshPaint();
+  MSH.timer = setInterval(mshPoll, MSH_POLL_MS);
+}
+
+function mshPaintShell() {
+  document.getElementById("content").innerHTML = `
+    <h2>📡 Meshtastic Live Monitor</h2>
+    <div id="msh-cards" class="msh-cards"></div>
+    <div id="msh-health" class="msh-health"></div>
+    <div class="msh-bar">
+      <input type="search" id="msh-q" placeholder="Filtra tag / node / callsign" oninput="mshFilter('text', this.value)">
+      <select id="msh-f-status" onchange="mshFilter('status', this.value)">
+        <option value="">Tutti gli stati</option><option value="live">Solo LIVE</option>
+        <option value="recent">Solo RECENT</option><option value="stale">Solo STALE</option>
+      </select>
+      <select id="msh-f-source" onchange="mshFilter('source', this.value)">
+        <option value="">Tutte le sorgenti</option>
+        <option value="atak_relay">ATAK Relay</option>
+        <option value="mqtt">MQTT</option>
+        <option value="ots_meshtastic">OTS Meshtastic</option>
+      </select>
+      <label class="check"><input type="checkbox" onchange="mshFilter('errorsOnly', this.checked)"> Solo con errori</label>
+      <span style="flex:1"></span>
+      <span class="muted" id="msh-updated"></span>
+    </div>
+    <div class="msh-wrap"><table class="msh-table">
+      <thead><tr>
+        <th>Stato</th><th>Tag</th><th class="opt">Node ID</th><th>Canale</th><th>OTS Group</th>
+        <th class="num">Visto</th><th>GPS</th><th class="num opt">RSSI</th><th class="num opt">SNR</th><th class="opt">Sorgente</th>
+      </tr></thead>
+      <tbody id="msh-rows"></tbody>
+    </table></div>
+
+    <h3>Console eventi</h3>
+    <div class="msh-bar">
+      <input type="search" id="msh-lq" placeholder="Filtra per tag, canale, gruppo…" oninput="mshLogFilter('tag', this.value)">
+      <select onchange="mshLogFilter('source', this.value)">
+        <option value="">Tutte le sorgenti</option>
+        <option value="atak_relay">ATAK Relay</option><option value="mqtt">MQTT</option>
+        <option value="ots_meshtastic">OTS Meshtastic</option>
+      </select>
+      <label class="check"><input type="checkbox" onchange="mshLogFilter('errorsOnly', this.checked)"> Solo errori</label>
+      <button class="btn small" id="msh-pause" onclick="mshTogglePause()">⏸ Pausa</button>
+      <button class="btn small" onclick="mshClearLog()">🗑 Pulisci</button>
+      <label class="check"><input type="checkbox" checked onchange="MSH.autoscroll = this.checked"> Auto-scroll</label>
+    </div>
+    <div class="msh-console" id="msh-console"></div>
+    <p class="muted" style="margin-top:10px">La cronologia e' tenuta in memoria e limitata (nessuna tabella di log che cresce all'infinito).
+      La mappatura canale → gruppo si configura nella tab <b>Canali Meshtastic</b>.</p>`;
+}
+
+async function mshPoll() {
+  if (MSH.paused) return;
+  try {
+    const data = await api(`/meshtastic/state?since=${MSH.since}`);
+    MSH.data = data;
+    if (MSH.detail) { await mshRefreshDetail(); return; }
+    mshPaint();
+  } catch (e) {
+    const box = document.getElementById("msh-updated");
+    if (box) box.textContent = "⚠️ " + e.message;
+  }
+}
+
+function mshPaint() {
+  const data = MSH.data;
+  if (!data || !document.getElementById("msh-cards")) return;
+  const c = data.cards;
+  document.getElementById("msh-cards").innerHTML = [
+    ["Active tags", c.active_tags, ""],
+    ["Known tags", c.known_tags, ""],
+    ["RX last 60s", c.rx_last_60s, ""],
+    ["Unknown channel", c.unknown_channel, c.unknown_channel ? "alert" : ""],
+    ["Routing errors", c.routing_errors, c.routing_errors ? "bad" : ""],
+  ].map(([k, v, cls]) => `<div class="msh-card ${cls}"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+
+  const h = data.health;
+  document.getElementById("msh-health").innerHTML = [
+    ["Plugin", h.plugin], ["RabbitMQ", h.rabbitmq], ["Firehose CoT", h.firehose],
+    ["MQTT", h.mqtt], ["Meshtastic nativo OTS", h.meshtastic_native],
+  ].map(([label, s]) =>
+    `<span class="msh-chip" title="${esc(s.detail || "")}"><span class="msh-led ${s.state}"></span>${label}</span>`
+  ).join("");
+
+  const f = MSH.filters;
+  const rows = data.tags.filter(t => {
+    if (f.status && t.status !== f.status) return false;
+    if (f.errorsOnly && !t.error && t.routing_result !== "error") return false;
+    if (f.source && !(t.paths || []).some(p => p.transport === f.source)) return false;
+    if (f.text) {
+      const hay = [t.key, t.node_id, t.callsign, t.long_name, t.uid, t.channel_name].join(" ").toLowerCase();
+      if (!hay.includes(f.text.toLowerCase())) return false;
+    }
+    return true;
+  }).sort((a, b) => a.last_seen_ago - b.last_seen_ago);
+
+  document.getElementById("msh-rows").innerHTML = rows.length ? rows.map(t => {
+    const source = (t.paths || []).map(p => p.transport_label).join(", ") || "—";
+    const gps = { fix: "FIX", stale: `<span class="msh-unknown">STALE</span>`, none: `<span class="muted">NO FIX</span>` }[t.gps];
+    const group = t.ots_group
+      ? esc(t.ots_group) + (t.routing_result === "routed_fallback" ? " <span class=\"muted\">(fallback)</span>" : "")
+      : `<span class="muted">—</span>`;
+    return `<tr onclick="mshOpenTag('${encodeURIComponent(t.key)}')">
+      <td>${mshStatusChip(t.status)}</td>
+      <td><strong>${esc(t.callsign || t.long_name || t.key)}</strong></td>
+      <td class="opt mono">${t.node_id ? esc(t.node_id) : '<span class="muted">—</span>'}</td>
+      <td>${mshChannelText(t)}</td>
+      <td>${group}</td>
+      <td class="num">${mshAgo(t.last_seen_ago)}</td>
+      <td>${gps}</td>
+      <td class="num opt">${mshNum(t.rssi, "", 0) || "—"}</td>
+      <td class="num opt">${mshNum(t.snr) || "—"}</td>
+      <td class="opt">${esc(source)}</td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="10" class="muted">Nessun tag Meshtastic ricevuto finora.
+      Il monitor osserva il firehose CoT: appena un EUD rilancia un tracker (o arriva un pacchetto MQTT) compare qui.</td></tr>`;
+
+  document.getElementById("msh-updated").textContent =
+    `${rows.length}/${data.tags.length} tag · LIVE < ${data.thresholds.live}s · RECENT < ${data.thresholds.recent}s · fallback: ${data.fallback_policy}`;
+
+  mshAppendLog(data.events || []);
+  if (data.seq) MSH.since = data.seq;
+}
+
+function mshFilter(key, value) { MSH.filters[key] = value; mshPaint(); }
+function mshLogFilter(key, value) { MSH.logFilters[key] = value; mshPaintLog(); }
+function mshTogglePause() {
+  MSH.paused = !MSH.paused;
+  document.getElementById("msh-pause").textContent = MSH.paused ? "▶ Riprendi" : "⏸ Pausa";
+}
+async function mshClearLog() {
+  MSH.lines = [];
+  mshPaintLog();
+  try { await api("/meshtastic/events/clear", { method: "POST" }); } catch (e) { /* solo la vista */ }
+}
+function mshAppendLog(events) {
+  if (!events.length) return;
+  MSH.lines.push(...events);
+  if (MSH.lines.length > 800) MSH.lines = MSH.lines.slice(-800);
+  mshPaintLog();
+}
+function mshPaintLog() {
+  const box = document.getElementById("msh-console");
+  if (!box) return;
+  const f = MSH.logFilters;
+  const lines = MSH.lines.filter(e => {
+    if (f.errorsOnly && e.level !== "error") return false;
+    if (f.source && e.source !== f.source) return false;
+    if (f.tag) {
+      const hay = [e.tag, e.channel, e.group, e.text].join(" ").toLowerCase();
+      if (!hay.includes(f.tag.toLowerCase())) return false;
+    }
+    return true;
+  });
+  box.innerHTML = lines.map(e =>
+    `<div class="l-${esc(e.level)}"><span class="t">${new Date(e.ts).toLocaleTimeString("it-IT")}</span> ${esc(e.text)}</div>`
+  ).join("") || `<div class="t">(nessun evento)</div>`;
+  if (MSH.autoscroll && !MSH.paused) box.scrollTop = box.scrollHeight;
+}
+
+/* ---- Dettaglio tag ---- */
+async function mshOpenTag(key) {
+  MSH.detail = key;
+  const el = document.getElementById("content");
+  el.innerHTML = "Caricamento tag…";
+  try {
+    const [tag, groups] = await Promise.all([api(`/meshtastic/tags/${key}`), api("/groups")]);
+    MSH.groups = groups;
+    mshPaintDetail(tag);
+  } catch (e) {
+    el.innerHTML = `<p>⚠️ ${esc(e.message)}</p><button class="btn" onclick="renderMeshtastic()">← Torna al monitor</button>`;
+  }
+}
+async function mshRefreshDetail() {
+  // Il refresh ridisegna tutta la pagina: se l'amministratore sta scrivendo
+  // nel form della dichiarazione manuale gli si cancellerebbe sotto le dita,
+  // e la posizione di scroll salterebbe all'inizio a ogni giro.
+  const active = document.activeElement;
+  if (active && active.closest && active.closest("#content") &&
+      ["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName)) return;
+  try {
+    const tag = await api(`/meshtastic/tags/${MSH.detail}`);
+    const open = [...document.querySelectorAll(".msh-pkt[open]")].map(d => d.dataset.k);
+    const openRaw = [...document.querySelectorAll(".msh-pkt details[open]")].map(d => d.parentElement.dataset.k);
+    const scroll = window.scrollY;
+    mshPaintDetail(tag);
+    open.forEach(k => { const d = document.querySelector(`.msh-pkt[data-k="${k}"]`); if (d) d.open = true; });
+    openRaw.forEach(k => {
+      const d = document.querySelector(`.msh-pkt[data-k="${k}"] details`); if (d) d.open = true;
+    });
+    window.scrollTo(0, scroll);
+  } catch (e) { /* il tag puo' essere stato dimenticato */ }
+}
+
+function mshPaintDetail(tag) {
+  const r = tag.routing || {};
+  const traceClass = r.result === "error" ? "bad" : (r.result === "routed_fallback" || r.fallback ? "fallback" : "");
+  const resultLabel = {
+    routed: "ROUTED", routed_fallback: "ROUTED USING FALLBACK", native_only: "INSTRADATO DA OTS (instradamento nativo)",
+    ignored: "IGNORED", error: "ERRORE", observed: "SOLO OSSERVATO",
+  }[r.result] || r.result || "—";
+
+  const ch = tag.effective_channel || {};
+  const channelText = ch.name || (ch.index !== null && ch.index !== undefined ? "#" + ch.index : null);
+
+  const groupOptions = (id) => `<option value="">— nessuno —</option>` + MSH.groups
+    .map(g => `<option value="${g.id}" ${g.id === id ? "selected" : ""}>${esc(g.name)}</option>`).join("");
+
+  document.getElementById("content").innerHTML = `
+    <div class="toolbar">
+      <button class="btn" onclick="renderMeshtastic()">← Monitor</button>
+      <h2 style="margin:0">${mshStatusChip(tag.status)} ${esc(tag.callsign || tag.long_name || tag.key)}</h2>
+      <span style="flex:1"></span>
+      <button class="btn danger small" onclick="mshForget('${encodeURIComponent(tag.key)}')"
+        title="Rimuove il tag dall'elenco dei conosciuti e cancella le dichiarazioni manuali">🗑 Dimentica</button>
+    </div>
+
+    <h3>Identita'</h3>
+    <div class="msh-kv">
+      <div><div class="k">Meshtastic ID</div>${mshVal(tag.node_id, "non disponibile (relay ATAK)")}</div>
+      <div><div class="k">CoT UID</div>${mshVal(tag.uid)}</div>
+      <div><div class="k">Callsign</div>${mshVal(tag.callsign)}</div>
+      <div><div class="k">Long name</div>${mshVal(tag.long_name)}</div>
+      <div><div class="k">Short name</div>${mshVal(tag.short_name)}</div>
+      <div><div class="k">Ruolo</div>${mshVal(tag.role)}</div>
+      <div><div class="k">Team ATAK</div>${mshVal(tag.team)}</div>
+      <div><div class="k">Canale</div>${channelText
+        ? `<span class="v">${esc(channelText)}<span class="muted"> (${esc(ch.source || "?")})</span></span>`
+        : `<span class="v na">UNKNOWN — il canale non viaggia nel CoT rilanciato</span>`}</div>
+      <div><div class="k">OTS Group</div>${mshVal(r.group_name, "nessun instradamento")}</div>
+      <div><div class="k">Visto</div><span class="v">${mshAgo(tag.last_seen_ago)} fa</span></div>
+      <div><div class="k">Ultima posizione</div><span class="v">${tag.last_position_ago !== null ? mshAgo(tag.last_position_ago) + " fa" : "mai"}</span></div>
+      <div><div class="k">GPS</div><span class="v">${{ fix: "FIX", stale: "STALE", none: "NO FIX" }[tag.gps]}</span></div>
+      <div><div class="k">Latitudine</div>${mshVal(tag.latitude !== null ? Number(tag.latitude).toFixed(6) : null)}</div>
+      <div><div class="k">Longitudine</div>${mshVal(tag.longitude !== null ? Number(tag.longitude).toFixed(6) : null)}</div>
+      <div><div class="k">Altitudine</div>${mshVal(mshNum(tag.altitude, " m", 0))}</div>
+      <div><div class="k">Batteria</div>${mshVal(tag.battery !== null ? tag.battery + " %" : null)}</div>
+      <div><div class="k">Voltaggio</div>${mshVal(mshNum(tag.voltage, " V", 2))}</div>
+      <div><div class="k">RSSI</div>${mshVal(tag.rssi !== null ? tag.rssi + " dBm" : null)}</div>
+      <div><div class="k">SNR</div>${mshVal(mshNum(tag.snr, " dB"))}</div>
+      <div><div class="k">Hop count</div>${mshVal(tag.hop_count)}</div>
+      <div><div class="k">Firmware</div>${mshVal(tag.firmware)}</div>
+      <div><div class="k">Pacchetti ricevuti</div><span class="v">${tag.rx_count}${tag.duplicate_count ? ` (${tag.duplicate_count} duplicati)` : ""}</span></div>
+    </div>
+
+    <h3>Strade di ricezione</h3>
+    <p class="muted" style="margin-top:0">Lo stesso tag puo' arrivare da piu' gateway: resta un solo oggetto logico,
+      qui si vede da dove e' passato.</p>
+    <table><thead><tr><th>Via</th><th>Transport</th><th class="num">Pacchetti</th><th class="num">Ultimo</th></tr></thead>
+      <tbody>${(tag.paths || []).map(p => `<tr>
+        <td class="mono">${esc(p.key)}</td><td>${esc(p.transport_label || "")}</td>
+        <td class="num">${p.count}</td><td class="num">${mshAgo(p.last_seen_ago)} fa</td></tr>`).join("")
+        || `<tr><td colspan="4" class="muted">—</td></tr>`}</tbody></table>
+
+    <h3>Decisione di instradamento</h3>
+    <div class="msh-trace ${traceClass}">
+      <ol>
+        <li><b>Tag:</b> ${esc(r.node_id || tag.node_id || "—")} / ${esc(r.callsign || tag.callsign || tag.key)}</li>
+        <li><b>Ricevuto via:</b> ${esc(r.received_via || "—")}</li>
+        <li><b>EUD sorgente:</b> ${esc(r.source_eud || "—")}${(r.source_eud_groups || []).length
+          ? ` <span class="muted">(gruppi: ${esc((r.source_eud_groups || []).join(", "))})</span>` : ""}</li>
+        <li><b>Gia' consegnato da OTS a:</b> ${esc((r.native_groups || []).join(", ") || "—")}
+          <span class="muted">(instradamento nativo, il plugin non puo' toglierlo)</span></li>
+        <li><b>Canale Meshtastic:</b> ${channelText ? esc(channelText) : `<span class="msh-unknown">UNKNOWN</span>`}
+          ${r.channel_metadata_present === false && !channelText
+            ? ` <span class="muted">— metadati di canale presenti nel CoT: NO</span>` : ""}</li>
+        ${r.mapping ? `<li><b>Mappatura:</b> ${esc(r.mapping)}</li>` : ""}
+        ${r.fallback ? `<li><b>Fallback:</b> ${esc(r.fallback)}</li>` : ""}
+        <li><b>Gruppo OTS finale:</b> ${esc(r.group_name || "—")}</li>
+        <li><b>Esito:</b> ${esc(resultLabel)}</li>
+      </ol>
+      <p class="muted" style="margin:8px 0 0">${esc(r.reason || "")}</p>
+    </div>
+
+    <h3>Dichiarazione manuale</h3>
+    <p class="muted" style="margin-top:0">Il relay ATAK non porta il canale Meshtastic: se questo tag appartiene a un
+      canale preciso lo si dichiara qui. E' una <b>dichiarazione</b> dell'amministratore, il plugin non la deduce mai da solo.</p>
+    <form class="inline" onsubmit="mshSaveTag(event, '${encodeURIComponent(tag.key)}')">
+      <label>Canale dichiarato<input name="manual_channel_name" value="${esc(tag.manual_channel_name || "")}" placeholder="es. BRAVO"></label>
+      <label>Indice canale<input name="manual_channel_index" type="number" min="0" max="7"
+        value="${tag.manual_channel_index !== null && tag.manual_channel_index !== undefined ? tag.manual_channel_index : ""}"></label>
+      <label>Forza gruppo (salta la mappatura)<select name="manual_group_id">${groupOptions(tag.manual_group_id)}</select></label>
+      <label>Note<input name="notes" value="${esc(tag.notes || "")}"></label>
+      <button class="btn primary" type="submit">Salva</button>
+    </form>
+
+    <h3>Pacchetti recenti</h3>
+    ${(tag.packets || []).length ? tag.packets.map((p, i) => `
+      <details class="msh-pkt" data-k="${i}">
+        <summary>
+          <span class="mono">${new Date(p.ts).toLocaleTimeString("it-IT")}</span>
+          <b>${esc(p.direction)}</b>
+          <span>${esc(p.transport_label || "")}</span>
+          <span>${esc(p.packet_type || "")}</span>
+          <span class="mono">${p.cot_uid ? "UID: " + esc(p.cot_uid) : ""}</span>
+          <span>canale: ${p.channel ? esc(p.channel) : `<span class="msh-unknown">UNKNOWN</span>`}</span>
+          <span>${p.group ? "→ " + esc(p.group) : ""}</span>
+          ${p.delivered ? `<span class="pill ok">consegnato</span>` : ""}
+          ${p.duplicate ? `<span class="pill neutral">duplicato</span>` : ""}
+        </summary>
+        <div class="msh-kv" style="margin-top:8px">
+          <div><div class="k">Tipo CoT</div>${mshVal(p.cot_type)}</div>
+          <div><div class="k">EUD sorgente</div>${mshVal(p.source_eud)}</div>
+          <div><div class="k">Decisione</div>${mshVal(p.routing)}</div>
+          <div><div class="k">Gruppo di destinazione</div>${mshVal(p.group)}</div>
+          <div><div class="k">Posizione</div>${mshVal(p.latitude !== null && p.latitude !== undefined
+            ? Number(p.latitude).toFixed(6) + ", " + Number(p.longitude).toFixed(6) : null)}</div>
+        </div>
+        ${p.raw_cot ? `<details style="margin-top:8px"><summary class="btn small" style="display:inline-block">View Raw CoT</summary>
+          <pre class="msh-raw">${mshHighlight(p.raw_cot)}</pre>
+          <p class="muted" style="margin:4px 0 0">Payload sanificato: PSK, password, token, credenziali e certificati non vengono mai mostrati.</p>
+        </details>` : `<p class="muted" style="margin:6px 0 0">Nessun CoT associato (pacchetto letto dal feed MQTT).</p>`}
+      </details>`).join("") : `<p class="muted">Nessun pacchetto in cronologia.</p>`}`;
+}
+
+/* Evidenzia nel CoT i punti che servono al debug del relay ATAK: uid e type
+   dell'evento, point, contact, informazioni di gruppo, takv e il marcatore
+   <__meshtastic>. Il CoT arriva gia' indentato un elemento per riga, quindi
+   si evidenzia per riga: piu' robusto di una regex sull'XML escapato. */
+function mshHighlight(xml) {
+  const keys = [/&lt;event\b/, /&lt;point\b/, /&lt;contact\b/, /&lt;__group\b/,
+                /&lt;__meshtastic\b/, /&lt;takv\b/, /&lt;uid\b/];
+  return esc(xml).split("\n")
+    .map(line => keys.some(k => k.test(line)) ? `<mark>${line}</mark>` : line)
+    .join("\n");
+}
+
+async function mshSaveTag(event, key) {
+  event.preventDefault();
+  const fd = new FormData(event.target);
+  try {
+    await api(`/meshtastic/tags/${key}`, {
+      method: "POST",
+      body: {
+        manual_channel_name: fd.get("manual_channel_name"),
+        manual_channel_index: fd.get("manual_channel_index"),
+        manual_group_id: fd.get("manual_group_id"),
+        notes: fd.get("notes"),
+      },
+    });
+    toast("Dichiarazione salvata");
+    mshRefreshDetail();
+  } catch (e) { toast(e.message, false); }
+}
+async function mshForget(key) {
+  if (!confirm("Dimenticare questo tag? Sparisce dai conosciuti e perde le dichiarazioni manuali.")) return;
+  try { await api(`/meshtastic/tags/${key}`, { method: "DELETE" }); toast("Tag dimenticato"); renderMeshtastic(); }
+  catch (e) { toast(e.message, false); }
+}
+
+/* ================= Canali Meshtastic → gruppi OTS ================= */
+
+async function renderMeshChannels() {
+  stopMeshPolling();
+  const el = document.getElementById("content");
+  el.innerHTML = "Caricamento mappature…";
+  let mappings, groups, cfg;
+  try {
+    [mappings, groups, cfg] = await Promise.all([
+      api("/meshtastic/mappings"), api("/groups"), api("/config"),
+    ]);
+  } catch (e) { el.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`; return; }
+  MSH.groups = groups;
+
+  const groupOptions = (id) => groups
+    .map(g => `<option value="${g.id}" ${g.id === id ? "selected" : ""}>${esc(g.name)}</option>`).join("");
+
+  const policies = [
+    ["source_eud_group", "Gruppo dell'EUD sorgente (comportamento nativo di OTS)"],
+    ["default_group", "Gruppo di default configurato qui sotto"],
+    ["meshtastic_group", `Gruppo «${esc(cfg.OTS_MESHTASTIC_GROUP || "Meshtastic")}» di OpenTAKServer`],
+    ["ignore", "Non instradare (solo monitoraggio)"],
+  ];
+
+  el.innerHTML = `
+    <h2>🔀 Meshtastic Channel Routing</h2>
+    <p class="muted">Il gruppo e' un <b>gruppo TAK vero</b> del server (pagina Groups di OTS): niente nomi liberi.
+      L'instradamento usa lo stesso exchange <code>groups</code> e la stessa routing key <code>&lt;gruppo&gt;.OUT</code>
+      del cot_parser, quindi valgono le normali autorizzazioni: chi non e' nel gruppo non riceve il tag.</p>
+
+    <h3>Mappature</h3>
+    <div class="msh-wrap"><table class="msh-table">
+      <thead><tr><th>Canale</th><th>Indice</th><th>OTS Group</th><th>Abilitata</th><th></th></tr></thead>
+      <tbody>${mappings.length ? mappings.map(m => `<tr>
+        <td><strong>${esc(m.channel_name || "—")}</strong></td>
+        <td class="num">${m.channel_index !== null && m.channel_index !== undefined ? m.channel_index : "—"}</td>
+        <td><select onchange="mshMapUpdate(${m.id}, { group_id: parseInt(this.value, 10) })">${groupOptions(m.group_id)}</select></td>
+        <td><input type="checkbox" ${m.enabled ? "checked" : ""} onchange="mshMapUpdate(${m.id}, { enabled: this.checked })"></td>
+        <td><button class="btn danger small" onclick="mshMapDelete(${m.id})">🗑 Elimina</button></td>
+      </tr>`).join("") : `<tr><td colspan="5" class="muted">Nessuna mappatura: si applica sempre la politica di fallback.</td></tr>`}
+      </tbody></table></div>
+
+    <h3>Aggiungi mappatura</h3>
+    <form class="inline" onsubmit="mshMapCreate(event)">
+      <label>Nome canale<input name="channel_name" placeholder="es. ALPHA"></label>
+      <label>Indice canale (0-7)<input name="channel_index" type="number" min="0" max="7" placeholder="opzionale"></label>
+      <label>OTS Group<select name="group_id" required><option value="">— scegli —</option>${groupOptions(null)}</select></label>
+      <button class="btn primary" type="submit">➕ Add Mapping</button>
+    </form>
+    <p class="muted">Serve almeno uno fra nome e indice. Dal feed MQTT arrivano entrambi; dal relay ATAK non arriva nessuno dei due
+      (vedi <i>docs/meshtastic-architettura.md</i>): in quel caso si usa la dichiarazione manuale sul singolo tag, oppure il fallback.</p>
+
+    <h3>Fallback quando il canale non e' determinabile</h3>
+    <form class="inline" onsubmit="mshSaveFallback(event)">
+      <label>Politica<select name="OTS_MILSIM_MESH_FALLBACK_POLICY">
+        ${policies.map(([v, l]) => `<option value="${v}" ${cfg.OTS_MILSIM_MESH_FALLBACK_POLICY === v ? "selected" : ""}>${l}</option>`).join("")}
+      </select></label>
+      <label>Gruppo di default<select name="OTS_MILSIM_MESH_DEFAULT_GROUP_ID">
+        <option value="0">— nessuno —</option>${groupOptions(cfg.OTS_MILSIM_MESH_DEFAULT_GROUP_ID)}
+      </select></label>
+      <button class="btn primary" type="submit">Salva</button>
+    </form>
+
+    <h3>Soglie di stato</h3>
+    <form class="inline" onsubmit="mshSaveThresholds(event)">
+      <label>LIVE sotto (s)<input type="number" min="1" name="OTS_MILSIM_MESH_LIVE_SECONDS" value="${cfg.OTS_MILSIM_MESH_LIVE_SECONDS}"></label>
+      <label>RECENT sotto (s)<input type="number" min="2" name="OTS_MILSIM_MESH_RECENT_SECONDS" value="${cfg.OTS_MILSIM_MESH_RECENT_SECONDS}"></label>
+      <label>GPS stale oltre (s)<input type="number" min="1" name="OTS_MILSIM_MESH_GPS_STALE_SECONDS" value="${cfg.OTS_MILSIM_MESH_GPS_STALE_SECONDS}"></label>
+      <button class="btn primary" type="submit">Salva</button>
+    </form>
+
+    <h3>Sorgenti</h3>
+    <form class="inline" onsubmit="mshSaveSources(event)">
+      <label class="check" style="flex-direction:row; align-items:center; gap:6px; color:var(--text)">
+        <input type="checkbox" name="OTS_MILSIM_MESH_ENABLED" ${cfg.OTS_MILSIM_MESH_ENABLED ? "checked" : ""} style="width:auto">
+        Monitor attivo (osserva il firehose CoT)</label>
+      <label class="check" style="flex-direction:row; align-items:center; gap:6px; color:var(--text)">
+        <input type="checkbox" name="OTS_MILSIM_MESH_MQTT_OBSERVER" ${cfg.OTS_MILSIM_MESH_MQTT_OBSERVER ? "checked" : ""} style="width:auto">
+        Observer MQTT (canale, RSSI/SNR, node id: serve un gateway che pubblichi su RabbitMQ)</label>
+      <button class="btn primary" type="submit">Salva</button>
+    </form>
+    <p class="muted">Le modifiche alle sorgenti richiedono il riavvio di OpenTAKServer per avere effetto.</p>`;
+}
+
+async function mshMapCreate(event) {
+  event.preventDefault();
+  const fd = new FormData(event.target);
+  try {
+    await api("/meshtastic/mappings", {
+      method: "POST",
+      body: {
+        channel_name: fd.get("channel_name"),
+        channel_index: fd.get("channel_index"),
+        group_id: parseInt(fd.get("group_id"), 10),
+      },
+    });
+    toast("Mappatura creata");
+    renderMeshChannels();
+  } catch (e) { toast(e.message, false); }
+}
+async function mshMapUpdate(id, body) {
+  try { await api(`/meshtastic/mappings/${id}`, { method: "PUT", body }); toast("Mappatura aggiornata"); }
+  catch (e) { toast(e.message, false); renderMeshChannels(); }
+}
+async function mshMapDelete(id) {
+  if (!confirm("Eliminare la mappatura?")) return;
+  try { await api(`/meshtastic/mappings/${id}`, { method: "DELETE" }); toast("Mappatura eliminata"); renderMeshChannels(); }
+  catch (e) { toast(e.message, false); }
+}
+async function mshSaveConfig(event, fields) {
+  event.preventDefault();
+  const fd = new FormData(event.target);
+  const body = {};
+  for (const [key, kind] of Object.entries(fields)) {
+    if (kind === "int") body[key] = parseInt(fd.get(key) || "0", 10);
+    else if (kind === "bool") body[key] = event.target.elements[key].checked;
+    else body[key] = fd.get(key);
+  }
+  try { await api("/config", { method: "POST", body }); toast("Configurazione salvata"); renderMeshChannels(); }
+  catch (e) { toast(e.message, false); }
+}
+const mshSaveFallback = (e) => mshSaveConfig(e, {
+  OTS_MILSIM_MESH_FALLBACK_POLICY: "str", OTS_MILSIM_MESH_DEFAULT_GROUP_ID: "int",
+});
+const mshSaveThresholds = (e) => mshSaveConfig(e, {
+  OTS_MILSIM_MESH_LIVE_SECONDS: "int", OTS_MILSIM_MESH_RECENT_SECONDS: "int",
+  OTS_MILSIM_MESH_GPS_STALE_SECONDS: "int",
+});
+const mshSaveSources = (e) => mshSaveConfig(e, {
+  OTS_MILSIM_MESH_ENABLED: "bool", OTS_MILSIM_MESH_MQTT_OBSERVER: "bool",
+});
 
 /* ---------------- Init ---------------- */
 (async function init() {

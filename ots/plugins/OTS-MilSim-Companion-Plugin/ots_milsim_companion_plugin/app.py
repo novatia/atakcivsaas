@@ -38,7 +38,7 @@ from opentakserver.models.MissionContentMission import MissionContentMission
 from opentakserver.models.user import User
 from opentakserver.plugins.Plugin import Plugin
 
-from . import cot, engine, skyfi
+from . import cot, engine, mesh, skyfi
 from .default_config import DefaultConfig
 from .game_modes import GAME_MODES, MARKER_TYPES, ZONE_TYPES, serialize_registry, validate_template
 from .models import (
@@ -50,6 +50,8 @@ from .models import (
     GameField,
     GameMatch,
     GameTemplate,
+    MeshChannelMap,
+    MeshTag,
     Player,
     PlayerScore,
     Rank,
@@ -798,6 +800,11 @@ class MilSimCompanionPlugin(Plugin):
             # allo scadere; il lease su DB garantisce una sola istanza attiva
             engine.start_engine(app)
 
+            # Monitor Meshtastic: osserva il firehose di RabbitMQ (l'hook che
+            # OTS dichiara per i plugin) e instrada i tag secondo la mappatura
+            # canale -> gruppo. Non modifica nulla di OpenTAKServer.
+            mesh.start(app)
+
             logger.info(f"Successfully Loaded {self.name}")
         except BaseException as e:
             logger.error(f"Failed to load {self.name}: {e}")
@@ -837,7 +844,7 @@ class MilSimCompanionPlugin(Plugin):
         return {"name": self.name, "distro": self.distro, "routes": self.routes}
 
     def stop(self):
-        pass
+        mesh.stop()
 
     # ------------------------------------------------------------------
     # Rotte standard del template (info, UI, config)
@@ -3373,5 +3380,270 @@ class MilSimCompanionPlugin(Plugin):
             )
         except BaseException as e:
             logger.error(f"Failed to assign order {uid} to mission: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # Meshtastic: Live Monitor e mappatura canale -> gruppo
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/meshtastic/state")
+    def meshtastic_state():
+        """Snapshot completo del monitor + delta del log eventi.
+
+        Tutto dalla memoria del registry: nessuna query per tag. L'unica
+        lettura su DB è la tabella delle mappature (poche righe), che serve
+        alla colonna «OTS Group». Con `?since=<seq>` il log torna incrementale,
+        così il polling della UI resta leggero anche con 100 tag.
+        """
+        try:
+            since = int(request.args.get("since") or 0)
+            th = mesh.thresholds()
+            tags = mesh.REGISTRY.snapshot(th["live"], th["recent"], th["gps_stale"])
+            overrides = mesh.load_overrides()
+            mappings = mesh.load_mappings()
+
+            for row in tags:
+                routing = row.get("routing") or {}
+                row["ots_group"] = routing.get("group_name")
+                row["routing_result"] = routing.get("result")
+                override = overrides.get(row["key"]) or {}
+                row["manual_channel_name"] = override.get("manual_channel_name")
+                row["manual_channel_index"] = override.get("manual_channel_index")
+                row["manual_group_id"] = override.get("manual_group_id")
+                row["notes"] = override.get("notes")
+
+            live_tags = sum(1 for t in tags if t["status"] == "live")
+            unknown = sum(
+                1
+                for t in tags
+                if t["status"] != "stale"
+                and not t["channel_name"]
+                and t["channel_index"] is None
+                and not t["manual_channel_name"]
+                and t["manual_channel_index"] is None
+            )
+
+            return jsonify(
+                {
+                    "cards": {
+                        "active_tags": live_tags,
+                        "known_tags": len(tags),
+                        "rx_last_60s": mesh.REGISTRY.rx_last(60),
+                        "unknown_channel": unknown,
+                        "routing_errors": mesh.REGISTRY.routing_errors,
+                    },
+                    "health": mesh.health(),
+                    "thresholds": th,
+                    "fallback_policy": app.config.get("OTS_MILSIM_MESH_FALLBACK_POLICY"),
+                    "tags": tags,
+                    "mappings": [m.serialize() for m in mappings],
+                    "events": mesh.REGISTRY.events_since(since),
+                    "seq": mesh.REGISTRY.seq,
+                    "server_time": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/meshtastic/tags/<path:tag_key>")
+    def meshtastic_tag(tag_key: str):
+        """Dettaglio del tag: anagrafica, traccia di instradamento e pacchetti
+        recenti (CoT già sanificato: mai PSK, token o credenziali)."""
+        try:
+            tag = mesh.REGISTRY.get(unquote(tag_key))
+            if not tag:
+                return jsonify({"success": False, "error": "Tag non trovato"}), 404
+            th = mesh.thresholds()
+            overrides = mesh.load_overrides()
+            data = tag.serialize(th["live"], th["recent"], th["gps_stale"])
+            override = overrides.get(tag.key) or {}
+            data["manual_channel_name"] = override.get("manual_channel_name")
+            data["manual_channel_index"] = override.get("manual_channel_index")
+            data["manual_group_id"] = override.get("manual_group_id")
+            data["notes"] = override.get("notes")
+            data["packets"] = list(tag.packets)
+            data["effective_channel"] = mesh.channel_for(tag, overrides)
+            return jsonify(data)
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/meshtastic/tags/<path:tag_key>", methods=["POST"])
+    def meshtastic_tag_update(tag_key: str):
+        """Dichiarazione manuale dell'amministratore per un tag.
+
+        Serve al caso reale del relay ATAK, dove il canale non viaggia nel CoT:
+        è una DICHIARAZIONE, non una deduzione. Si può dichiarare il canale
+        (che poi passa dalla normale mappatura) oppure forzare il gruppo.
+        """
+        try:
+            tag_key = unquote(tag_key)
+            body = request.json or {}
+            row = db.session.query(MeshTag).filter_by(tag_key=tag_key).first()
+            if not row:
+                tag = mesh.REGISTRY.get(tag_key)
+                row = MeshTag(tag_key=tag.key if tag else tag_key)
+                if tag:
+                    row.node_id, row.cot_uid, row.callsign = tag.node_id, tag.uid, tag.callsign
+                db.session.add(row)
+
+            if "manual_channel_name" in body:
+                row.manual_channel_name = (body.get("manual_channel_name") or "").strip() or None
+            if "manual_channel_index" in body:
+                value = body.get("manual_channel_index")
+                row.manual_channel_index = int(value) if value not in (None, "") else None
+            if "manual_group_id" in body:
+                value = body.get("manual_group_id")
+                group_id = int(value) if value not in (None, "", 0, "0") else None
+                if group_id:
+                    from opentakserver.models.Group import Group
+
+                    if not db.session.get(Group, group_id):
+                        return jsonify({"success": False, "error": "Gruppo inesistente"}), 400
+                row.manual_group_id = group_id
+            if "notes" in body:
+                row.notes = (body.get("notes") or "").strip() or None
+
+            db.session.commit()
+            mesh.invalidate_cache()
+            return jsonify({"success": True, "tag": row.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/meshtastic/tags/<path:tag_key>", methods=["DELETE"])
+    def meshtastic_tag_forget(tag_key: str):
+        """Dimentica il tag: sparisce da KNOWN TAGS e perde le dichiarazioni
+        manuali. Se trasmette di nuovo ricompare da zero."""
+        try:
+            tag_key = unquote(tag_key)
+            row = db.session.query(MeshTag).filter_by(tag_key=tag_key).first()
+            if row:
+                db.session.delete(row)
+                db.session.commit()
+            mesh.REGISTRY.forget(tag_key)
+            mesh.invalidate_cache()
+            return jsonify({"success": True})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/meshtastic/mappings")
+    def meshtastic_mappings():
+        try:
+            return jsonify([r.serialize() for r in mesh.load_mappings()])
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/meshtastic/mappings", methods=["POST"])
+    def meshtastic_mapping_create():
+        """Nuova mappatura canale -> gruppo. Il gruppo deve esistere davvero
+        nella tabella `groups` di OTS: niente nomi liberi."""
+        try:
+            from opentakserver.models.Group import Group
+
+            body = request.json or {}
+            name = (body.get("channel_name") or "").strip() or None
+            index = body.get("channel_index")
+            index = int(index) if index not in (None, "") else None
+            if not name and index is None:
+                return jsonify({"success": False, "error": "Serve il nome o l'indice del canale"}), 400
+            if index is not None and not (0 <= index <= 7):
+                return jsonify({"success": False, "error": "L'indice di canale Meshtastic va da 0 a 7"}), 400
+
+            group = db.session.get(Group, int(body.get("group_id") or 0))
+            if not group:
+                return jsonify({"success": False, "error": "Gruppo inesistente"}), 400
+
+            for existing in mesh.load_mappings():
+                same_name = name and (existing.channel_name or "").lower() == name.lower()
+                same_index = index is not None and existing.channel_index == index
+                if same_name or same_index:
+                    return jsonify({"success": False, "error": "Esiste già una mappatura per questo canale"}), 400
+
+            row = MeshChannelMap(
+                channel_name=name,
+                channel_index=index,
+                group_id=group.id,
+                group_name=group.name,
+                enabled=bool(body.get("enabled", True)),
+            )
+            db.session.add(row)
+            db.session.commit()
+            logger.info(f"MilSim mesh: mappatura {name or index} -> {group.name} creata")
+            return jsonify({"success": True, "mapping": row.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/meshtastic/mappings/<int:mapping_id>", methods=["PUT"])
+    def meshtastic_mapping_update(mapping_id: int):
+        try:
+            from opentakserver.models.Group import Group
+
+            row = db.session.get(MeshChannelMap, mapping_id)
+            if not row:
+                return jsonify({"success": False, "error": "Mappatura non trovata"}), 404
+            body = request.json or {}
+            if "enabled" in body:
+                row.enabled = bool(body["enabled"])
+            if "group_id" in body:
+                group = db.session.get(Group, int(body.get("group_id") or 0))
+                if not group:
+                    return jsonify({"success": False, "error": "Gruppo inesistente"}), 400
+                row.group_id, row.group_name = group.id, group.name
+            db.session.commit()
+            mesh.invalidate_cache()
+            return jsonify({"success": True, "mapping": row.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/meshtastic/mappings/<int:mapping_id>", methods=["DELETE"])
+    def meshtastic_mapping_delete(mapping_id: int):
+        try:
+            row = db.session.get(MeshChannelMap, mapping_id)
+            if not row:
+                return jsonify({"success": False, "error": "Mappatura non trovata"}), 404
+            db.session.delete(row)
+            db.session.commit()
+            mesh.invalidate_cache()
+            return jsonify({"success": True})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @roles_accepted("administrator")
+    @blueprint.route("/meshtastic/events/clear", methods=["POST"])
+    def meshtastic_clear_events():
+        try:
+            mesh.REGISTRY.clear_events()
+            return jsonify({"success": True})
+        except BaseException as e:
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 500

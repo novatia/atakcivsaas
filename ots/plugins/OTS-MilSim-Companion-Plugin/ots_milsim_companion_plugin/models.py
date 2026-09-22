@@ -391,6 +391,82 @@ class SkyfiHiddenOrder(db.Model):
         }
 
 
+class MeshChannelMap(db.Model):
+    """Mappatura canale Meshtastic → gruppo TAK di OpenTAKServer.
+
+    La chiave del canale può essere il nome (`ALPHA`), l'indice (`0`) o
+    entrambi: dal feed MQTT arrivano tutti e due, dal relay ATAK non arriva
+    nulla (vedi docs/meshtastic-architettura.md). Il gruppo è un gruppo vero
+    della tabella `groups` di OTS: si salva l'id e il nome al momento della
+    scelta, ma l'instradamento risolve sempre il nome corrente dall'id.
+    """
+
+    __tablename__ = "msh_channel_map"
+
+    id = db.Column(Integer, primary_key=True)
+    channel_name = db.Column(String(255), nullable=True)
+    channel_index = db.Column(Integer, nullable=True)
+    group_id = db.Column(Integer, nullable=False)
+    group_name = db.Column(String(255), nullable=True)
+    enabled = db.Column(Boolean, nullable=False, default=True)
+    created_at = db.Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    def serialize(self):
+        return {
+            "id": self.id,
+            "channel_name": self.channel_name,
+            "channel_index": self.channel_index,
+            "group_id": self.group_id,
+            "group_name": self.group_name,
+            "enabled": self.enabled,
+        }
+
+
+class MeshTag(db.Model):
+    """Identità persistente di un tag Meshtastic + override dell'amministratore.
+
+    La telemetria viva (posizione, RSSI, pacchetti recenti) sta in memoria nel
+    registry di `meshtastic.py`: qui si salva solo quel che deve sopravvivere
+    a un riavvio, cioè l'anagrafica del tag e le scelte manuali fatte in UI.
+    """
+
+    __tablename__ = "msh_tags"
+
+    id = db.Column(Integer, primary_key=True)
+    # Identità stabile: node id Meshtastic se noto, altrimenti uid del CoT
+    tag_key = db.Column(String(255), nullable=False, unique=True)
+    node_id = db.Column(String(64), nullable=True)
+    cot_uid = db.Column(String(255), nullable=True)
+    callsign = db.Column(String(255), nullable=True)
+    long_name = db.Column(String(255), nullable=True)
+    short_name = db.Column(String(64), nullable=True)
+    first_seen = db.Column(DateTime, nullable=True)
+    last_seen = db.Column(DateTime, nullable=True)
+    # Override manuale: il canale che l'amministratore dichiara per questo tag
+    # quando la trasmissione non lo porta (caso relay ATAK). Mai dedotto.
+    manual_channel_name = db.Column(String(255), nullable=True)
+    manual_channel_index = db.Column(Integer, nullable=True)
+    # Override ancora più diretto: gruppo forzato, salta la mappatura canali
+    manual_group_id = db.Column(Integer, nullable=True)
+    notes = db.Column(Text, nullable=True)
+
+    def serialize(self):
+        return {
+            "tag_key": self.tag_key,
+            "node_id": self.node_id,
+            "cot_uid": self.cot_uid,
+            "callsign": self.callsign,
+            "long_name": self.long_name,
+            "short_name": self.short_name,
+            "first_seen": self.first_seen.isoformat() + "Z" if self.first_seen else None,
+            "last_seen": self.last_seen.isoformat() + "Z" if self.last_seen else None,
+            "manual_channel_name": self.manual_channel_name,
+            "manual_channel_index": self.manual_channel_index,
+            "manual_group_id": self.manual_group_id,
+            "notes": self.notes,
+        }
+
+
 PLUGIN_TABLES = [
     GameField.__table__,
     Player.__table__,
@@ -403,4 +479,6 @@ PLUGIN_TABLES = [
     GameMatch.__table__,
     EngineLease.__table__,
     SkyfiHiddenOrder.__table__,
+    MeshChannelMap.__table__,
+    MeshTag.__table__,
 ]

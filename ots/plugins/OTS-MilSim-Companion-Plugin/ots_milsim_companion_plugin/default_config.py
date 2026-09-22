@@ -34,6 +34,28 @@ class DefaultConfig:
     OTS_EVENTCALENDAR_GM_TEAM_B_ID = 0
     OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS = []
 
+    # ---- Meshtastic / TAK tracker (tab Meshtastic) -------------------
+    # Osservatore del firehose: senza questo il monitor resta vuoto
+    OTS_MILSIM_MESH_ENABLED = True
+    # Observer del traffico MQTT grezzo (amq.topic): l'UNICA strada da cui
+    # arrivano canale, RSSI/SNR e node id. Serve un gateway Meshtastic che
+    # pubblichi su RabbitMQ; con il solo relay ATAK lasciarlo disattivo.
+    OTS_MILSIM_MESH_MQTT_OBSERVER = False
+    # Soglie di stato del tag (secondi). LIVE < live, RECENT < recent, poi STALE
+    OTS_MILSIM_MESH_LIVE_SECONDS = 60
+    OTS_MILSIM_MESH_RECENT_SECONDS = 300
+    # Oltre questa età la posizione è "stale" anche se il tag trasmette ancora
+    OTS_MILSIM_MESH_GPS_STALE_SECONDS = 120
+    # Cosa fare quando il canale Meshtastic non è determinabile (caso relay
+    # ATAK: il canale NON viaggia nel CoT). Mai indovinato.
+    #   source_eud_group  = lascia fare a OTS, che instrada ai gruppi dell'EUD
+    #                       che ha rilanciato (comportamento nativo)
+    #   default_group     = gruppo indicato in OTS_MILSIM_MESH_DEFAULT_GROUP_ID
+    #   meshtastic_group  = gruppo OTS_MESHTASTIC_GROUP di OpenTAKServer
+    #   ignore            = non instradare
+    OTS_MILSIM_MESH_FALLBACK_POLICY = "source_eud_group"
+    OTS_MILSIM_MESH_DEFAULT_GROUP_ID = 0
+
     @staticmethod
     def validate(config: dict) -> dict:
         try:
@@ -59,6 +81,32 @@ class DefaultConfig:
                     not isinstance(value, list) or not all(isinstance(v, int) and v > 0 for v in value)
                 ):
                     return {"success": False, "error": f"{key} should be a list of team ids"}
+                if key in ("OTS_MILSIM_MESH_ENABLED", "OTS_MILSIM_MESH_MQTT_OBSERVER") and not isinstance(value, bool):
+                    return {"success": False, "error": f"{key} should be a boolean"}
+                if key in (
+                    "OTS_MILSIM_MESH_LIVE_SECONDS",
+                    "OTS_MILSIM_MESH_RECENT_SECONDS",
+                    "OTS_MILSIM_MESH_GPS_STALE_SECONDS",
+                ) and (not isinstance(value, int) or value <= 0):
+                    return {"success": False, "error": f"{key} should be a positive integer (seconds)"}
+                if key == "OTS_MILSIM_MESH_FALLBACK_POLICY":
+                    from .mesh import FALLBACK_POLICIES
+
+                    if value not in FALLBACK_POLICIES:
+                        return {
+                            "success": False,
+                            "error": f"{key} should be one of {', '.join(FALLBACK_POLICIES)}",
+                        }
+                if key == "OTS_MILSIM_MESH_DEFAULT_GROUP_ID" and (not isinstance(value, int) or value < 0):
+                    return {"success": False, "error": f"{key} should be a non-negative integer (0 = non impostato)"}
+
+            live = config.get("OTS_MILSIM_MESH_LIVE_SECONDS")
+            recent = config.get("OTS_MILSIM_MESH_RECENT_SECONDS")
+            if live is not None and recent is not None and recent <= live:
+                return {
+                    "success": False,
+                    "error": "OTS_MILSIM_MESH_RECENT_SECONDS deve essere maggiore di OTS_MILSIM_MESH_LIVE_SECONDS",
+                }
 
             return {"success": True, "error": ""}
         except BaseException as e:

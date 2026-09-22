@@ -220,6 +220,71 @@ le mappe restano verdi/vuote senza alcun errore, e il semaforo permette di
 distinguere subito il guasto del Ministero da un problema nostro.
 Nessun automatismo: il check parte solo dal pulsante.
 
+### Meshtastic / TAK tracker (tab Meshtastic e Canali Meshtastic)
+
+Monitor operativo dei tag Meshtastic che arrivano al server e instradamento
+**canale Meshtastic → gruppo TAK**, senza alcuna modifica a OpenTAKServer.
+L'analisi completa dell'architettura (verificata sul sorgente di OTS 1.7.13 e
+del plugin Meshtastic per ATAK) è in
+[`docs/meshtastic-architettura.md`](../../../docs/meshtastic-architettura.md).
+
+**Come osserva.** L'API plugin di OTS non ha hook sui CoT: il monitor consuma
+una coda esclusiva legata all'exchange **`firehose`** (fanout, dichiarato da
+OTS proprio «per i plugin»), quindi vede ogni CoT senza sottrarne a nessuno.
+Facoltativamente osserva anche il traffico MQTT grezzo su `amq.topic`.
+
+**Due strade, informazioni molto diverse:**
+
+| | Path A — relay ATAK | Path B — MQTT diretto |
+|---|---|---|
+| Come arriva | tag → LoRa → nodo su Android → plugin Meshtastic di ATAK → *Relay to Server* | tag → LoRa → gateway → MQTT → RabbitMQ |
+| Riconoscimento | `<__meshtastic/>` nel `<detail>` | `<takv platform="Meshtastic">` / `<contact endpoint="MQTT">` |
+| uid e callsign del tracker | **sì** (uid stabile, non riscritto con quello dell'EUD) | sì |
+| posizione, batteria, team ATAK | **sì** | sì |
+| **canale Meshtastic** | **NO** — `<__meshtastic/>` è vuoto | **sì** (sta nella routing key MQTT) |
+| node id, RSSI, SNR, hop | **NO** | sì |
+
+> ⚠️ Il canale Meshtastic **non sopravvive** al relay ATAK. Il plugin non lo
+> deduce mai (nemmeno dal callsign del tag): lo mostra come `UNKNOWN` e applica
+> la politica di fallback scelta dall'amministratore, oppure la dichiarazione
+> manuale fatta sul singolo tag.
+
+**Live Monitor** — si aggiorna da solo (polling incrementale ogni 2 s, lo stato
+vive in memoria: nessuna query per tag a ogni refresh). In alto le card
+*active / known tags, RX negli ultimi 60 s, unknown channel, routing errors* e i
+semafori di plugin, RabbitMQ, firehose, observer MQTT e Meshtastic nativo di OTS.
+Poi la tabella dei tag (stato LIVE/RECENT/STALE, canale, gruppo OTS, ultimo
+contatto, GPS, RSSI, SNR, sorgente) con filtri, e la console eventi con filtri,
+pausa, pulisci e auto-scroll (cronologia limitata in memoria, nessuna tabella di
+log che cresce all'infinito).
+
+**Dettaglio tag** — anagrafica completa (solo i valori realmente disponibili:
+quello che il transport non porta è marcato «non disponibile», mai inventato),
+**strade di ricezione** (lo stesso tag ricevuto da più gateway resta un solo
+oggetto logico), **traccia della decisione di instradamento** passo per passo
+(ricevuto via → EUD sorgente e suoi gruppi → canale → mappatura o fallback →
+gruppo finale → esito), **dichiarazione manuale** del canale/gruppo e
+**packet inspector** con «View Raw CoT».
+
+**Sanificazione.** Il CoT mostrato nella UI di debug passa da un filtro che
+oscura ogni attributo o elemento il cui nome somigli a un segreto (`psk`,
+`password`, `token`, `api_key`, `cookie`, `certificate`…): PSK dei canali
+Meshtastic, credenziali MQTT e token non possono finire sullo schermo. Il CoT
+**instradato** agli EUD resta invece l'originale, intatto.
+
+**Instradamento e isolamento.** La consegna usa `basic_publish(exchange="groups",
+routing_key="<gruppo>.OUT")` — esattamente il meccanismo di `cot_parser`: valgono
+le normali autorizzazioni di gruppo, chi non è nel gruppo non riceve il tag.
+Nessun broadcast a tutti i client.
+
+**Limitazione nota:** il plugin può solo *aggiungere* la consegna al gruppo
+mappato, non può togliere quella nativa. OTS instrada comunque il CoT rilanciato
+ai gruppi dell'EUD che l'ha rilanciato (decisione presa dentro `route_cot()`, in
+un altro processo, senza punti di estensione). Un tag su canale BRAVO rilanciato
+da un telefono di ALPHA sarà quindi visto da BRAVO *e* da ALPHA; chi non sta in
+nessuno dei due non lo vede. Per evitare la doppia consegna, quando il gruppo
+mappato coincide con quello dell'EUD sorgente il plugin non ripubblica.
+
 ## Installazione
 
 Sul server, da root (lo stesso script fa anche l'update alle versioni successive
@@ -275,6 +340,13 @@ restano invariate per compatibilità con i config esistenti.
 | `OTS_EVENTCALENDAR_GM_TEAM_A_ID` | `0` | Gruppo ATAK di default del Team A (id `groups` di OTS, 0 = non impostato) |
 | `OTS_EVENTCALENDAR_GM_TEAM_B_ID` | `0` | Gruppo ATAK di default del Team B |
 | `OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS` | `[]` | Gruppo ATAK osservatore broadcast di default |
+| `OTS_MILSIM_MESH_ENABLED` | `true` | Monitor Meshtastic attivo (osserva il firehose CoT) |
+| `OTS_MILSIM_MESH_MQTT_OBSERVER` | `false` | Osserva anche il traffico MQTT grezzo: unica strada da cui arrivano canale, node id, RSSI/SNR |
+| `OTS_MILSIM_MESH_LIVE_SECONDS` | `60` | Sotto questa età il tag è LIVE |
+| `OTS_MILSIM_MESH_RECENT_SECONDS` | `300` | Sotto questa età è RECENT, oltre STALE |
+| `OTS_MILSIM_MESH_GPS_STALE_SECONDS` | `120` | Oltre questa età la posizione è «stale» |
+| `OTS_MILSIM_MESH_FALLBACK_POLICY` | `source_eud_group` | Canale non determinabile: `source_eud_group`, `default_group`, `meshtastic_group`, `ignore` |
+| `OTS_MILSIM_MESH_DEFAULT_GROUP_ID` | `0` | Gruppo per la politica `default_group` (id `groups` di OTS) |
 
 ## API (prefisso `/api/plugins/ots_milsim_companion_plugin`)
 
@@ -318,9 +390,31 @@ restano invariate per compatibilità con i config esistenti.
 | `GET /missions/<nome>/contents/<hash>/download` · `/preview` | admin | Download / anteprima immagine di un contenuto |
 | `DELETE /missions/<nome>/contents/<hash>` | admin | Rimuove il contenuto dalla missione (notifica EUD) |
 | `GET /pcn/status` | admin | Semaforo WMS PCN (una GetMap di prova per servizio) |
+| `GET /meshtastic/state?since=<seq>` | admin | Snapshot del monitor (card, semafori, tag) + delta del log eventi |
+| `GET /meshtastic/tags/<key>` | admin | Dettaglio tag: anagrafica, strade di ricezione, traccia di routing, pacchetti recenti |
+| `POST /meshtastic/tags/<key>` | admin | Dichiarazione manuale di canale/gruppo per quel tag |
+| `DELETE /meshtastic/tags/<key>` | admin | Dimentica il tag (elenco conosciuti + dichiarazioni manuali) |
+| `GET/POST /meshtastic/mappings` · `PUT/DELETE /meshtastic/mappings/<id>` | admin | Mappature canale → gruppo TAK |
+| `POST /meshtastic/events/clear` | admin | Svuota la console eventi |
 
 I badge caricati vengono salvati in
 `~/ots/plugins/ots_milsim_companion_plugin/badges/` (inclusi nel backup di `update-ots.sh`).
+
+## Test
+
+```bash
+cd ots/plugins/OTS-MilSim-Companion-Plugin
+python -m pytest tests -q
+```
+
+I test dell'integrazione Meshtastic girano senza OpenTAKServer installato
+(`tests/conftest.py` sostituisce `pika`, `flask` e `opentakserver.extensions`
+con stub e l'accesso al DB con monkeypatch) e coprono: rilevamento del tag e
+identità stabile, posizione, mappatura esplicita del canale, canali multipli
+senza incroci, canale sconosciuto con tutte le politiche di fallback, relay
+ATAK (identità del tracker distinta da quella dell'EUD), ricezione duplicata da
+più gateway, invecchiamento LIVE→RECENT→STALE, isolamento fra gruppi e
+sanificazione dei payload di debug.
 
 ## Roadmap
 
@@ -332,6 +426,11 @@ I badge caricati vengono salvati in
   punto (dall'orchestratore in campo o manualmente dal Game Master) e
   aggiornarne il colore sugli EUD.
 - Punteggi di fine partita agganciati all'anagrafica giocatori.
+- **Canale Meshtastic nel relay ATAK**: proporre al plugin Meshtastic per ATAK
+  di valorizzare `<__meshtastic channel="…" channel_name="…" node_id="…"/>`
+  invece dell'elemento vuoto di oggi. Il parser del monitor legge già quegli
+  attributi: il giorno che arrivassero, il routing per canale funzionerebbe
+  anche via relay senza dichiarazioni manuali.
 
 ## Esempio CSV
 

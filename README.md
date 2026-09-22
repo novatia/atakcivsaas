@@ -57,7 +57,12 @@ ots/
   bomb site, punti di dominio, aree) e **▶ Play** che crea la partita pushando marker,
   aree e data package a tutti gli EUD collegati; **SkyFi** (ordini satellitari, download
   deliverable via proxy, data package ATAK, asset nelle missioni Data Sync), gestione
-  contenuti delle **missioni Data Sync** e semaforo dello stato **mappe PCN**.
+  contenuti delle **missioni Data Sync** e semaforo dello stato **mappe PCN**;
+  **Meshtastic** (dalla 3.13.0): Live Monitor dei tag/TAK tracker che arrivano
+  al server — dal relay del plugin Meshtastic di ATAK o dal feed MQTT — con
+  traccia della decisione di instradamento, packet inspector con CoT grezzo
+  sanificato e mappatura **canale Meshtastic → gruppo TAK**
+  ([analisi dell'architettura](docs/meshtastic-architettura.md)).
 
 ### Troubleshooting
 
@@ -69,6 +74,14 @@ ots/
   systemctl daemon-reload && systemctl enable --now opentakserver-cot-parser
   ```
   Dopo ogni upgrade verificare che giri: `ps aux | grep cot_parser`.
+
+### Documentazione
+
+- **[docs/meshtastic-architettura.md](docs/meshtastic-architettura.md)** —
+  come OpenTAKServer 1.7.13 riceve e instrada i CoT (exchange RabbitMQ, code,
+  routing key), cosa offre davvero l'API plugin, come funziona l'integrazione
+  Meshtastic nativa e — verificato sul sorgente del plugin Meshtastic per ATAK —
+  **quali informazioni sopravvivono al «Relay to Server» e quali no**.
 
 ### Note
 
