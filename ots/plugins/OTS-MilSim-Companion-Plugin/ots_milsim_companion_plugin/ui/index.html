@@ -159,6 +159,8 @@
   .team-add select { flex: 1; min-width: 140px; }
   .team-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; margin-bottom: 10px; cursor: pointer; }
   .team-toggle input { width: auto; }
+  ul.team-rule { margin: 4px 0 10px; padding-left: 20px; color: var(--muted); font-size: 12.5px; }
+  ul.team-rule li { margin: 2px 0; }
   /* ---- Meshtastic Live Monitor ---- */
   .msh-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
   .msh-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--panel); }
@@ -2105,17 +2107,37 @@ async function renderTeams() {
   const defB = cfg.OTS_EVENTCALENDAR_GM_TEAM_B_ID || 0;
   const defObsAll = cfg.OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS || [];
   const defObs = defObsAll[0] || 0;
+  window.__defA = defA; window.__defB = defB;
   const options = (sel, none) => `<option value="">${none}</option>` + ATAK_GROUPS.map(g => groupOption(g, sel)).join("");
 
-  // Di default si vedono solo i gruppi mappati (Team A/B/osservatori); con la
-  // spunta si gestiscono anche gli altri gruppi del server
-  const isMapped = g => g.id === defA || g.id === defB || defObsAll.includes(g.id);
+  // Ruolo del gruppo: decide sia la regola applicata dal server sia come si
+  // legge una membership (su un gruppo osservatori «solo IN» è corretto, su
+  // una squadra è un errore)
+  const kindOf = g => (g.id === defA || g.id === defB) ? "team"
+                    : defObsAll.includes(g.id) ? "observer" : "plain";
+  const isMapped = g => kindOf(g) !== "plain";
   const shown = TEAMS_SHOW_ALL ? [...ATAK_GROUPS].sort((a, b) => (isMapped(b) - isMapped(a)) || a.name.localeCompare(b.name))
                                : ATAK_GROUPS.filter(isMapped);
+  const teamNameOf = id => (ATAK_GROUPS.find(g => g.id === id) || {}).name || "";
+
+  // Badge del ruolo della singola persona dentro il gruppo
+  function roleBadge(kind, directions) {
+    const has = d => (directions || []).includes(d);
+    if (kind === "observer") {
+      if (has("OUT")) return `<span class="pill neutral" title="Riceve il traffico del gruppo: vede tutti quelli che ci pubblicano">👁 osserva</span>`;
+      return `<span class="pill ok" title="Pubblica qui la propria posizione ma non riceve: è un giocatore visto dagli osservatori">📡 pubblica</span>`;
+    }
+    if (kind === "team" && !(has("IN") && has("OUT"))) {
+      return `<span class="pill warn" title="In squadra servono entrambe le direzioni: riceve e viene visto">⚠ solo ${esc((directions || []).join("/"))}</span>`;
+    }
+    return "";
+  }
 
   const cards = shown.map(g => {
+    const kind = kindOf(g);
     const inGroup = new Set((g.users || []).map(u => u.user_id));
     const free = OTS_USERS.filter(u => !inGroup.has(u.id));
+    const label = kind === "team" ? "🎖 Assegna alla squadra" : "➕ Aggiungi al gruppo";
     const addSelect = `
       <div class="team-add">
         <select id="team-add-${g.id}" ${free.length ? "" : "disabled"}>
@@ -2123,7 +2145,7 @@ async function renderTeams() {
                         : `<option>— tutti gli utenti sono già nel gruppo —</option>`}
         </select>
         <button class="btn primary small" ${free.length ? "" : "disabled"}
-          onclick="addGroupMember(${g.id}, this)">➕ Aggiungi al gruppo</button>
+          onclick="addGroupMember(${g.id}, this)">${label}</button>
       </div>`;
     return `
     <div class="mode-card">
@@ -2133,15 +2155,14 @@ async function renderTeams() {
       ${(g.users || []).length ? `<table style="margin-top:8px; table-layout:fixed; width:100%"><colgroup><col><col style="width:110px"><col style="width:34px"></colgroup><tbody>
         ${g.users.map(u => `<tr>
           <td style="overflow-wrap:anywhere">
-            <strong>${esc(u.username || "?")}</strong>
-            ${(u.directions || []).length < 2 ? `<span class="pill warn" title="Manca una direzione: con la sola ${esc((u.directions || []).join("/"))} la squadra non funziona in entrambi i versi">solo ${esc((u.directions || []).join("/"))}</span>` : ""}
-            <br>
+            <strong>${esc(u.username || "?")}</strong> ${roleBadge(kind, u.directions)}<br>
             ${u.euds.length
               ? u.euds.map(e => `<span class="muted" style="font-size:11.5px">📱 ${esc(e.callsign || "?")} · ${esc(e.uid)}</span>`).join("<br>")
               : `<span class="muted" style="font-size:11.5px">nessun EUD registrato per l'utente</span>`}
           </td>
           <td class="muted" style="text-align:right; font-size:12px">${u.euds.length ? fmtDT(u.euds[0].last_event_time) : ""}</td>
-          <td style="text-align:right"><button class="btn danger small" title="Togli l'utente (e i suoi EUD) dal gruppo"
+          <td style="text-align:right"><button class="btn danger small"
+            title="${kind === "team" ? "Toglie l'utente dalla squadra: smette anche di pubblicare agli osservatori" : "Togli l'utente (e i suoi EUD) dal gruppo"}"
             onclick="removeGroupMember(${g.id}, ${u.user_id}, '${esc(u.username).replace(/'/g, "\\'")}', '${esc(g.name).replace(/'/g, "\\'")}', this)">✕</button></td>
         </tr>`).join("")}
       </tbody></table>` : '<p class="muted" style="margin:8px 0 0">Nessun utente nel gruppo.</p>'}
@@ -2149,13 +2170,23 @@ async function renderTeams() {
     </div>`;
   }).join("");
 
+  const regola = (defA || defB) ? `
+    <p class="muted" style="margin-top:0">Assegnando qualcuno a <b>${esc(teamNameOf(defA) || "Team A")}</b> o
+      <b>${esc(teamNameOf(defB) || "Team B")}</b> il server applica da solo la regola di squadra:</p>
+    <ul class="team-rule">
+      <li>lo <b>toglie dall'altra squadra</b> (si sta in una squadra sola);</li>
+      <li>gli dà <b>IN + OUT</b> sulla squadra scelta: riceve i compagni ed è visto da loro;</li>
+      <li>gli dà <b>solo IN</b> su ${defObsAll.length ? `<b>${esc(defObsAll.map(teamNameOf).filter(Boolean).join(", "))}</b>` : "il gruppo osservatori"}:
+        pubblica agli osservatori <b>senza riceverli</b> — ed è questo che impedisce alle due squadre di vedersi fra loro.</li>
+    </ul>` : `
+    <p class="muted" style="margin-top:0">Imposta Team A, Team B e osservatori qui sopra: da quel momento
+      l'assegnazione a una squadra applica la regola automatica (cambio squadra esclusivo + pubblicazione agli osservatori).</p>`;
+
   el.innerHTML = `
     <h2>Mappatura Team</h2>
     <p class="muted" style="margin-top:0">I gruppi sono i <b>gruppi ATAK</b> definiti sul server (web UI di
       OpenTAKServer → <b>Groups</b>). Qui scegli quale gruppo è il <b>Team A</b>, quale il <b>Team B</b> e quale fa
-      da <b>osservatore broadcast</b> che vede tutto (es. headquarter/admin) — al Play il pannello si apre già con
-      questa mappatura, modificabile per la singola partita — e <b>componi le squadre</b> aggiungendo o togliendo
-      utenti dai gruppi.</p>
+      da <b>osservatore</b> — al Play il pannello si apre già con questa mappatura — e <b>componi le squadre</b>.</p>
     <form class="inline" id="team-map-form">
       <label>Team A <select id="map-team-a">${options(defA, "— non impostato —")}</select></label>
       <label>Team B <select id="map-team-b">${options(defB, "— non impostato —")}</select></label>
@@ -2163,9 +2194,10 @@ async function renderTeams() {
       <button class="btn primary" type="submit">💾 Salva mappatura</button>
     </form>
     <h3>Composizione squadre</h3>
-    <p class="muted" style="margin-top:0">⚠️ In OpenTAKServer l'appartenenza a un gruppo è <b>per utente</b>, non per
-      singolo dispositivo: aggiungendo un utente entrano in squadra <b>tutti i suoi EUD</b>. Per avere due dispositivi
-      della stessa persona in squadre diverse servono due account OTS distinti.</p>
+    ${regola}
+    <p class="muted">⚠️ In OpenTAKServer l'appartenenza è <b>per utente</b>, non per dispositivo: entrano in squadra
+      <b>tutti gli EUD</b> di quell'utente. Per avere due dispositivi della stessa persona in squadre diverse servono
+      due account OTS distinti.</p>
     <label class="team-toggle"><input type="checkbox" ${TEAMS_SHOW_ALL ? "checked" : ""}
       onchange="TEAMS_SHOW_ALL = this.checked; renderTeams()"> Mostra tutti i gruppi del server</label>
     ${shown.length ? `<div class="mode-grid">${cards}</div>`
@@ -2182,6 +2214,7 @@ async function renderTeams() {
     const b = +document.getElementById("map-team-b").value || 0;
     const obs = +document.getElementById("map-observers").value || 0;
     if (a && a === b) return toast("Team A e Team B non possono essere lo stesso gruppo ATAK.", false);
+    if (obs && (obs === a || obs === b)) return toast("Il gruppo osservatori deve essere diverso dalle due squadre.", false);
     try {
       await api("/config", { method: "POST", body: {
         OTS_EVENTCALENDAR_GM_TEAM_A_ID: a,
@@ -2198,22 +2231,31 @@ async function addGroupMember(groupId, btn) {
   const select = document.getElementById(`team-add-${groupId}`);
   const userId = select && select.value ? parseInt(select.value, 10) : 0;
   if (!userId) return;
+
+  // Cambiare squadra a qualcuno è un'azione con effetti su un altro gruppo:
+  // si chiede conferma invece di spostarlo in silenzio
+  const target = ATAK_GROUPS.find(g => g.id === groupId);
+  const attuale = ATAK_GROUPS.find(g => g.id !== groupId && (g.users || []).some(u => u.user_id === userId)
+    && (g.id === (window.__defA || 0) || g.id === (window.__defB || 0)));
+  const username = (OTS_USERS.find(u => u.id === userId) || {}).username || "l'utente";
+  if (attuale && !confirm(`${username} è in ${attuale.name}. Spostarlo in ${target.name}?`)) return;
+
   btn.disabled = true;
   try {
     const res = await api(`/groups/${groupId}/members`, { method: "POST", body: { user_id: userId } });
     // Un EUD mai collegato non ha una coda da legare: non è un errore, si
     // legherà da solo al primo collegamento. Va detto, non nascosto.
     if (res.warnings && res.warnings.length) {
-      toast(`${res.username} aggiunto a ${res.group}, ma ${res.warnings.length} EUD su ${res.euds} non erano collegati: riceveranno il gruppo al prossimo avvio di ATAK.`, true);
+      toast(`${res.username}: ${res.description} — ${res.warnings.length} EUD su ${res.euds} non erano collegati, riceveranno al prossimo avvio di ATAK.`);
     } else {
-      toast(`${res.username} aggiunto a ${res.group} (${res.bound}/${res.euds} EUD legati subito)`);
+      toast(`${res.username}: ${res.description}`);
     }
     renderTeams();
   } catch (e) { toast(e.message, false); btn.disabled = false; }
 }
 
 async function removeGroupMember(groupId, userId, username, groupName, btn) {
-  if (!confirm(`Togliere ${username} dal gruppo ${groupName}? Tutti i suoi EUD smettono di ricevere il traffico del gruppo.`)) return;
+  if (!confirm(`Togliere ${username} da ${groupName}? Tutti i suoi EUD smettono di ricevere il traffico del gruppo.`)) return;
   btn.disabled = true;
   try {
     const res = await api(`/groups/${groupId}/members/${userId}`, { method: "DELETE" });

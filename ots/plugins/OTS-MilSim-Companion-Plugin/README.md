@@ -160,6 +160,39 @@ partita**: il player su mappa filtrato esattamente sulla finestra
 oltre a scegliere Team A / Team B / osservatori permette di **aggiungere e togliere
 utenti dai gruppi** senza passare dalla pagina Groups di OpenTAKServer.
 
+**Assegnare a una squadra è automatico.** Mettendo qualcuno in Team A o Team B
+il server applica da solo la regola, in una sola operazione:
+
+1. lo **toglie dall'altra squadra** — si sta in una squadra sola;
+2. gli dà **IN + OUT** sulla squadra scelta: riceve i compagni ed è visto da loro;
+3. gli dà **solo IN** sul gruppo osservatori: pubblica agli arbitri **senza
+   riceverli**.
+
+Il punto 3 è quello che tiene separate le squadre. Se i giocatori avessero anche
+`OUT` sul gruppo osservatori, Alpha riceverebbe tutto quello che pubblica Bravo
+e le due squadre si vedrebbero fra loro — che è l'errore facile da fare
+assegnando i gruppi a mano.
+
+Lo schema che ne esce:
+
+| chi | Alpha | Bravo | Osservatori |
+|---|---|---|---|
+| giocatore Alpha | IN + OUT | — | IN |
+| giocatore Bravo | — | IN + OUT | IN |
+| osservatore | — | — | IN + OUT |
+
+Gli arbitri vedono entrambe le squadre e restano invisibili ai giocatori. Un
+arbitro può scendere in campo (assegnandolo a una squadra) senza perdere il
+ruolo: uscendo dalla squadra torna arbitro completo.
+
+Togliendo qualcuno da una squadra smette anche di pubblicare agli osservatori —
+a meno che sia lui stesso un osservatore, nel qual caso il suo `IN` resta.
+
+Le regole stanno in `teams.py` come funzioni pure (`plan_assign`, `plan_remove`)
+e sono coperte dai test: `app.py` esegue soltanto il piano che decidono. Sui
+gruppi che non hanno un ruolo nella Mappatura Team (visibili con «mostra tutti i
+gruppi») resta l'aggiunta semplice IN + OUT, senza regole di partita.
+
 Due cose da sapere, entrambe imposte da come OTS modella i gruppi:
 
 - **L'appartenenza è per utente, non per EUD.** La tabella `groups_users` ha
@@ -167,10 +200,11 @@ Due cose da sapere, entrambe imposte da come OTS modella i gruppi:
   allow all the user's EUDs to subscribe and unsubscribe»*. Aggiungendo un utente
   entrano in squadra **tutti i suoi dispositivi**; per avere due EUD della stessa
   persona in squadre diverse servono due account OTS.
-- **Si scrivono entrambe le direzioni.** `OUT` = gli EUD dell'utente ricevono il
-  traffico del gruppo (binding della coda in `EudHandler`), `IN` = i CoT di quegli
-  EUD vengono smistati a quel gruppo (`route_cot`). Una squadra con una sola
-  direzione funziona a metà, e la UI la segnala con un badge.
+- **Le due direzioni fanno mestieri opposti.** `OUT` = gli EUD dell'utente
+  **ricevono** il traffico del gruppo (binding della coda in `EudHandler`), `IN`
+  = i CoT di quegli EUD **vengono visti** da quel gruppo (`route_cot`). La UI
+  mostra il ruolo di ciascuno: `👁 osserva` per chi riceve, `📡 pubblica` per chi
+  è solo visto, e un avviso solo quando in una squadra ne manca una.
 
 **Effetto immediato anche sugli EUD collegati.** OpenTAKServer lega le code al
 gruppo *solo quando l'EUD si connette*: con la sua API, aggiungere un utente a un

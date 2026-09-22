@@ -39,7 +39,7 @@ from opentakserver.models.MissionContentMission import MissionContentMission
 from opentakserver.models.user import User
 from opentakserver.plugins.Plugin import Plugin
 
-from . import cot, engine, mesh, skyfi
+from . import cot, engine, mesh, skyfi, teams
 from .default_config import DefaultConfig
 from .game_modes import GAME_MODES, MARKER_TYPES, ZONE_TYPES, serialize_registry, validate_template
 from .models import (
@@ -2524,14 +2524,11 @@ class MilSimCompanionPlugin(Plugin):
     # `groups_users` ha (user_id, group_id, direction) e la docstring dell'API
     # di OTS lo dice esplicitamente — «this will allow all the user's EUDs to
     # subscribe and unsubscribe». Quindi si assegna un utente e lo seguono
-    # tutti i suoi dispositivi; non esiste un modo di mettere in squadra un
-    # singolo EUD lasciando fuori gli altri dello stesso utente.
+    # tutti i suoi dispositivi.
     #
-    # Si scrivono entrambe le direzioni, come serve a una squadra vera:
-    #   OUT = gli EUD dell'utente RICEVONO il traffico del gruppo
-    #   IN  = i CoT degli EUD dell'utente vengono smistati a quel gruppo
-    # (rispettivamente EudHandler per i binding delle code e route_cot per lo
-    # smistamento, verificati sul sorgente di OTS 1.7.13).
+    # Le regole di squadra (cambio squadra esclusivo, pubblicazione verso gli
+    # osservatori) stanno in teams.py come funzioni pure: qui si esegue
+    # soltanto il piano che decidono.
 
     @staticmethod
     def _group_membership_guard():
@@ -2544,13 +2541,74 @@ class MilSimCompanionPlugin(Plugin):
         return None
 
     @staticmethod
+    def _apply_membership_plan(user, plan: dict) -> dict:
+        """Esegue il piano di teams.py: righe in groups_users + binding code.
+
+        Solo la direzione OUT ha un binding su RabbitMQ (la coda dell'EUD
+        legata a `<gruppo>.OUT`); IN è pura logica di smistamento del
+        cot_parser, quindi non tocca il broker.
+        """
+        from opentakserver.models.Group import Group
+        from opentakserver.models.GroupUser import GroupUser
+
+        group_names = {g.id: g.name for g in db.session.query(Group).all()}
+        eud_uids = [e.uid for e in db.session.query(EUD).filter_by(user_id=user.id).all()]
+        warnings, bound, unbound = [], 0, 0
+
+        for group_id, direction in plan["clear"]:
+            query = db.session.query(GroupUser).filter_by(user_id=user.id, group_id=group_id)
+            if direction:
+                query = query.filter_by(direction=direction)
+            if not query.count():
+                continue
+            query.delete()
+            if direction in (None, teams.OUT) and group_id in group_names:
+                done, warn = cot.group_bindings(eud_uids, group_names[group_id], bind=False)
+                unbound += done
+                warnings += warn
+
+        for group_id, direction in plan["set"]:
+            existing = (
+                db.session.query(GroupUser)
+                .filter_by(user_id=user.id, group_id=group_id, direction=direction)
+                .first()
+            )
+            if existing:
+                if not existing.enabled:
+                    existing.enabled = True
+            else:
+                membership = GroupUser()
+                membership.user_id = user.id
+                membership.group_id = group_id
+                membership.direction = direction
+                membership.enabled = True
+                db.session.add(membership)
+            if direction == teams.OUT and group_id in group_names:
+                done, warn = cot.group_bindings(eud_uids, group_names[group_id], bind=True)
+                bound += done
+                warnings += warn
+
+        db.session.commit()
+        return {
+            "euds": len(eud_uids),
+            "bound": bound,
+            "unbound": unbound,
+            "warnings": warnings,
+            "description": teams.describe(plan, group_names, plan.get("group_id")),
+        }
+
+    @staticmethod
     @roles_accepted("administrator")
     @blueprint.route("/groups/<int:group_id>/members", methods=["POST"])
     def add_group_member(group_id: int):
-        """Aggiunge un utente (e quindi tutti i suoi EUD) al gruppo."""
+        """Mette un utente (e quindi tutti i suoi EUD) nel gruppo.
+
+        Se il gruppo è una delle due squadre della Mappatura Team è un vero
+        **cambio squadra**: l'utente viene tolto dall'altra squadra e comincia
+        a pubblicare verso il gruppo osservatori (vedi teams.plan_assign).
+        """
         try:
             from opentakserver.models.Group import Group
-            from opentakserver.models.GroupUser import GroupUser
 
             guard = MilSimCompanionPlugin._group_membership_guard()
             if guard:
@@ -2569,45 +2627,18 @@ class MilSimCompanionPlugin(Plugin):
             if not user:
                 return jsonify({"success": False, "error": "Utente inesistente"}), 400
 
-            added = []
-            for direction in (Group.IN, Group.OUT):
-                existing = (
-                    db.session.query(GroupUser)
-                    .filter_by(user_id=user.id, group_id=group.id, direction=direction)
-                    .first()
-                )
-                if existing:
-                    if not existing.enabled:
-                        existing.enabled = True
-                        added.append(direction)
-                    continue
-                membership = GroupUser()
-                membership.user_id = user.id
-                membership.group_id = group.id
-                membership.direction = direction
-                membership.enabled = True
-                db.session.add(membership)
-                added.append(direction)
-            db.session.commit()
+            roles = teams.roles_from_config(app.config)
+            plan = teams.plan_assign(group.id, roles)
+            plan["group_id"] = group.id
+            result = MilSimCompanionPlugin._apply_membership_plan(user, plan)
 
-            # Le code degli EUD già collegati vanno legate adesso: OTS lo fa
-            # solo alla connessione, quindi senza questo l'utente entrerebbe in
-            # squadra ma non riceverebbe nulla fino al riavvio di ATAK.
-            eud_uids = [e.uid for e in db.session.query(EUD).filter_by(user_id=user.id).all()]
-            bound, warnings = cot.group_bindings(eud_uids, group.name, bind=True)
-
-            logger.info(
-                f"MilSim: {user.username} aggiunto al gruppo {group.name} "
-                f"({len(eud_uids)} EUD, {bound} code legate)"
-            )
+            logger.info(f"MilSim: {user.username} — {result['description']}")
             return jsonify({
                 "success": True,
                 "username": user.username,
                 "group": group.name,
-                "directions": added,
-                "euds": len(eud_uids),
-                "bound": bound,
-                "warnings": warnings,
+                "kind": plan["kind"],
+                **result,
             })
         except BaseException as e:
             db.session.rollback()
@@ -2618,10 +2649,14 @@ class MilSimCompanionPlugin(Plugin):
     @roles_accepted("administrator")
     @blueprint.route("/groups/<int:group_id>/members/<int:user_id>", methods=["DELETE"])
     def remove_group_member(group_id: int, user_id: int):
-        """Toglie l'utente (e quindi i suoi EUD) dal gruppo, sbindando le code."""
+        """Toglie l'utente (e i suoi EUD) dal gruppo, sbindando le code.
+
+        Da una squadra significa «resta senza squadra»: smette anche di
+        pubblicare agli osservatori, ma se è lui stesso un osservatore il suo
+        OUT su quel gruppo non viene toccato.
+        """
         try:
             from opentakserver.models.Group import Group
-            from opentakserver.models.GroupUser import GroupUser
 
             guard = MilSimCompanionPlugin._group_membership_guard()
             if guard:
@@ -2634,28 +2669,27 @@ class MilSimCompanionPlugin(Plugin):
             if not user:
                 return jsonify({"success": False, "error": "Utente inesistente"}), 404
 
-            # Prima si sbinda (servono ancora gli EUD), poi si cancella
-            eud_uids = [e.uid for e in db.session.query(EUD).filter_by(user_id=user.id).all()]
-            unbound, warnings = cot.group_bindings(eud_uids, group.name, bind=False)
+            from opentakserver.models.GroupUser import GroupUser
 
-            removed = (
-                db.session.query(GroupUser)
-                .filter_by(user_id=user.id, group_id=group.id)
-                .delete()
-            )
-            db.session.commit()
+            # Le membership attuali servono a distinguere «giocatore che lascia
+            # la squadra» da «arbitro che era sceso in campo»: al secondo non si
+            # tocca l'IN sul gruppo osservatori (vedi teams.plan_remove)
+            current = {
+                (m.group_id, m.direction)
+                for m in db.session.query(GroupUser).filter_by(user_id=user.id, enabled=True).all()
+            }
+            roles = teams.roles_from_config(app.config)
+            plan = teams.plan_remove(group.id, roles, current)
+            plan["group_id"] = group.id
+            result = MilSimCompanionPlugin._apply_membership_plan(user, plan)
 
-            logger.info(
-                f"MilSim: {user.username} rimosso dal gruppo {group.name} "
-                f"({removed} membership, {unbound} code slegate)"
-            )
+            logger.info(f"MilSim: {user.username} rimosso da {group.name}")
             return jsonify({
                 "success": True,
                 "username": user.username,
                 "group": group.name,
-                "removed": removed,
-                "unbound": unbound,
-                "warnings": warnings,
+                "kind": plan["kind"],
+                **result,
             })
         except BaseException as e:
             db.session.rollback()
