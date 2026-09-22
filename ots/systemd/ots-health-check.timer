@@ -1,0 +1,11 @@
+[Unit]
+Description=Controllo dei servizi OTS ogni 5 minuti
+
+[Timer]
+# Primo giro 2 minuti dopo il boot: da' tempo a RabbitMQ e Postgres di salire
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

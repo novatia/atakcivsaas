@@ -39,10 +39,15 @@ ots/
   scripts/
     update-ots.sh                        # aggiornamento backend + UI con backup e verifica
     install-milsim-companion-plugin.sh   # installa/aggiorna il plugin MilSim Companion nel venv
+    check-certs.sh                       # rinnovo/scadenze certificati + avvisi Telegram
+    check-services.sh                    # sentinella servizi: riavvia i caduti e avvisa
   plugins/
     OTS-MilSim-Companion-Plugin/   # calendario, presenze, punteggi/gradi + modalità di gioco
   systemd/
     opentakserver-cot-parser.service   # unit per il parser CoT (vedi Troubleshooting)
+    opentakserver-eud-handler.service  # unit per l'handler CoT SSL sulla 8089
+    opentakserver.service.d/           # drop-in Restart=always per il servizio principale
+    ots-health-check.{service,timer}   # sentinella dei servizi, ogni 5 minuti
 ```
 
 ### Plugin
@@ -100,6 +105,48 @@ ots/
   ```
   Se il primo dà `0` e l'ultima riga di `cot` è vecchia, è questo. Bug upstream da
   segnalare: il padre dovrebbe uscire con codice diverso da zero quando il figlio muore.
+
+  **Il trigger reale sono gli aggiornamenti automatici di Ubuntu.** Il 2026-09-22
+  `unattended-upgrades` ha riavviato `rabbitmq-server` (19 secondi di assenza,
+  19:05:05→19:05:24) e OTS non sopravvive a un broker che sparisce:
+  `CoTController.run()` finisce con `start_consuming()` senza `try` e senza
+  riconnessione. Lo si riconosce dal log applicativo —
+  `CONNECTION_FORCED - broker forced connection closure with reason 'shutdown'` —
+  subito prima della morte del parser. Succederà ancora: la difesa è
+  `Restart=always` su tutte le unit, più la sentinella qui sotto.
+
+### Resistenza ai riavvii
+
+Tre strati, tutti nel repo:
+
+1. **`Restart=always` sulle unit dedicate** (`opentakserver-cot-parser`,
+   `opentakserver-eud-handler`): con `RestartSec=5s` un buco di ~20 secondi del broker
+   si riassorbe in 3-4 tentativi, e il rate limit di systemd non scatta (al massimo 2
+   avvii in ogni finestra da 10s).
+2. **Drop-in per il servizio principale**, che non è nel repo perché lo installa OTS:
+   ```bash
+   cp -r ots/systemd/opentakserver.service.d /etc/systemd/system/
+   systemctl daemon-reload
+   ```
+   Aggiunge `Restart=always` a `opentakserver.service` senza toccare l'unit originale,
+   quindi sopravvive agli upgrade di OTS.
+3. **Sentinella `check-services.sh`** ogni 5 minuti: verifica che rabbitmq, opentakserver,
+   cot-parser ed eud-handler siano attivi, che il **processo** `cot_parser` esista davvero
+   (l'unit può risultare verde con il processo morto) e che — se ci sono EUD collegati
+   sulla 8089 — la tabella `cot` stia crescendo. Riavvia ciò che trova giù e avvisa su
+   Telegram, notificando **solo ai cambi di stato** per non mandare 288 messaggi al giorno.
+   ```bash
+   cp ots/systemd/ots-health-check.{service,timer} /etc/systemd/system/
+   systemctl daemon-reload && systemctl enable --now ots-health-check.timer
+   ./ots/scripts/check-services.sh --test    # prova la notifica Telegram
+   ./ots/scripts/check-services.sh --dry     # controlla senza riavviare niente
+   ```
+   Usa lo stesso `/etc/ots-notify.env` di `check-certs.sh` (`TELEGRAM_TOKEN`,
+   `TELEGRAM_CHAT_ID`; opzionali `OTS_DB_NAME`, `COT_STALE_MINUTES`).
+
+   ⚠️ Durante una manutenzione in cui si ferma OTS di proposito, fermare anche il timer
+   (`systemctl stop ots-health-check.timer`), altrimenti la sentinella rimette in piedi
+   quello che stai spegnendo.
 
 ### Documentazione
 

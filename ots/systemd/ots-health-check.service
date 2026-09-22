@@ -1,0 +1,8 @@
+[Unit]
+Description=Sentinella servizi OpenTAKServer (riavvio + notifica Telegram)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/ots/atakcivsaas/ots/scripts/check-services.sh
