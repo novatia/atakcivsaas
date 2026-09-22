@@ -116,14 +116,21 @@ if [ "${EUD_CONNECTIONS:-0}" -gt 0 ]; then
     if ! command -v psql >/dev/null 2>&1; then
         COT_CHECK="saltato (psql non disponibile: DB non Postgres?)"
     else
-        COT_AGE=$(sudo -u postgres psql -tAc \
+        # stderr catturato, non buttato: senza il messaggio di psql non si
+        # distingue «database sbagliato» da «permessi» da «tabella assente»,
+        # e si finisce a indovinare.
+        COT_OUT=$(sudo -u postgres psql -tAc \
             "SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() AT TIME ZONE 'UTC' - MAX(timestamp)))::bigint, -1) FROM cot;" \
-            "$OTS_DB_NAME" 2>/dev/null | tr -d '[:space:]')
+            "$OTS_DB_NAME" 2>&1)
+        COT_AGE=$(printf '%s' "$COT_OUT" | tr -d '[:space:]')
         if [ -z "$COT_AGE" ] || ! [ "$COT_AGE" -ge 0 ] 2>/dev/null; then
             # Un controllo che non riesce a girare va DETTO, non taciuto: è il
             # controllo più importante dei tre e senza di esso la sentinella
             # dichiara «tutto a posto» avendo guardato solo le unit.
-            COT_CHECK="NON ESEGUITO: query fallita sul DB «$OTS_DB_NAME» — imposta OTS_DB_NAME in $ENV_FILE"
+            # Prudenza: se l'errore contenesse una URI con credenziali, via.
+            REASON=$(printf '%s' "$COT_OUT" | head -n1 \
+                | sed -E 's#://[^:/@]+:[^@]*@#://***:***@#g' | cut -c1-140)
+            COT_CHECK="NON ESEGUITO sul DB «$OTS_DB_NAME» — ${REASON:-nessun output da psql} (regolabile con OTS_DB_NAME in $ENV_FILE)"
             add_problem "$COT_CHECK"
         elif [ "$COT_AGE" -gt $((COT_STALE_MINUTES * 60)) ]; then
             COT_CHECK="ultimo CoT $((COT_AGE / 60)) minuti fa"
