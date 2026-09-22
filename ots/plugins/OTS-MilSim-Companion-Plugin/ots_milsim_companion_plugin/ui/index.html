@@ -147,8 +147,8 @@
   .kw { display: inline-block; background: var(--tab); border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px; font-size: 11px; color: var(--muted); margin-right: 4px; }
   .pcn-status { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px;
     margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
-  #modal-backdrop, #play-backdrop, #tpl-preview-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
-  #modal-backdrop.hidden, #play-backdrop.hidden, #tpl-preview-backdrop.hidden { display: none; }
+  #modal-backdrop, #play-backdrop, #tpl-preview-backdrop, #dp-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
+  #modal-backdrop.hidden, #play-backdrop.hidden, #tpl-preview-backdrop.hidden, #dp-backdrop.hidden { display: none; }
   .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; width: min(420px, 92vw); display: flex; flex-direction: column; gap: 12px; }
   .modal h2 { margin: 0; }
   .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
@@ -230,6 +230,19 @@
     table.msh-table th.opt, table.msh-table td.opt { display: none; }
     .msh-console { height: 200px; }
   }
+  /* ---- Tab Data Package ---- */
+  .dp-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; }
+  .dp-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .dp-head .filename { font-weight: 600; overflow-wrap: anywhere; }
+  .dp-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+  .dp-detail { margin-top: 10px; }
+  .dp-detail table td, .dp-detail table th { font-size: 12.5px; padding: 5px 8px; }
+  .dp-uid { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+  .dp-issue { color: var(--absent); font-size: 12.5px; margin: 2px 0; }
+  .dp-new { color: var(--present); font-weight: 600; }
+  .dp-old { color: var(--muted); text-decoration: line-through; }
+  #dp-preview { max-height: 45vh; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+  #dp-preview table td, #dp-preview table th { font-size: 12px; padding: 4px 6px; }
 </style>
 <script>
   // Applica subito il tema salvato per evitare il flash chiaro/scuro al caricamento
@@ -292,6 +305,31 @@
     <div class="modal-actions">
       <button class="btn" onclick="closePlayModal()">Annulla</button>
       <button class="btn primary" id="play-confirm-btn" onclick="confirmPlay()">📡 Prepara missione</button>
+    </div>
+  </div>
+</div>
+<div id="dp-backdrop" class="hidden" onclick="closeDpModal()">
+  <div class="modal" style="width:min(820px, 94vw)" onclick="event.stopPropagation()">
+    <h2>🔧 Ripara data package</h2>
+    <div id="dp-modal-info" class="muted"></div>
+    <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:flex-end">
+      <label>Nuova scadenza (anni da oggi)
+        <input type="number" id="dp-years" min="1" max="50" step="1" style="width:110px" onchange="loadDpPreview()">
+      </label>
+      <label style="flex-direction:row; align-items:center; gap:6px; color:var(--text)">
+        <input type="radio" name="dp-mode" value="expired" checked style="width:auto" onchange="loadDpPreview()">
+        Solo scadute e in scadenza (&lt; 7 giorni)</label>
+      <label style="flex-direction:row; align-items:center; gap:6px; color:var(--text)">
+        <input type="radio" name="dp-mode" value="all" style="width:auto" onchange="loadDpPreview()">
+        Tutte le entità</label>
+    </div>
+    <div id="dp-preview"><p class="muted" style="padding:8px">Anteprima in corso…</p></div>
+    <p class="muted" style="margin:0">Viene creato un <b>nuovo</b> data package (nome con suffisso _vN, uid del
+      manifest nuovo, così ATAK non riusa quello già importato). L'originale resta com'è: potrai eliminarlo dopo.
+      In ogni .cot si tolgono BOM e <code>&lt;?visible true?&gt;</code>; uid, punti e colori non cambiano.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeDpModal()">Annulla</button>
+      <button class="btn primary" id="dp-confirm-btn" disabled onclick="confirmDpRepair()">🔧 Crea copia riparata</button>
     </div>
   </div>
 </div>
@@ -381,6 +419,7 @@ const TABS = [
   { id: "mesh_channels", label: "Canali Meshtastic", admin: true, render: () => { clearEventHash(); renderMeshChannels(); } },
   { id: "skyfi", label: "SkyFi", admin: true, render: () => { clearEventHash(); renderOrders(); } },
   { id: "missions", label: "Missioni", admin: true, render: () => { clearEventHash(); renderMissions(); } },
+  { id: "datapackages", label: "Data Package", admin: true, render: () => { clearEventHash(); renderDataPackages(); } },
   { id: "leaderboard", label: "Classifica", admin: false, render: () => { clearEventHash(); renderLeaderboard(); } },
   { id: "attendance", label: "Presenze", admin: true, render: renderAttendance },
   { id: "players", label: "Giocatori", admin: true, render: renderPlayers },
@@ -2744,6 +2783,250 @@ async function loadPcnStatus() {
     <span class="muted" title="Ora del check">${fmtDT(st.checked_at)}</span>`;
   if (st.status !== "online") {
     box.innerHTML += '<span class="muted">Quando è giù, su ATAK/WinTAK le mappe PCN restano verdi/vuote: è un guasto del Ministero, non del nostro server.</span>';
+  }
+}
+
+/* ---- Tab Data Package: scadenza delle entità e riparazione ---- */
+// Il Data Package tool di WinTAK dà alle aree disegnate (u-d-*) uno stale di
+// 7 giorni: passato quello ATAK-CIV all'import le scarta («Map Item — Not
+// Found») e tiene solo i marker. Questo tab mostra lo stato di ogni entità e
+// crea una copia riparata (Manuale Operatore, sez. 7).
+const DP_STATUS = {
+  ok: ["✅", "valida"],
+  expiring: ["⚠️", "scade entro 7 giorni"],
+  expired: ["❌", "scaduta: ATAK la scarta"],
+  dirty: ["🟠", "BOM o processing instruction"],
+  error: ["⛔", "non leggibile"],
+};
+let DP_PACKAGES = [], DP_OPEN = new Set(), DP_MODAL = null, DP_DEFAULT_YEARS = 5, DP_LAST_REPAIR = null;
+
+function dpBadge(p) {
+  if (p.error) return `<span class="pill err">⛔ ${esc(p.error)}</span>`;
+  const a = p.analysis, c = a.counts;
+  const cls = (c.expired || c.error || a.issues.length) ? "err" : ((c.expiring || c.dirty) ? "warn" : (a.cot_total ? "ok" : "neutral"));
+  return `<span class="pill ${cls}">${esc(a.summary)}</span>`;
+}
+
+async function renderDataPackages() {
+  const el = document.getElementById("content");
+  el.innerHTML = `
+    <div class="toolbar">
+      <h2 style="margin:0">Data package sul server</h2>
+      <span style="flex:1"></span>
+      <button class="btn" onclick="renderDataPackages()">↻ Aggiorna</button>
+    </div>
+    <p class="muted" style="margin-top:0">Per ogni pacchetto: lo stato delle entità CoT che contiene.
+      ❌ <b>scaduta</b> = ATAK-CIV la scarta all'import (in Data Package tool compare «Map Item — Not Found»):
+      succede alle aree disegnate con WinTAK dopo 7 giorni. ⚠️ scade entro 7 giorni · 🟠 BOM/processing
+      instruction di WinTAK · ⛔ XML non leggibile o manifest incoerente. Lo zip viene solo letto.</p>
+    <div id="dp-last"></div>
+    <div id="dp-list">Analisi in corso…</div>`;
+  renderDpLastRepair();
+  let data;
+  try {
+    data = await api("/datapackages/status");
+  } catch (e) {
+    document.getElementById("dp-list").innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
+    return;
+  }
+  DP_PACKAGES = data.packages;
+  DP_DEFAULT_YEARS = data.default_years || 5;
+  drawDpList();
+}
+
+function drawDpList() {
+  const box = document.getElementById("dp-list");
+  if (!box) return;
+  if (!DP_PACKAGES.length) {
+    box.innerHTML = "<p class='muted'>Nessun data package sul server.</p>";
+    return;
+  }
+  box.innerHTML = DP_PACKAGES.map((p, i) => {
+    const a = p.analysis;
+    const open = DP_OPEN.has(p.hash);
+    const flags = [
+      p.install_on_enrollment ? "installato all'enrollment" : "",
+      p.install_on_connection ? "installato alla connessione" : "",
+      p.server_config ? "connessione al server" : "",
+    ].filter(Boolean);
+    return `<div class="dp-card">
+      <div class="dp-head">
+        <span class="filename">${esc(p.filename)}</span>
+        ${dpBadge(p)}
+        ${flags.map(f => `<span class="kw">${esc(f)}</span>`).join("")}
+        <div class="dp-actions">
+          ${a ? `<button class="btn small" onclick="toggleDp('${esc(p.hash)}')">${open ? "▾" : "▸"} Dettagli</button>` : ""}
+          <button class="btn small" ${p.on_disk ? "" : "disabled"} onclick="downloadDp('${esc(p.hash)}')">⬇ Scarica</button>
+          ${a && a.needs_repair && !p.server_config ? `<button class="btn small primary" onclick="openDpModal(${i})">🔧 Ripara</button>` : ""}
+          ${p.server_config ? "" : `<button class="btn small danger" onclick="deleteDp(${i}, this)">🗑 Elimina</button>`}
+        </div>
+      </div>
+      <div class="muted" style="font-size:12px; margin-top:4px">
+        ${fmtBytes(p.size)} · ${fmtDT(p.submission_time)}${p.submission_user ? " · " + esc(p.submission_user) : ""}
+        ${a && a.manifest ? ` · manifest «${esc(a.manifest.name || "")}»` : ""}
+      </div>
+      ${open && a ? dpDetail(a) : ""}
+    </div>`;
+  }).join("");
+}
+
+function dpDetail(a) {
+  const rows = a.entities.map(e => {
+    const st = DP_STATUS[e.status] || ["?", e.status];
+    const notes = [];
+    if (e.error) notes.push(esc(e.error));
+    if (e.bom) notes.push("BOM");
+    (e.processing_instructions || []).forEach(pi => notes.push(`<code>${esc(pi)}</code>`));
+    return `<tr>
+      <td title="${esc(st[1])}">${st[0]}</td>
+      <td><strong>${esc(e.callsign || "—")}</strong><div class="dp-uid">${esc(e.uid || e.path)}</div></td>
+      <td><code>${esc(e.type || "")}</code></td>
+      <td style="white-space:nowrap">${e.stale ? fmtDT(e.stale) : "—"}<div class="dp-uid">${esc(e.stale || "")}</div></td>
+      <td class="muted">${notes.join(" · ")}</td>
+    </tr>`;
+  }).join("");
+  const files = a.files.map(f => `<tr><td>📄</td><td colspan="3" style="overflow-wrap:anywhere">${esc(f.path)}</td>
+      <td class="muted">file · ${fmtBytes(f.size)}</td></tr>`).join("");
+  const issues = a.issues.map(i => `<div class="dp-issue">⛔ ${esc(i.message)}</div>`).join("");
+  return `<div class="dp-detail">
+    ${issues}
+    <div class="msh-wrap"><table>
+      <thead><tr><th></th><th>Entità</th><th>Tipo</th><th>Stale</th><th>Note</th></tr></thead>
+      <tbody>${rows}${files || ""}${!rows && !files ? "<tr><td colspan='5' class='muted'>Pacchetto vuoto.</td></tr>" : ""}</tbody>
+    </table></div>
+  </div>`;
+}
+
+function toggleDp(hash) {
+  if (DP_OPEN.has(hash)) DP_OPEN.delete(hash); else DP_OPEN.add(hash);
+  drawDpList();
+}
+
+function downloadDp(hash) {
+  const a = document.createElement("a");
+  a.href = `${API}/datapackages/${encodeURIComponent(hash)}/download`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+function dpParams() {
+  const years = parseInt(document.getElementById("dp-years").value, 10);
+  const mode = document.querySelector("input[name=dp-mode]:checked").value;
+  return { years, mode };
+}
+
+function openDpModal(i) {
+  DP_MODAL = DP_PACKAGES[i];
+  document.getElementById("dp-modal-info").innerHTML =
+    `<b>${esc(DP_MODAL.filename)}</b> — ${esc(DP_MODAL.analysis.summary)}`;
+  document.getElementById("dp-years").value = DP_DEFAULT_YEARS;
+  document.querySelector("input[name=dp-mode][value=expired]").checked = true;
+  document.getElementById("dp-backdrop").classList.remove("hidden");
+  loadDpPreview();
+}
+
+function closeDpModal() {
+  document.getElementById("dp-backdrop").classList.add("hidden");
+  DP_MODAL = null;
+}
+
+async function loadDpPreview() {
+  if (!DP_MODAL) return;
+  const box = document.getElementById("dp-preview");
+  const btn = document.getElementById("dp-confirm-btn");
+  btn.disabled = true;
+  box.innerHTML = "<p class='muted' style='padding:8px'>Anteprima in corso…</p>";
+  const hash = DP_MODAL.hash;
+  let r;
+  try {
+    r = await api(`/datapackages/${encodeURIComponent(hash)}/repair/preview`, { method: "POST", body: dpParams() });
+  } catch (e) {
+    box.innerHTML = `<p style="padding:8px">⚠️ ${esc(e.message)}</p>`;
+    return;
+  }
+  if (!DP_MODAL || DP_MODAL.hash !== hash) return; // modale chiusa o cambiata nel frattempo
+  const rows = r.changes.map(c => {
+    const before = DP_STATUS[c.status_before] || ["?"], after = DP_STATUS[c.status_after] || ["?"];
+    const extra = [c.bom_removed ? "BOM tolto" : "", ...(c.pi_removed || []).map(pi => esc(pi) + " tolto")].filter(Boolean);
+    return `<tr>
+      <td>${before[0]} → ${after[0]}</td>
+      <td><strong>${esc(c.callsign || "—")}</strong> <code>${esc(c.type || "")}</code><div class="dp-uid">${esc(c.uid)}</div></td>
+      <td style="white-space:nowrap">${c.renewed
+        ? `<span class="dp-old">${esc(fmtDT(c.stale_before))}</span><br><span class="dp-new">${esc(fmtDT(c.stale_after))}</span>`
+        : `<span class="muted">${esc(fmtDT(c.stale_before))} (invariato)</span>`}</td>
+      <td class="muted">${extra.join(" · ")}</td>
+    </tr>`;
+  }).join("");
+  const skipped = (r.skipped || []).map(s => `<div class="dp-issue">⛔ ${esc(s.path)} copiato senza modifiche: ${esc(s.error)}</div>`).join("");
+  box.innerHTML = `
+    <div style="padding:8px; font-size:12.5px">
+      Nuovo pacchetto: <b>${esc(r.new_filename)}</b> · manifest «${esc(r.new_name)}» · ${r.renewed} entità con stale
+      fino al <b>${esc(fmtDT(r.new_stale))}</b>${skipped}
+    </div>
+    <table><thead><tr><th>Stato</th><th>Entità</th><th>Stale prima → dopo</th><th>Pulizia</th></tr></thead>
+    <tbody>${rows || "<tr><td colspan='4' class='muted'>Nessuna entità CoT.</td></tr>"}</tbody></table>`;
+  btn.disabled = false;
+}
+
+async function confirmDpRepair() {
+  if (!DP_MODAL) return;
+  const p = DP_MODAL, params = dpParams();
+  if (!confirm(`Creare la copia riparata di "${p.filename}"?\n\n` +
+      `Stale rinnovato di ${params.years} anni (${params.mode === "all" ? "tutte le entità" : "solo scadute e in scadenza"}). ` +
+      `L'originale resta sul server.`)) return;
+  const btn = document.getElementById("dp-confirm-btn");
+  btn.disabled = true;
+  try {
+    const r = await api(`/datapackages/${encodeURIComponent(p.hash)}/repair`, { method: "POST", body: params });
+    DP_LAST_REPAIR = { original: p, result: r };
+    closeDpModal();
+    toast(`Creato ${r.new_filename}: ${r.renewed} entità rinnovate`);
+    renderDataPackages();
+  } catch (e) {
+    toast(e.message, false);
+    btn.disabled = false;
+  }
+}
+
+function renderDpLastRepair() {
+  const box = document.getElementById("dp-last");
+  if (!box || !DP_LAST_REPAIR) return;
+  const { original, result } = DP_LAST_REPAIR;
+  box.innerHTML = `<div class="dp-card" style="border-color:var(--present)">
+    ✅ <b>${esc(result.new_filename)}</b> creato da <b>${esc(original.filename)}</b>
+    (${result.renewed} entità rinnovate, stale fino al ${esc(fmtDT(result.new_stale))}).
+    ${result.warning ? `<div class="dp-issue">⚠️ ${esc(result.warning)}</div>` : ""}
+    <div class="muted" style="font-size:12.5px; margin-top:6px">L'originale è ancora sul server: gli EUD che lo
+      scaricano ricevono ancora le aree scadute. Su ATAK elimina il vecchio pacchetto importato prima di
+      importare il nuovo.</div>
+    <div class="toolbar" style="margin:8px 0 0">
+      <button class="btn small" onclick="downloadDp('${esc(result.new_hash)}')">⬇ Scarica il riparato</button>
+      <button class="btn small" onclick="downloadDp('${esc(original.hash)}')">⬇ Scarica l'originale</button>
+      <button class="btn small danger" onclick="deleteDpByHash('${esc(original.hash)}', this)">🗑 Elimina l'originale</button>
+      <button class="btn small" onclick="DP_LAST_REPAIR = null; document.getElementById('dp-last').innerHTML = ''">Chiudi</button>
+    </div>
+  </div>`;
+}
+
+async function deleteDp(i, btn) {
+  await deleteDpByHash(DP_PACKAGES[i].hash, btn);
+}
+
+async function deleteDpByHash(hash, btn) {
+  const p = DP_PACKAGES.find(x => x.hash === hash) || (DP_LAST_REPAIR && DP_LAST_REPAIR.original.hash === hash ? DP_LAST_REPAIR.original : null);
+  const name = p ? p.filename : hash;
+  if (!confirm(`Eliminare il data package "${name}" dal server?\n\nFile e riga nel database vengono cancellati: non si può annullare.`)) return;
+  if (!confirm(`Conferma di nuovo: eliminare DEFINITIVAMENTE "${name}"?\n\nScaricalo prima se vuoi tenerne una copia.`)) return;
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/datapackages/${encodeURIComponent(hash)}`, { method: "DELETE" });
+    toast(`Eliminato ${name}`);
+    if (DP_LAST_REPAIR && DP_LAST_REPAIR.original.hash === hash) DP_LAST_REPAIR = null;
+    renderDataPackages();
+  } catch (e) {
+    toast(e.message, false);
+    if (btn) btn.disabled = false;
   }
 }
 

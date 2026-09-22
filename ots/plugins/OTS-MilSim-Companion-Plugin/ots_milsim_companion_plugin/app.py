@@ -39,7 +39,7 @@ from opentakserver.models.MissionContentMission import MissionContentMission
 from opentakserver.models.user import User
 from opentakserver.plugins.Plugin import Plugin
 
-from . import cot, engine, health, mesh, skyfi, teams
+from . import cot, datapackage, engine, health, mesh, skyfi, teams
 from .default_config import DefaultConfig
 from .game_modes import GAME_MODES, MARKER_TYPES, ZONE_TYPES, serialize_registry, validate_template
 from .models import (
@@ -643,6 +643,83 @@ def _package_events(hashes: list[str]) -> tuple[list, list[str]]:
             )
         )
     return events, missing
+
+
+# ----------------------------------------------------------------------
+# Data package: analisi e riparazione (tab Data Package)
+# ----------------------------------------------------------------------
+
+_HASH_CHARS = set("0123456789abcdefABCDEF")
+
+
+def _dp_file(package: DataPackage) -> str | None:
+    """Percorso dello zip in UPLOAD_FOLDER/<hash>.zip, None se non c'è.
+    L'hash finisce in un percorso: se non è esadecimale non lo si usa."""
+    if not package.hash or not set(package.hash) <= _HASH_CHARS:
+        return None
+    path = os.path.join(app.config.get("UPLOAD_FOLDER"), f"{package.hash}.zip")
+    return path if os.path.isfile(path) else None
+
+
+def _dp_get(file_hash: str) -> DataPackage | None:
+    return db.session.execute(db.session.query(DataPackage).filter_by(hash=file_hash)).scalar()
+
+
+def _dp_is_server_config(package: DataPackage) -> bool:
+    """Pacchetti di connessione al server (certificati): mai toccarli da qui."""
+    return bool(package.filename and package.filename.endswith("_CONFIG.zip")) or package.certificate is not None
+
+
+def _dp_info(package: DataPackage) -> dict:
+    return {
+        "filename": package.filename,
+        "hash": package.hash,
+        "size": package.size,
+        "mime_type": package.mime_type,
+        "keywords": package.keywords,
+        "tool": package.tool,
+        "creator_uid": package.creator_uid,
+        "submission_time": package.submission_time.isoformat() if package.submission_time else None,
+        "submission_user": package.user.username if package.user else None,
+        "install_on_enrollment": bool(package.install_on_enrollment),
+        "install_on_connection": bool(package.install_on_connection),
+        "server_config": _dp_is_server_config(package),
+    }
+
+
+def _dp_references(file_hash: str) -> list[str]:
+    """Chi usa ancora questo pacchetto: missioni Data Sync e template."""
+    refs = []
+    content = db.session.execute(db.session.query(MissionContent).filter_by(hash=file_hash)).scalar()
+    if content:
+        missions = (
+            db.session.query(MissionContentMission.mission_name).filter_by(mission_content_id=content.id).all()
+        )
+        refs += [f"missione «{m[0]}»" for m in missions] or ["contenuto di missione Data Sync"]
+    for template in db.session.query(GameTemplate).all():
+        if file_hash in (template.serialize().get("packages") or []):
+            refs.append(f"template «{template.title}»")
+    return refs
+
+
+def _dp_repair_params(body: dict) -> tuple[int, str]:
+    years = body.get("years", app.config.get("OTS_MILSIM_DP_FIX_STALE_YEARS", 5))
+    mode = body.get("mode", datapackage.MODE_EXPIRED)
+    return years, mode
+
+
+def _dp_new_names(package: DataPackage, manifest_name: str | None) -> tuple[str, str]:
+    """(filename OTS, name del manifest) della versione riparata: il primo
+    _vN libero (filename è UNIQUE in data_packages) e lo stesso N nel
+    manifest, così i due nomi si riconoscono."""
+    filename = package.filename if package.filename.lower().endswith(".zip") else package.filename + ".zip"
+    version = datapackage.version_of(filename) + 1
+    if manifest_name:
+        version = max(version, datapackage.version_of(manifest_name) + 1)
+    while db.session.query(DataPackage).filter_by(filename=datapackage.with_version(filename, version)).first():
+        version += 1
+    new_manifest = datapackage.with_version(manifest_name or filename[:-4], version)
+    return datapackage.with_version(filename, version), new_manifest
 
 
 class MilSimCompanionPlugin(Plugin):
@@ -2266,6 +2343,199 @@ class MilSimCompanionPlugin(Plugin):
             )
         except BaseException as e:
             logger.error(f"MilSim: failed to get data packages: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # Tab Data Package: stato delle entità e riparazione
+    # ------------------------------------------------------------------
+    # Qui @blueprint.route sta SOTTO @staticmethod ma SOPRA @roles_accepted:
+    # route() registra la funzione che riceve, quindi il controllo del ruolo
+    # deve già avvolgerla nel momento in cui viene registrata.
+
+    @staticmethod
+    @blueprint.route("/datapackages/status", methods=["GET"])
+    @roles_accepted("administrator")
+    def datapackages_status():
+        """Tutti i data package del server con lo stato delle entità CoT
+        (valide, in scadenza, scadute, BOM/PI, illeggibili). Lo zip viene
+        solo letto: indice e file XML, non le mappe."""
+        try:
+            now = datetime.now(timezone.utc)
+            result = []
+            packages = (
+                db.session.query(DataPackage).order_by(DataPackage.submission_time.desc().nulls_last()).all()
+            )
+            for package in packages:
+                item = _dp_info(package)
+                path = _dp_file(package)
+                item["on_disk"] = path is not None
+                if not path:
+                    item["error"] = "file non presente su disco"
+                else:
+                    try:
+                        item["analysis"] = datapackage.analyze(path, now)
+                    except datapackage.DataPackageError as e:
+                        item["error"] = str(e)
+                result.append(item)
+            return jsonify(
+                {"packages": result, "default_years": app.config.get("OTS_MILSIM_DP_FIX_STALE_YEARS", 5)}
+            )
+        except BaseException as e:
+            logger.error(f"MilSim: data package status failed: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @blueprint.route("/datapackages/<file_hash>/download", methods=["GET"])
+    @roles_accepted("administrator")
+    def datapackage_download(file_hash: str):
+        try:
+            package = _dp_get(file_hash)
+            path = _dp_file(package) if package else None
+            if not path:
+                return jsonify({"success": False, "error": "Data package non trovato"}), 404
+            name = package.filename if package.filename.lower().endswith(".zip") else package.filename + ".zip"
+            return send_from_directory(
+                os.path.dirname(path), os.path.basename(path), as_attachment=True, download_name=name
+            )
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @blueprint.route("/datapackages/<file_hash>/repair/preview", methods=["POST"])
+    @roles_accepted("administrator")
+    def datapackage_repair_preview(file_hash: str):
+        """Anteprima prima/dopo: la stessa riparazione del salvataggio, ma
+        lo zip prodotto viene buttato."""
+        try:
+            package = _dp_get(file_hash)
+            path = _dp_file(package) if package else None
+            if not path:
+                return jsonify({"success": False, "error": "Data package non trovato"}), 404
+            years, mode = _dp_repair_params(request.json or {})
+            manifest = (datapackage.analyze(path).get("manifest") or {}).get("name")
+            filename, manifest_name = _dp_new_names(package, manifest)
+            _, report = datapackage.repair(path, years=years, mode=mode, new_name=manifest_name)
+            report["new_filename"] = filename
+            return jsonify(report)
+        except datapackage.DataPackageError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @blueprint.route("/datapackages/<file_hash>/repair", methods=["POST"])
+    @roles_accepted("administrator")
+    def datapackage_repair(file_hash: str):
+        """Crea un NUOVO data package riparato accanto all'originale, che
+        resta com'è: nuovo zip in UPLOAD_FOLDER/<sha256>.zip e nuova riga
+        DataPackage con gli stessi keywords/tool/flag di installazione."""
+        new_path = None
+        try:
+            package = _dp_get(file_hash)
+            path = _dp_file(package) if package else None
+            if not path:
+                return jsonify({"success": False, "error": "Data package non trovato"}), 404
+            if _dp_is_server_config(package):
+                return jsonify(
+                    {"success": False, "error": "I data package di connessione al server non si riparano da qui"}
+                ), 400
+            years, mode = _dp_repair_params(request.json or {})
+            manifest = (datapackage.analyze(path).get("manifest") or {}).get("name")
+            filename, manifest_name = _dp_new_names(package, manifest)
+            data, report = datapackage.repair(path, years=years, mode=mode, new_name=manifest_name)
+
+            new_hash = hashlib.sha256(data).hexdigest()
+            if _dp_get(new_hash):
+                return jsonify({"success": False, "error": "Esiste già un data package identico"}), 409
+            new_path = os.path.join(app.config.get("UPLOAD_FOLDER"), f"{new_hash}.zip")
+            tmp_path = new_path + ".tmp"
+            with open(tmp_path, "wb") as f:
+                f.write(data)
+            os.replace(tmp_path, new_path)
+
+            # creator_uid è FK verso euds.uid: l'ultimo EUD dell'utente
+            # corrente, come per SkyFi (v3.7.1); senza EUD resta nullo
+            eud = (
+                db.session.query(EUD)
+                .filter_by(user_id=current_user.id)
+                .order_by(EUD.last_event_time.desc().nulls_last())
+                .first()
+            )
+            repaired = DataPackage()
+            repaired.filename = filename
+            repaired.hash = new_hash
+            repaired.creator_uid = eud.uid if eud else None
+            repaired.submission_time = datetime.now(timezone.utc)
+            repaired.submission_user = current_user.id
+            repaired.keywords = package.keywords
+            repaired.mime_type = "application/zip"
+            repaired.size = len(data)
+            repaired.tool = package.tool
+            repaired.expiration = package.expiration
+            repaired.install_on_enrollment = package.install_on_enrollment
+            repaired.install_on_connection = package.install_on_connection
+            db.session.add(repaired)
+            db.session.commit()
+            new_path = None  # registrato: il file resta
+
+            logger.info(
+                f"MilSim: data package {package.filename} ({package.hash}) riparato in {filename} "
+                f"({new_hash}), {report['renewed']} entità rinnovate"
+            )
+            report.update({"success": True, "new_filename": filename, "new_hash": new_hash})
+            if package.install_on_enrollment or package.install_on_connection:
+                report["warning"] = (
+                    "L'originale viene installato in automatico sugli EUD (enrollment/connessione) e la copia "
+                    "riparata ha gli stessi flag: finché l'originale esiste gli EUD li ricevono entrambi."
+                )
+            return jsonify(report)
+        except datapackage.DataPackageError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(f"MilSim: data package repair failed: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+        finally:
+            # Commit fallito: niente file orfani in UPLOAD_FOLDER
+            if new_path and os.path.exists(new_path):
+                try:
+                    os.remove(new_path)
+                except OSError:
+                    pass
+
+    @staticmethod
+    @blueprint.route("/datapackages/<file_hash>", methods=["DELETE"])
+    @roles_accepted("administrator")
+    def datapackage_delete(file_hash: str):
+        """Elimina un data package (riga DB e file) come DELETE
+        /api/data_packages di OTS, ma rifiuta se una missione o un template
+        lo usano ancora: il file sparirebbe da sotto i loro piedi."""
+        try:
+            package = _dp_get(file_hash)
+            if not package:
+                return jsonify({"success": False, "error": "Data package non trovato"}), 404
+            if _dp_is_server_config(package):
+                return jsonify(
+                    {"success": False, "error": "I data package di connessione al server si gestiscono dalla web UI di OTS"}
+                ), 400
+            refs = _dp_references(package.hash)
+            if refs:
+                return jsonify({"success": False, "error": "Ancora in uso: " + ", ".join(refs), "references": refs}), 409
+            path = _dp_file(package)
+            filename = package.filename
+            db.session.delete(package)
+            db.session.commit()
+            if path:
+                os.remove(path)
+            logger.warning(f"MilSim: data package {filename} ({file_hash}) eliminato da {current_user.username}")
+            return jsonify({"success": True})
+        except BaseException as e:
+            db.session.rollback()
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 500
 

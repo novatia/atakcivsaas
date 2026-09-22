@@ -56,6 +56,11 @@ class DefaultConfig:
     OTS_MILSIM_MESH_FALLBACK_POLICY = "source_eud_group"
     OTS_MILSIM_MESH_DEFAULT_GROUP_ID = 0
 
+    # ---- Data package (tab Data Package) ----------------------------
+    # Durata, in anni, del nuovo stale scritto dalla riparazione. WinTAK dà
+    # alle aree disegnate solo 7 giorni: poi ATAK le scarta all'import.
+    OTS_MILSIM_DP_FIX_STALE_YEARS = 5
+
     @staticmethod
     def validate(config: dict) -> dict:
         try:
@@ -97,6 +102,10 @@ class DefaultConfig:
                             "success": False,
                             "error": f"{key} should be one of {', '.join(FALLBACK_POLICIES)}",
                         }
+                if key == "OTS_MILSIM_DP_FIX_STALE_YEARS" and (
+                    not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 50
+                ):
+                    return {"success": False, "error": f"{key} should be an integer between 1 and 50 (years)"}
                 if key == "OTS_MILSIM_MESH_DEFAULT_GROUP_ID" and (not isinstance(value, int) or value < 0):
                     return {"success": False, "error": f"{key} should be a non-negative integer (0 = non impostato)"}
 

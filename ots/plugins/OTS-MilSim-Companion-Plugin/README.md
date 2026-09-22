@@ -282,6 +282,59 @@ le mappe restano verdi/vuote senza alcun errore, e il semaforo permette di
 distinguere subito il guasto del Ministero da un problema nostro.
 Nessun automatismo: il check parte solo dal pulsante.
 
+### Data package: scadenza delle entità e riparazione (tab Data Package)
+
+Il **Data Package tool di WinTAK** scrive le aree disegnate (`u-d-f` e in
+genere `u-d-*`) con `stale` = creazione **+ 7 giorni**, i marker (`a-*`)
+con + 1 anno. Passata la settimana **ATAK-CIV scarta le aree all'import** perché
+scadute: in Data Package tool compaiono righe «Map Item» con «Not Found» in
+rosso e in mappa arrivano solo i marker. In più ogni `.cot` di WinTAK inizia
+con un BOM UTF-8 e alcuni hanno `<?visible true?>` dopo la dichiarazione XML.
+È la correzione manuale del Manuale Operatore (Rev 17, sez. 7), resa un bottone.
+
+Il tab elenca i data package del server e, aprendo ogni zip **in sola lettura**,
+mostra per ogni `.cot` uid, tipo, callsign, stale e uno stato:
+✅ valida · ⚠️ scade entro 7 giorni · ❌ scaduta (ATAK la scarta) · 🟠 BOM o
+processing instruction · ⛔ XML non leggibile. Badge riassuntivo per pacchetto
+(«4 scadute su 7»), dettaglio espandibile; mappe, PDF e immagini compaiono
+come «file», senza stato. Anche le incoerenze fra manifest e contenuto (voce
+del manifest senza file e viceversa, manifest assente) sono segnalate ⛔.
+
+**🔧 Ripara** apre un'anteprima prima/dopo (stale vecchio → nuovo per ogni
+entità) con la durata (default `OTS_MILSIM_DP_FIX_STALE_YEARS` = 5 anni) e la
+scelta fra *solo scadute e in scadenza* e *tutte*. La conferma crea un
+**nuovo** data package, l'originale non viene toccato:
+
+- in ogni `.cot`: `time` e `start` = adesso, `stale` = adesso + N anni sul solo
+  tag `<event>` (riscrittura testuale: uid, punti, colori e tutto il resto
+  restano byte per byte), BOM e `<?visible true?>` tolti;
+- nel manifest: `name` con suffisso `_vN` e `uid` nuovo, così ATAK non riusa il
+  pacchetto rotto già importato;
+- nuovo zip salvato come `UPLOAD_FOLDER/<sha256>.zip`, nuova riga `data_packages`
+  con filename `<originale>_vN.zip` (primo N libero) e gli stessi keywords,
+  tool, expiration e flag di installazione dell'originale. `creator_uid` è
+  l'ultimo EUD dell'utente corrente (FK verso `euds.uid`, come per SkyFi).
+
+Dopo la riparazione il tab propone di **scaricare** riparato e originale e di
+**eliminare l'originale** (doppia conferma). L'eliminazione cancella riga e
+file come `DELETE /api/data_packages` di OTS, ma **rifiuta** se il pacchetto è
+ancora agganciato a una missione Data Sync o a un template di missione, e non
+tocca mai i pacchetti di connessione al server (`*_CONFIG.zip`, certificati).
+Un «nascondi» non c'è: in OTS 1.7.13 `/Marti/sync/search` non filtra per
+`tool`, quindi marcare il pacchetto non lo toglierebbe dalla lista di ATAK.
+
+Sugli EUD che hanno già importato il pacchetto rotto: eliminarlo da Data
+Package tool prima di importare la versione `_vN`.
+
+Zip rifiutati in blocco: non validi o troncati, voci con percorso assoluto o
+`..` (zip-slip), voci cifrate o duplicate, oltre 100 MB compressi, 300 MB
+decompressi o 2000 voci. Nessun file viene mai estratto su disco. La logica
+sta in `datapackage.py` (nessuna dipendenza da Flask o dal DB), coperta dai
+test con il pacchetto reale `tests/fixtures/TacticalScoutCodogno.zip`.
+
+Verificato solo il comportamento di **ATAK-CIV**; come iTAK e WinTAK trattino
+all'import le entità scadute non è stato provato.
+
 ### Meshtastic / TAK tracker (tab Meshtastic e Canali Meshtastic)
 
 Monitor operativo dei tag Meshtastic che arrivano al server e instradamento
@@ -441,6 +494,7 @@ restano invariate per compatibilità con i config esistenti.
 | `OTS_MILSIM_MESH_GPS_STALE_SECONDS` | `120` | Oltre questa età la posizione è «stale» |
 | `OTS_MILSIM_MESH_FALLBACK_POLICY` | `source_eud_group` | Canale non determinabile: `source_eud_group`, `default_group`, `meshtastic_group`, `ignore` |
 | `OTS_MILSIM_MESH_DEFAULT_GROUP_ID` | `0` | Gruppo per la politica `default_group` (id `groups` di OTS) |
+| `OTS_MILSIM_DP_FIX_STALE_YEARS` | `5` | Anni di validità scritti dalla riparazione dei data package (1–50) |
 
 ## API (prefisso `/api/plugins/ots_milsim_companion_plugin`)
 
@@ -465,6 +519,11 @@ restano invariate per compatibilità con i config esistenti.
 | `GET/POST /templates` · `PUT/DELETE /templates/<id>` | admin | CRUD template di missione |
 | `POST /templates/<id>/duplicate` | admin | Copia di un template |
 | `GET /datapackages` | admin | Data package OTS disponibili |
+| `GET /datapackages/status` | admin | Tutti i data package con lo stato delle entità CoT (scadute, in scadenza, BOM/PI, errori) |
+| `GET /datapackages/<hash>/download` | admin | Download dello zip dal browser |
+| `POST /datapackages/<hash>/repair/preview` | admin | Anteprima prima/dopo della riparazione `{"years", "mode": "expired\|all"}` |
+| `POST /datapackages/<hash>/repair` | admin | Crea la copia riparata `_vN` (l'originale resta) |
+| `DELETE /datapackages/<hash>` | admin | Elimina riga e file; 409 se usato da missioni o template |
 | `GET /groups` | admin | Gruppi ATAK di OTS con utenti ed EUD (sola lettura) |
 | `POST /templates/<id>/play` | admin | Prepara la missione (stato *pronta*) e pusha ai destinatari; body opzionale `{"team_a_id", "team_b_id", "observer_team_ids"}` (id della tabella groups di OTS) |
 | `GET /matches` | admin | Partite (pronte, in corso e storico) |
@@ -512,6 +571,19 @@ senza incroci, canale sconosciuto con tutte le politiche di fallback, relay
 ATAK (identità del tracker distinta da quella dell'EUD), ricezione duplicata da
 più gateway, invecchiamento LIVE→RECENT→STALE, isolamento fra gruppi e
 sanificazione dei payload di debug.
+
+`tests/test_datapackage.py` usa un data package reale di WinTAK
+(`tests/fixtures/TacticalScoutCodogno.zip`) con "adesso" iniettato: conteggio
+delle scadute, riparazione (BOM e `<?visible?>` tolti, uid e resto dei byte
+invariati, manifest con name/uid nuovi, round-trip parsabile), file non CoT
+copiati identici, zip malformati, zip-slip e limiti di dimensione.
+
+## Changelog
+
+- **3.15.0** — tab **Data Package**: stato delle entità CoT di ogni pacchetto
+  (scadute, in scadenza, BOM/PI, errori), riparazione in una copia `_vN` con
+  anteprima prima/dopo, download ed eliminazione dell'originale. Nuova chiave
+  `OTS_MILSIM_DP_FIX_STALE_YEARS`.
 
 ## Roadmap
 
