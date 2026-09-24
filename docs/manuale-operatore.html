@@ -186,7 +186,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MO-TAK-002 · Rev 17 · 2026-09-22</span><span>Per operatori da smartphone</span></div>
+    <div class="doc-meta"><span>MO-TAK-002 · Rev 18 · 2026-09-24</span><span>Per operatori da smartphone</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Operatore<br>Tactical Scout Codogno</h1>
@@ -357,6 +357,15 @@
       <li>Rispetta la convenzione del gruppo su quale allarme significa cosa: un <strong>911 è un'emergenza reale</strong> e ferma il gioco, non usarlo per prova senza avvisare.</li>
       <li><strong>CASEVAC</strong> (stesso menu) è un'altra cosa: il modulo strutturato di richiesta evacuazione ferito, usato nelle simulazioni mediche.</li>
     </ul>
+    <h3>Mappa satellitare offline del campo</h3>
+    <p>Per i campi di gioco l'amministratore prepara una <strong>mappa ad altissima risoluzione</strong> (fino a circa 10 cm per pixel) che funziona <strong>senza rete</strong>: è un data package sul server con dentro l'immagine, nome del tipo <code>SkyFi-… HD-z20-geotiff.zip</code>. Pesa centinaia di MB: scaricala a casa, col Wi-Fi.</p>
+    <ol>
+      <li>In ATAK apri il <strong>Data Package tool</strong> e scarica il pacchetto dalla lista dei pacchetti del server.</li>
+      <li>A download finito la mappa compare tra i livelli: icona dei <strong>livelli</strong> (in alto) → scheda <strong>Imagery</strong>. Toccala per attivarla.</li>
+      <li>Zooma sul campo e <strong>aspetta qualche secondo fermo</strong>: ATAK carica il dettaglio a passi, prima sgranato e poi nitido.</li>
+    </ol>
+    <div class="warn"><span class="tag">Prima di installare una versione nuova della stessa mappa</span><p>Elimina quella vecchia: in <strong>Imagery</strong> tocca il cestino accanto al layer, poi cancella il vecchio pacchetto dal Data Package tool. Se resta installata, il download del pacchetto nuovo può arrivare al 100% e ripartire all'infinito (caso reale del gruppo, settembre 2026).</p></div>
+    <div class="note"><span class="tag">Zoom massimo</span><p>Oltre il dettaglio reale dell'immagine ATAK può solo ingrandire i pixel: se zoomando moltissimo la mappa si sfoca, non è un guasto. Verificato su ATAK-CIV il 2026-09-24.</p></div>
   </section>
 
   <section id="s9">
@@ -480,6 +489,10 @@
         <td>Le aree erano scadute: WinTAK dà ai disegni solo 7 giorni di validità. Rifai il pacchetto con disegni recenti, o chiedi all'amministratore di correggere la scadenza (sez. 7).</td>
       </tr>
       <tr>
+        <td>Il download della mappa satellitare offline arriva al 100% e riparte da capo, a volte con più download insieme</td>
+        <td>Sul telefono c'è ancora una versione vecchia della stessa mappa. Ferma i download dalle notifiche, elimina il layer vecchio (livelli → Imagery → cestino) e il suo pacchetto dal Data Package tool, poi riscarica (sez. 8). Se continua, avvisa l'amministratore.</td>
+      </tr>
+      <tr>
         <td>Scansiono il QR del server ma si apre il browser con un errore</td>
         <td>La fotocamera non gestisce i link <code>tak://</code> e li scarica sul browser, che non sa aprirli. Usa <strong>Binary Eye</strong> (sez. 2): scansiona e tocca «Apri». In alternativa scarica lo zip dalla web UI del server e importalo da Tools → Import → Local SD.</td>
       </tr>
@@ -488,7 +501,7 @@
   </section>
 
   <footer>
-    <span>MO-TAK-002 · Rev 17</span>
+    <span>MO-TAK-002 · Rev 18</span>
     <span>Compagno del Manuale Operatore TAK (MO-TAK-001)</span>
   </footer>
 </div>

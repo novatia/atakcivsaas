@@ -204,7 +204,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MA-TAK-001 · Rev 17 · 2026-09-24</span><span>Server: n3test002</span></div>
+    <div class="doc-meta"><span>MA-TAK-001 · Rev 18 · 2026-09-24</span><span>Server: n3test002</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Amministratore<br>Tactical Scout Codogno</h1>
@@ -428,6 +428,22 @@ OTS_DELETE_OLD_DATA_WEEKS: 0</pre>
     <p>poi <code>sudo systemctl restart opentakserver</code>. Lo stato del job si controlla nella pagina <strong>Jobs</strong> della web UI di OTS.</p>
     <div class="warn"><span class="tag">Attenzione</span><p>Il default di fabbrica di OTS è <code>OTS_DELETE_OLD_DATA_WEEKS: 1</code>: se il job venisse attivato senza prima impostare le chiavi qui sopra, cancellerebbe <strong>tutto lo storico oltre una settimana</strong> — tracce delle giocate comprese — e gli EUD offline da più di 7 giorni. Mai attivare il job con soglie basse; verificare sempre le chiavi in <code>config.yml</code> prima.</p>
     <p><strong>Zero NON significa «disattivato».</strong> Le cinque chiavi vengono sommate in un'unica soglia (<code>adesso − somma</code>) e nel codice non c'è alcuna guardia sul valore nullo: con <em>tutte</em> le chiavi a 0 il cutoff coincide con «adesso» e il job, se attivo, cancella <strong>tutto il database</strong> (marker, alert, chat, punti, CoT ed EUD) a ogni esecuzione. Per non cancellare nulla il job va messo in pausa dalla pagina Jobs, non azzerato. Verificato su OpenTAKServer 1.7.13.</p></div>
+
+    <h3 id="mappe-offline">Mappe satellitari offline da SkyFi (plugin MilSim Companion)</h3>
+    <p>Un ordine SkyFi consegnato si trasforma in una <strong>mappa offline a piena risoluzione</strong> per ATAK: il server scarica il GeoTIFF originale dell'ordine, lo converte con GDAL e crea un data package con l'immagine <em>dentro</em>. Sul telefono la mappa si vede senza rete. Il bottone <strong>📦 Data package ATAK</strong> della stessa card fa un'altra cosa: un pacchetto di pochi KB con l'indirizzo dei tile SkyFi, che ATAK scarica in streaming (serve rete, ed è più sgranato allo zoom massimo).</p>
+    <p><strong>Prerequisito:</strong> i comandi GDAL sul server. Lo script di installazione del plugin installa <code>gdal-bin</code> se manca; se l'installazione fallisce, a mano:</p>
+    <pre>sudo apt-get update &amp;&amp; sudo apt-get install -y gdal-bin
+gdalinfo --version   <span class="c"># deve rispondere con la versione</span></pre>
+    <p>Non serve riavviare OTS: il plugin cerca i comandi a ogni richiesta.</p>
+    <p><strong>Procedura</strong> (UI del plugin → tab <strong>SkyFi</strong>):</p>
+    <ol>
+      <li>Sulla card dell'ordine consegnato premi <strong>🛰 Mappa offline HD</strong>.</li>
+      <li>Immagine di partenza <strong>COG</strong> (l'originale senza perdita), formato <strong>GeoTIFF (COG)</strong>, zoom massimo <strong>Nativo</strong>: sono i valori proposti. <strong>Avvia conversione</strong>.</li>
+      <li>L'avanzamento (download da SkyFi, analisi, conversione, creazione del data package) compare sulla card. Una conversione alla volta; le altre restano in coda.</li>
+      <li>A fine lavoro la card riporta nome, dimensione e cm/pixel a terra, e il pacchetto <code>SkyFi-&lt;ordine&gt; &lt;luogo&gt; HD-z&lt;zoom&gt;-geotiff.zip</code> è tra i data package del server: gli operatori lo scaricano da ATAK (Manuale Operatore, sez. 8), oppure lo si mette nei contenuti di una missione.</li>
+    </ol>
+    <div class="warn"><span class="tag">Perché COG e GeoTIFF, e non gli altri formati</span><p>Caso reale, ordine 26383Z2P (immagine aerea Vexcel, 3 km²): tutti i file del payload hanno la stessa risoluzione (15798×22130 pixel da 0,149 m in EPSG:3857, cioè 10,5 cm a terra), ma il <strong>view-ready</strong> è già compresso in JPEG da SkyFi, mentre il <strong>COG</strong> (1,2 GB) è senza perdita. E il <strong>GeoPackage a tile</strong>, pur contenendo lo zoom 20 completo, su ATAK-CIV veniva mostrato allo zoom 17, a blocchi da circa 0,9 m. Il GeoTIFF dello stesso COG si vede al dettaglio pieno, pixel identici all'originale, e pesa circa un terzo (455 MB). Verificato su ATAK-CIV il 2026-09-24, plugin 3.20.1. Il payload (bande grezze separate) non si usa.</p></div>
+    <div class="note"><span class="tag">Limiti</span><p>Un data package non può superare <strong>2 GB</strong> (OTS salva la dimensione in un intero a 32 bit): per ordini molto grandi scegliere uno zoom massimo più basso, ogni livello in meno divide la dimensione per 4. Lo stato delle conversioni vive nella memoria di OTS: un riavvio durante un lavoro lo interrompe, e basta rilanciarlo. Oltre lo zoom nativo ATAK può solo ingrandire i pixel: nessun formato aggiunge dettaglio che l'immagine non ha.</p></div>
 
     <h3>Verifica rapida di salute</h3>
     <pre>systemctl status opentakserver opentakserver-cot-parser opentakserver-eud-handler --no-pager | grep -E "●|Active"
@@ -675,6 +691,21 @@ sudo /home/ots/atakcivsaas/ots/scripts/install-eventcalendar-plugin.sh --check</
         <td><code>openssl s_client -connect 127.0.0.1:8443</code> deve dare issuer <code>OpenTAKServer-CA</code> — vedi «Certificati» in sez. 7</td>
       </tr>
       <tr>
+        <td>Mappa offline HD: «GDAL non è installato sul server»</td>
+        <td>Manca <code>gdal-bin</code> (l'installazione automatica dello script può fallire se l'indice di apt è vecchio)</td>
+        <td><code>sudo apt-get update &amp;&amp; sudo apt-get install -y gdal-bin</code>, poi rilanciare dalla card (v. «Mappe satellitari offline», sez. 7)</td>
+      </tr>
+      <tr>
+        <td>Mappa offline HD: «[Errno 11] Resource temporarily unavailable»</td>
+        <td>Plugin precedente alla 3.16.1: dentro OTS la lettura dell'output di GDAL non aspettava i dati</td>
+        <td>Aggiornare il plugin (sez. 8) e rilanciare la conversione</td>
+      </tr>
+      <tr>
+        <td>ATAK scarica una mappa offline fino al 100% e poi riparte in loop (anche più download insieme)</td>
+        <td>Un layer con lo stesso nome file è già installato e in uso su ATAK (pacchetti generati prima della 3.19.1): l'installazione fallisce e ATAK riscarica. In access.log il download risulta completo: <code>GET /Marti/sync/content?hash=… 200</code> con tutti i byte</td>
+        <td>Sul telefono: eliminare il layer vecchio (Layer → Imagery → cestino) e il suo data package, poi riscaricare. Per escludere un file danneggiato sul server: <code>sha256sum /home/ots/ots/uploads/&lt;hash&gt;.zip</code> deve dare lo stesso hash del nome</td>
+      </tr>
+      <tr>
         <td>Un plugin ATAK (es. <strong>GeoCam</strong>) dà «errore server» e non sincronizza</td>
         <td>Limite upload di nginx (413), endpoint Marti non implementato da OTS (404) o traceback (500)</td>
         <td>Procedura «Debug di un plugin ATAK» qui sotto</td>
@@ -730,7 +761,7 @@ rm /tmp/eud.pem   <span class="c"># pulizia: contiene la chiave privata</span></
   </section>
 
   <footer>
-    <span>MA-TAK-001 · Rev 17</span>
+    <span>MA-TAK-001 · Rev 18</span>
     <span>Aggiornato il 2026-09-24: sez. 7, sentinella dei servizi (riavvio automatico del cot_parser appeso, diagnosi, avvisi Telegram) e verifica dell'accesso MQTT; sez. 9, parser vivo ma fermo</span>
   </footer>
 </div>
