@@ -105,7 +105,10 @@ if command -v gdalwarp >/dev/null 2>&1 && command -v gdaladdo >/dev/null 2>&1; t
     log "GDAL presente: $(gdalinfo --version 2>/dev/null || echo '?')"
 elif command -v apt-get >/dev/null 2>&1; then
     log "GDAL assente: installo gdal-bin (serve alla mappa offline HD di SkyFi)."
-    if DEBIAN_FRONTEND=noninteractive apt-get install -y gdal-bin >/dev/null; then
+    # Senza update l'indice può essere vecchio (404 sui .deb) o non avere
+    # ancora universe: l'errore di apt resta visibile, niente >/dev/null
+    apt-get update -qq || warn "apt-get update fallito: provo comunque l'installazione."
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y -q gdal-bin; then
         log "Installato: $(gdalinfo --version 2>/dev/null || echo '?')"
     else
         warn "Installazione di gdal-bin fallita: la mappa offline HD non funzionerà finché non lo installi (apt install gdal-bin)."
