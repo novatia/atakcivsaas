@@ -352,13 +352,15 @@ all'import le entità scadute non è stato provato.
 
 #### Rinomina
 
-**✏️ Rinomina** cambia solo il nome con cui il pacchetto compare sul server e
-nella lista dei data package di ATAK (riga `data_packages`): lo zip e il suo
-hash restano gli stessi, quindi missioni e template che lo usano continuano a
-funzionare, e il nome viene allineato anche nei contenuti delle missioni.
-L'estensione `.zip` resta sempre (il file si trova come `<hash>.zip`); nome già
-usato → 409. Il `name` del manifest dentro lo zip non cambia: ATAK lo mostra
-dopo l'import. I pacchetti di connessione al server non si rinominano.
+**✏️ Rinomina** cambia il nome sul server **e dentro lo zip**: ATAK, una volta
+installato il pacchetto, mostra il `name` del manifest, non il nome del server.
+Lo zip viene riscritto con il name nuovo e **lo stesso uid** (riscaricandolo,
+ATAK sostituisce il pacchetto già installato invece di affiancarne un secondo);
+tutto il resto è copiato identico. Cambiando lo zip cambia l'hash: riga
+`data_packages`, contenuti delle missioni e template passano al nuovo hash
+nella stessa transazione, poi il vecchio file viene cancellato. L'estensione
+`.zip` resta sempre; nome già usato → 409. I pacchetti di connessione al
+server non si rinominano.
 
 #### File da consultare (PDF, immagini, documenti)
 
@@ -566,7 +568,7 @@ restano invariate per compatibilità con i config esistenti.
 | `POST /datapackages/<hash>/repair` | admin | Crea la copia riparata `_vN` (l'originale resta) |
 | `POST /datapackages/<hash>/files` | admin | Multipart `files` (multiplo): nuova versione `_vN` con i file aggiunti |
 | `POST /datapackages` | admin | Multipart `name` + `files`: nuovo data package con i soli file caricati |
-| `PATCH /datapackages/<hash>` | admin | `{"filename"}`: rinomina sul server (zip e hash invariati) |
+| `PATCH /datapackages/<hash>` | admin | `{"filename"}`: rinomina sul server e nel manifest (stesso uid, hash nuovo propagato a missioni e template) |
 | `DELETE /datapackages/<hash>` | admin | Elimina riga e file; 409 se usato da missioni o template |
 | `GET /groups` | admin | Gruppi ATAK di OTS con utenti ed EUD (sola lettura) |
 | `POST /templates/<id>/play` | admin | Prepara la missione (stato *pronta*) e pusha ai destinatari; body opzionale `{"team_a_id", "team_b_id", "observer_team_ids"}` (id della tabella groups di OTS) |
@@ -633,6 +635,9 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.18.1** — la rinomina cambia anche il `name` del manifest dentro lo zip
+  (quello che ATAK mostra da installato), con lo stesso uid; il nuovo hash
+  viene propagato a contenuti delle missioni e template.
 - **3.18.0** — tab Data Package: **✏️ Rinomina** (nome sul server e nei
   contenuti delle missioni; zip e hash invariati).
 - **3.17.0** — tab Data Package: **📎 Aggiungi file** (PDF, immagini,

@@ -596,8 +596,44 @@ def add_files(
     for name, path in files:
         clean = safe_file_name(name)
         added.append({"name": clean, "entry": f"{uuid.uuid4()}/{clean}", "size": os.path.getsize(path), "path": path})
-    entries = [a["entry"] for a in added]
 
+    existing = _write_package(source, out_path, new_name, new_uid, added)
+    names = set(existing)
+    return {
+        "new_name": new_name,
+        "new_uid": new_uid,
+        "added": [
+            {"name": a["name"], "entry": a["entry"], "size": a["size"], "duplicate": a["name"] in names}
+            for a in added
+        ],
+        "size": os.path.getsize(out_path),
+    }
+
+
+def rename_package(source: str | os.PathLike, out_path: str | os.PathLike, new_name: str) -> dict:
+    """Riscrive il data package con il name del manifest cambiato: è quello
+    che ATAK mostra una volta installato. L'uid del manifest resta lo stesso,
+    così ATAK riconosce il pacchetto e reimportandolo sostituisce quello già
+    installato invece di affiancarne un secondo. Tutto il resto è copiato
+    identico; senza manifest se ne crea uno (con uid nuovo)."""
+    with open_package(source, check_size=False) as zf:
+        manifest_info = next((i for i in zf.infolist() if _is_manifest_name(i.filename)), None)
+        uid = None
+        if manifest_info is not None:
+            try:
+                uid = _parse_manifest(_read_xml_entry(zf, manifest_info)).get("uid")
+            except ET.ParseError as e:
+                raise DataPackageError(f"manifest non leggibile: {e}") from e
+    uid = uid or str(uuid.uuid4())
+    _write_package(source, out_path, new_name, uid, [])
+    return {"new_name": new_name, "uid": uid, "size": os.path.getsize(out_path)}
+
+
+def _write_package(source, out_path, new_name: str, new_uid: str, added: list[dict]) -> list[str]:
+    """Scrive `out_path`: manifest con name/uid dati (più le voci di `added`),
+    le voci di `source` copiate identiche a blocchi, poi i file di `added`.
+    Ritorna i basename delle voci copiate da `source`."""
+    entries = [a["entry"] for a in added]
     existing = []
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zout:
         if source is None:
@@ -636,14 +672,4 @@ def add_files(
                     existing.append(os.path.basename(info.filename))
         for a in added:
             zout.write(a["path"], a["entry"])
-
-    names = set(existing)
-    return {
-        "new_name": new_name,
-        "new_uid": new_uid,
-        "added": [
-            {"name": a["name"], "entry": a["entry"], "size": a["size"], "duplicate": a["name"] in names}
-            for a in added
-        ],
-        "size": os.path.getsize(out_path),
-    }
+    return existing

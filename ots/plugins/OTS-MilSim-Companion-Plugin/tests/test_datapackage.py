@@ -446,3 +446,27 @@ def test_add_files_limits(monkeypatch, tmp_path):
     monkeypatch.setattr(dp, "MAX_ADDED_FILES", 1)
     with pytest.raises(dp.DataPackageError, match="troppi file"):
         dp.add_files(None, tmp_path / "a.zip", [("a", doc), ("b", doc)], "X")
+
+
+def test_rename_package_keeps_uid_and_content(tmp_path):
+    out = tmp_path / "renamed.zip"
+    before = dp.analyze(str(FIXTURE), NOW)
+    report = dp.rename_package(FIXTURE, out, "Campo Nord 2026")
+    after = dp.analyze(str(out), NOW)
+    assert after["manifest"]["name"] == "Campo Nord 2026"
+    # stesso uid: reimportandolo ATAK sostituisce il pacchetto installato
+    assert after["manifest"]["uid"] == before["manifest"]["uid"] == report["uid"]
+    assert after["issues"] == [] and after["cot_total"] == before["cot_total"]
+    with zipfile.ZipFile(FIXTURE) as src, zipfile.ZipFile(out) as new:
+        for info in src.infolist():
+            if not info.filename.lower().endswith("manifest.xml"):
+                assert new.read(info.filename) == src.read(info.filename)
+
+
+def test_rename_package_without_manifest(tmp_path):
+    src = tmp_path / "src.zip"
+    src.write_bytes(_zip({"doc.pdf": b"x"}))
+    report = dp.rename_package(src, tmp_path / "out.zip", "Nuovo")
+    after = dp.analyze(str(tmp_path / "out.zip"), NOW)
+    assert after["manifest"]["name"] == "Nuovo" and after["manifest"]["uid"] == report["uid"]
+    assert after["issues"] == []

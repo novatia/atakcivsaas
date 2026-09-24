@@ -2821,13 +2821,17 @@ class MilSimCompanionPlugin(Plugin):
     @blueprint.route("/datapackages/<file_hash>", methods=["PATCH"])
     @roles_accepted("administrator")
     def datapackage_rename(file_hash: str):
-        """Rinomina un data package: cambia solo il nome sul server (riga DB),
-        non lo zip. L'hash resta lo stesso, quindi missioni e template che lo
-        usano continuano a funzionare; il nome nei contenuti delle missioni
-        viene allineato. Il name nel manifest dentro lo zip non cambia."""
+        """Rinomina un data package sul server E dentro lo zip: ATAK, una
+        volta installato il pacchetto, mostra il name del manifest, non il
+        nome del server. Lo zip viene riscritto con il name nuovo e lo stesso
+        uid (reimportandolo ATAK sostituisce quello installato), quindi
+        cambia l'hash: pacchetto, contenuti delle missioni e template passano
+        al nuovo hash nella stessa transazione, poi il vecchio file sparisce."""
+        folder = new_path = None
         try:
             package = _dp_get(file_hash)
-            if not package:
+            path = _dp_file(package) if package else None
+            if not path:
                 return jsonify({"success": False, "error": "Data package non trovato"}), 404
             if _dp_is_server_config(package):
                 return jsonify(
@@ -2842,26 +2846,79 @@ class MilSimCompanionPlugin(Plugin):
             # .zip sempre in fondo: /Marti/sync/content trova il file come <hash>.zip
             filename = f"{name}.zip"
             old = package.filename
-            if filename == old:
-                return jsonify({"success": True, "filename": filename, "old_filename": old, "missions_updated": 0})
             clash = db.session.query(DataPackage).filter_by(filename=filename).first()
-            if clash:
+            if clash and clash.id != package.id:
                 return jsonify({"success": False, "error": f"Esiste già un data package «{filename}»"}), 409
+            manifest = (datapackage.analyze(path).get("manifest") or {}).get("name")
+            if filename == old and manifest == name:
+                return jsonify({"success": True, "filename": filename, "old_filename": old, "new_hash": file_hash,
+                                "missions_updated": 0, "templates_updated": 0})
+
+            folder = _dp_uploads_folder()
+            out = os.path.join(folder, "package.zip")
+            report = datapackage.rename_package(path, out, name)
+            sha256 = hashlib.sha256()
+            with open(out, "rb") as f:
+                while chunk := f.read(4 * 1024 * 1024):
+                    sha256.update(chunk)
+            new_hash = sha256.hexdigest()
+            if new_hash != file_hash and _dp_get(new_hash):
+                return jsonify({"success": False, "error": "Esiste già un data package identico"}), 409
+            if new_hash != file_hash:
+                # Stesso hash = stesso contenuto: il file giusto è già al suo
+                # posto (e new_path resta None, così un errore non lo cancella)
+                new_path = os.path.join(app.config.get("UPLOAD_FOLDER"), f"{new_hash}.zip")
+                shutil.move(out, new_path)
 
             package.filename = filename
+            package.hash = new_hash
+            package.size = report["size"]
             contents = db.session.query(MissionContent).filter_by(hash=file_hash).all()
             for content in contents:
                 content.filename = filename
+                content.hash = new_hash
+                content.size = report["size"]
+            templates = 0
+            for template in db.session.query(GameTemplate).all():
+                hashes = template.serialize().get("packages") or []
+                if file_hash in hashes:
+                    template.packages_json = json.dumps([new_hash if h == file_hash else h for h in hashes])
+                    templates += 1
             db.session.commit()
-            logger.info(f"MilSim: data package {file_hash} rinominato da «{old}» a «{filename}»")
-            return jsonify(
-                {"success": True, "filename": filename, "old_filename": old, "missions_updated": len(contents)}
+            new_path = None  # registrato: il file resta
+            if new_hash != file_hash:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            logger.info(
+                f"MilSim: data package «{old}» ({file_hash}) rinominato in «{filename}» ({new_hash}), "
+                f"{len(contents)} contenuti di missione e {templates} template aggiornati"
             )
+            return jsonify({
+                "success": True,
+                "filename": filename,
+                "old_filename": old,
+                "new_hash": new_hash,
+                "missions_updated": len(contents),
+                "templates_updated": templates,
+            })
+        except datapackage.DataPackageError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
         except BaseException as e:
             db.session.rollback()
             logger.error(f"MilSim: rinomina del data package {file_hash} fallita: {e}")
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 500
+        finally:
+            # Commit fallito: niente file orfani in UPLOAD_FOLDER
+            if new_path and os.path.exists(new_path):
+                try:
+                    os.remove(new_path)
+                except OSError:
+                    pass
+            if folder:
+                shutil.rmtree(folder, ignore_errors=True)
 
     @staticmethod
     @blueprint.route("/datapackages/<file_hash>", methods=["DELETE"])

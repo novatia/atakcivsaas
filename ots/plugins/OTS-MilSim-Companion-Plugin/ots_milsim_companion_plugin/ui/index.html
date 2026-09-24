@@ -3237,8 +3237,9 @@ async function confirmDpFiles() {
   }
 }
 
-// Cambia solo il nome sul server: zip e hash restano, missioni e template
-// che usano il pacchetto continuano a funzionare
+// Cambia il nome sul server e dentro lo zip (name del manifest, quello che
+// ATAK mostra da installato); l'uid resta, missioni e template seguono il
+// nuovo hash lato server
 async function renameDp(i, btn) {
   const p = DP_PACKAGES[i];
   const current = p.filename.replace(/\.zip$/i, "");
@@ -3247,7 +3248,10 @@ async function renameDp(i, btn) {
   btn.disabled = true;
   try {
     const r = await api(`/datapackages/${encodeURIComponent(p.hash)}`, { method: "PATCH", body: { filename: name.trim() } });
-    toast(`Rinominato in ${r.filename}` + (r.missions_updated ? ` (aggiornato anche in ${r.missions_updated} contenuti di missione)` : ""));
+    const also = [r.missions_updated ? `${r.missions_updated} contenuti di missione` : "",
+      r.templates_updated ? `${r.templates_updated} template` : ""].filter(Boolean).join(" e ");
+    toast(`Rinominato in ${r.filename}${also ? ` (aggiornati anche ${also})` : ""}. ` +
+      "Su ATAK riscaricalo dalla lista del server: sostituisce quello già installato.");
     renderDataPackages();
   } catch (e) {
     toast(e.message, false);
