@@ -358,3 +358,15 @@ def test_invalid_repair_parameters(package):
         dp.repair(package, years=True, now=NOW)
     with pytest.raises(dp.DataPackageError):
         dp.repair(package, mode="qualcosa", now=NOW)
+
+
+def test_size_limits_skipped_for_files_on_disk(monkeypatch, tmp_path, package):
+    # Mappa offline da GB: l'analisi di un file su disco legge solo indice e XML
+    path = tmp_path / "grande.zip"
+    path.write_bytes(package)
+    monkeypatch.setattr(dp, "MAX_PACKAGE_BYTES", len(package) - 1)
+    monkeypatch.setattr(dp, "MAX_UNCOMPRESSED_BYTES", 1)
+    assert dp.analyze(str(path), NOW)["cot_total"] == 7
+    # la riparazione ricostruisce lo zip in memoria: i limiti restano
+    with pytest.raises(dp.DataPackageError, match="troppo grande"):
+        dp.repair(str(path), now=NOW)

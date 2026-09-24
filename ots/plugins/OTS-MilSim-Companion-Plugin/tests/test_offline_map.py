@@ -1,0 +1,219 @@
+"""Mappa offline HD da un ordine SkyFi (modulo offline_map).
+
+La parte pura (scelta del sorgente, livelli di zoom, argomenti GDAL,
+manifest e zip) gira ovunque. La conversione vera richiede i comandi GDAL
+(`apt install gdal-bin`) e la libreria Python osgeo per creare i GeoTIFF di
+prova: senza, quei test vengono saltati.
+"""
+
+import sqlite3
+import sys
+import xml.etree.ElementTree as ET
+import zipfile
+
+import pytest
+
+from ots_milsim_companion_plugin import offline_map as om
+
+
+def _band(n, interp, type_="Byte", **stats):
+    return {"band": n, "colorInterpretation": interp, "type": type_, **stats}
+
+
+RGB16_NIR = {
+    "bands": [
+        _band(1, "Red", "UInt16", mean=900, stdDev=200, minimum=0, maximum=4000),
+        _band(2, "Green", "UInt16", mean=1000, stdDev=200, minimum=0, maximum=4000),
+        _band(3, "Blue", "UInt16", mean=1100, stdDev=200, minimum=0, maximum=4000),
+        _band(4, "Undefined", "UInt16", mean=1200, stdDev=200, minimum=0, maximum=4000, noDataValue=0),
+    ]
+}
+RGBA8 = {"bands": [_band(1, "Red"), _band(2, "Green"), _band(3, "Blue"), _band(4, "Alpha")]}
+
+
+def _pairs(args, flag):
+    return [args[i + 1] for i, a in enumerate(args) if a == flag]
+
+
+# ----------------------------------------------------------------------
+# Sorgente e zoom
+# ----------------------------------------------------------------------
+
+
+def test_pick_source_prefers_view_ready():
+    order = {"downloadCogUrl": "x", "cogSize": 5, "downloadViewReadyCogUrl": "y", "viewReadyCogSize": 3}
+    assert om.pick_source(order) == ("view-ready", 3)
+    assert om.pick_source({"downloadCogUrl": "x", "cogSize": 5}) == ("cog", 5)
+    assert om.pick_source({"downloadPayloadUrl": "x"}) is None
+
+
+def test_native_zoom_never_loses_detail():
+    # 30 cm a terra a 45° di latitudine ≈ 0,42 m in EPSG:3857: z18 (0,60)
+    # perderebbe dettaglio, z19 (0,30) no
+    assert om.native_zoom(0.42) == 19
+    # risoluzione esatta di un livello (o quasi): non si sale di un livello
+    assert om.native_zoom(om.zoom_resolution(18)) == 18
+    assert om.native_zoom(om.zoom_resolution(18) * 0.999) == 18
+    assert om.native_zoom(0.001) == om.MAX_ZOOM
+    with pytest.raises(om.OfflineMapError):
+        om.native_zoom(0)
+
+
+def test_overview_factors_down_to_one_tile():
+    assert om.overview_factors(256, 256) == []
+    assert om.overview_factors(4299, 3607) == ["2", "4", "8", "16", "32"]
+
+
+# ----------------------------------------------------------------------
+# Argomenti GDAL
+# ----------------------------------------------------------------------
+
+
+def test_translate_16bit_rgb_nir():
+    args = om.translate_args(RGB16_NIR)
+    # RGB + l'alfa creata da -dstalpha, che nel VRT è la banda 5
+    assert _pairs(args, "-b") == ["1", "2", "3", "5"]
+    assert _pairs(args, "-ot") == ["Byte"]
+    assert args[args.index("-scale_1") + 1: args.index("-scale_1") + 5] == ["400", "1400", "0", "255"]
+    assert "-scale_4" in args
+    assert "ZOOM_LEVEL_STRATEGY=AUTO" in args
+    assert "TILING_SCHEME=GoogleMapsCompatible" in args
+
+
+def test_translate_8bit_with_alpha_keeps_values():
+    args = om.translate_args(RGBA8)
+    assert _pairs(args, "-b") == ["1", "2", "3", "4"]
+    assert "-ot" not in args and "-scale_1" not in args
+
+
+def test_translate_gray_and_missing_interp():
+    gray = {"bands": [_band(1, "Gray")]}
+    assert _pairs(om.translate_args(gray), "-b") == ["1", "2"]
+    assert _pairs(om.translate_args(gray), "-colorinterp") == ["gray,alpha"]
+    multi = {"bands": [_band(i, "Undefined") for i in range(1, 6)]}
+    assert _pairs(om.translate_args(multi), "-b") == ["1", "2", "3", "6"]
+    with pytest.raises(om.OfflineMapError):
+        om.translate_args({"bands": []})
+    with pytest.raises(om.OfflineMapError):
+        om.translate_args({"bands": [_band(1, "Red", "UInt16")]})  # senza statistiche
+
+
+def test_warp_args():
+    args = om.warp_args(RGB16_NIR, om.zoom_resolution(19))
+    assert _pairs(args, "-t_srs") == ["EPSG:3857"]
+    assert _pairs(args, "-srcnodata") == ["0"]
+    assert "-dstalpha" in args and "-tap" in args
+    assert "-srcnodata" not in om.warp_args(RGBA8)  # l'alfa del sorgente basta
+    assert "-tr" not in om.warp_args(RGBA8)
+
+
+# ----------------------------------------------------------------------
+# Esecuzione e pacchetto
+# ----------------------------------------------------------------------
+
+
+def test_run_reads_progress_and_errors():
+    seen = []
+    script = (
+        "import sys, time\n"
+        "for p in (0, 10, 50):\n"
+        "    sys.stdout.write(f'{p}...'); sys.stdout.flush(); time.sleep(0.1)\n"
+        "print('100 - done.')"
+    )
+    om.run([sys.executable, "-c", script], seen.append)
+    assert 0.5 in seen and seen[-1] == 1.0
+    with pytest.raises(om.OfflineMapError, match="codice 3"):
+        om.run([sys.executable, "-c", "import sys; print('rotto'); sys.exit(3)"])
+    with pytest.raises(om.OfflineMapError, match="non eseguibile"):
+        om.run(["comando-che-non-esiste-davvero"])
+
+
+def test_build_package(tmp_path):
+    gpkg = tmp_path / "map.gpkg"
+    gpkg.write_bytes(b"finto geopackage")
+    digest, size = om.build_package(str(gpkg), str(tmp_path / "p.zip"), "SkyFi-X HD-z19", "SkyFi-X HD")
+    assert len(digest) == 64 and size == (tmp_path / "p.zip").stat().st_size
+    with zipfile.ZipFile(tmp_path / "p.zip") as zf:
+        root = ET.fromstring(zf.read("MANIFEST/manifest.xml"))
+        params = {p.get("name"): p.get("value") for p in root.iter("Parameter")}
+        entry = root.find("Contents/Content").get("zipEntry")
+        assert params["name"] == "SkyFi-X HD-z19"
+        assert entry == f"{params['uid']}/SkyFi-X HD.gpkg"
+        assert zf.read(entry) == b"finto geopackage"
+        assert zf.getinfo(entry).compress_type == zipfile.ZIP_STORED
+
+
+# ----------------------------------------------------------------------
+# Conversione vera (serve GDAL)
+# ----------------------------------------------------------------------
+
+gdal = pytest.importorskip("osgeo.gdal", reason="libreria GDAL Python assente") if not om.missing_tools() else None
+needs_gdal = pytest.mark.skipif(gdal is None, reason="comandi GDAL assenti")
+
+
+def _geotiff(path, dtype, bands, alpha):
+    import numpy as np
+    from osgeo import osr
+
+    gdal.UseExceptions()
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(32632)  # UTM 32N, come la zona di Codogno
+    w, h = 600, 500
+    ds = gdal.GetDriverByName("GTiff").Create(str(path), w, h, bands, dtype)
+    ds.SetGeoTransform([555000, 0.3, 0, 5000000, 0, -0.3])
+    ds.SetProjection(srs.ExportToWkt())
+    yy, xx = np.mgrid[0:h, 0:w]
+    inside = (xx + yy) > 150  # angolo vuoto
+    for i in range(bands):
+        band = ds.GetRasterBand(i + 1)
+        if alpha and i == bands - 1:
+            band.WriteArray((inside * 255).astype("uint8"))
+            band.SetColorInterpretation(gdal.GCI_AlphaBand)
+            continue
+        value = (300 + ((xx // 10 + yy // 10) % 2) * 2000 + i * 50) if dtype != gdal.GDT_Byte else (50 + i * 40)
+        band.WriteArray((value * inside).astype("uint16" if dtype != gdal.GDT_Byte else "uint8"))
+        if not alpha:
+            band.SetNoDataValue(0)
+        if i < 3:
+            band.SetColorInterpretation([gdal.GCI_RedBand, gdal.GCI_GreenBand, gdal.GCI_BlueBand][i])
+    ds = None
+
+
+@needs_gdal
+@pytest.mark.parametrize("kind", ["cog16", "viewready"])
+def test_convert_end_to_end(tmp_path, kind):
+    src = tmp_path / "src.tif"
+    if kind == "cog16":
+        _geotiff(src, gdal.GDT_UInt16, 4, alpha=False)
+    else:
+        _geotiff(src, gdal.GDT_Byte, 4, alpha=True)
+    gpkg = tmp_path / "map.gpkg"
+    phases = []
+    result = om.convert(str(src), str(gpkg), str(tmp_path), on_step=lambda p, f: phases.append(p))
+    assert result["native_zoom"] == result["zoom"] == 19
+    assert {"analisi", "conversione", "livelli di zoom"} <= set(phases)
+
+    db = sqlite3.connect(gpkg)
+    table = db.execute("select table_name from gpkg_contents").fetchone()[0]
+    top = db.execute("select max(zoom_level) from gpkg_tile_matrix where table_name=?", (table,)).fetchone()[0]
+    pixel = db.execute(
+        "select pixel_x_size from gpkg_tile_matrix where table_name=? and zoom_level=?", (table, top)
+    ).fetchone()[0]
+    assert top == 19 and pixel == pytest.approx(om.zoom_resolution(19))
+    kinds = {bytes(d[:2]) for (d,) in db.execute(f"select tile_data from '{table}' where zoom_level=19")}
+    assert b"\xff\xd8" in kinds  # JPEG dove l'immagine è piena
+    db.close()
+
+    ds = gdal.Open(str(gpkg))
+    data = ds.ReadAsArray()
+    assert ds.RasterCount == 4
+    assert (data[3] == 0).any() and (data[3] == 255).any()  # bordi trasparenti
+    assert data[:3][:, data[3] > 0].mean() > 20  # non tutto nero dopo lo stretch
+
+
+@needs_gdal
+def test_convert_zoom_cap(tmp_path):
+    src = tmp_path / "src.tif"
+    _geotiff(src, gdal.GDT_Byte, 4, alpha=True)
+    result = om.convert(str(src), str(tmp_path / "map.gpkg"), str(tmp_path), max_zoom=17)
+    assert result == {**result, "native_zoom": 19, "zoom": 17}

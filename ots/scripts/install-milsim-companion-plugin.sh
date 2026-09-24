@@ -96,6 +96,24 @@ done
 # ------------------------- Install / Update -------------------------
 # pip installa da directory locale ricostruendo sempre il pacchetto,
 # quindi lo stesso comando fa sia install che update.
+# ------------------------- Dipendenze di sistema -------------------------
+# GDAL (gdalinfo, gdalwarp, gdal_translate, gdaladdo) serve alla «Mappa
+# offline HD» del tab SkyFi (3.16.0+). Senza, il resto del plugin funziona e
+# il bottone risponde con l'istruzione per installarlo.
+step "Dipendenze di sistema (GDAL)"
+if command -v gdalwarp >/dev/null 2>&1 && command -v gdaladdo >/dev/null 2>&1; then
+    log "GDAL presente: $(gdalinfo --version 2>/dev/null || echo '?')"
+elif command -v apt-get >/dev/null 2>&1; then
+    log "GDAL assente: installo gdal-bin (serve alla mappa offline HD di SkyFi)."
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y gdal-bin >/dev/null; then
+        log "Installato: $(gdalinfo --version 2>/dev/null || echo '?')"
+    else
+        warn "Installazione di gdal-bin fallita: la mappa offline HD non funzionerà finché non lo installi (apt install gdal-bin)."
+    fi
+else
+    warn "GDAL assente e apt-get non disponibile: installa i comandi GDAL a mano per la mappa offline HD."
+fi
+
 step "Installazione plugin nel venv (utente ${OTS_USER})"
 sudo -u "${OTS_USER}" "${PIP}" install --upgrade "${PLUGIN_DIR}"
 

@@ -163,16 +163,20 @@ def _check_entry_name(name: str) -> None:
         raise DataPackageError(f"percorso con '..' nello zip (zip-slip): {name}")
 
 
-def open_package(source: bytes | str | os.PathLike) -> zipfile.ZipFile:
+def open_package(source: bytes | str | os.PathLike, check_size: bool = True) -> zipfile.ZipFile:
     """Apre lo zip in sola lettura dopo averne controllato dimensione, numero
     di voci, nomi (niente assoluti né `..`) e cifratura. `source` è il
     contenuto oppure il percorso del file: col percorso si legge solo
-    l'indice dello zip e i file XML, non le mappe."""
+    l'indice dello zip e i file XML, non le mappe.
+
+    check_size=False salta i limiti di dimensione (non quelli sulle voci):
+    per la sola analisi di un file su disco, dove una mappa offline da GB non
+    viene mai letta."""
     try:
         size = len(source) if isinstance(source, (bytes, bytearray)) else os.path.getsize(source)
     except OSError as e:
         raise DataPackageError(f"file non leggibile: {e}") from e
-    if size > MAX_PACKAGE_BYTES:
+    if check_size and size > MAX_PACKAGE_BYTES:
         raise DataPackageError(
             f"pacchetto troppo grande ({size // (1024 * 1024)} MB, massimo {MAX_PACKAGE_BYTES // (1024 * 1024)} MB)"
         )
@@ -194,7 +198,7 @@ def open_package(source: bytes | str | os.PathLike) -> zipfile.ZipFile:
             raise DataPackageError(f"voce duplicata nello zip: {info.filename}")
         seen.add(info.filename)
         total += info.file_size
-    if total > MAX_UNCOMPRESSED_BYTES:
+    if check_size and total > MAX_UNCOMPRESSED_BYTES:
         raise DataPackageError(
             f"contenuto decompresso troppo grande ({total // (1024 * 1024)} MB, massimo {MAX_UNCOMPRESSED_BYTES // (1024 * 1024)} MB)"
         )
@@ -299,7 +303,9 @@ def _parse_manifest(raw: bytes) -> dict:
 def analyze(data: bytes | str | os.PathLike, now: datetime | None = None) -> dict:
     """Analizza un data package. Solleva DataPackageError solo se lo zip è
     da rifiutare in blocco; i problemi dei singoli file finiscono nel report."""
-    with open_package(data) as zf:
+    # Su disco si leggono solo indice e XML: i limiti di dimensione servono
+    # per il contenuto in memoria e per la riparazione, che ricostruisce lo zip
+    with open_package(data, check_size=isinstance(data, (bytes, bytearray))) as zf:
         return _analyze(zf, now or _utcnow())
 
 

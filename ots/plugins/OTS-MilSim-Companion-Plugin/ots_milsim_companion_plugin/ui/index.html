@@ -149,6 +149,11 @@
     margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
   #modal-backdrop, #play-backdrop, #tpl-preview-backdrop, #dp-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
   #modal-backdrop.hidden, #play-backdrop.hidden, #tpl-preview-backdrop.hidden, #dp-backdrop.hidden { display: none; }
+  #offline-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
+  #offline-backdrop.hidden { display: none; }
+  .offline-status { font-size: 12.5px; margin-top: 6px; }
+  .offline-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 4px; }
+  .offline-bar > div { height: 100%; background: var(--present); transition: width .4s; }
   .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; width: min(420px, 92vw); display: flex; flex-direction: column; gap: 12px; }
   .modal h2 { margin: 0; }
   .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
@@ -277,6 +282,30 @@
     <div class="modal-actions">
       <button class="btn" onclick="closeMissionModal()">Annulla</button>
       <button class="btn primary" id="assign-btn" onclick="assignToMission()">Assegna</button>
+    </div>
+  </div>
+</div>
+<div id="offline-backdrop" class="hidden" onclick="closeOfflineModal()">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h2>🛰 Mappa offline HD</h2>
+    <div id="offline-order" class="muted"></div>
+    <label>Zoom massimo
+      <select id="offline-zoom">
+        <option value="native" selected>Nativo: tutta la risoluzione dell'immagine</option>
+        <option value="20">20 (~10 cm/pixel a Codogno)</option>
+        <option value="19">19 (~21 cm/pixel)</option>
+        <option value="18">18 (~42 cm/pixel)</option>
+        <option value="17">17 (~84 cm/pixel)</option>
+      </select>
+    </label>
+    <p class="muted" style="margin:0">Il server scarica da SkyFi il GeoTIFF originale (view-ready, altrimenti COG),
+      lo converte in un GeoPackage allineato alla griglia di ATAK e crea un data package con la mappa
+      <b>dentro</b>: su ATAK si vede senza rete e alla risoluzione piena. Può durare da qualche minuto a
+      oltre un'ora e il pacchetto pesa centinaia di MB: ogni livello di zoom in meno lo divide per 4.
+      Lo zoom nativo non va mai oltre la risoluzione dell'immagine: scegliere un valore più alto non aggiunge dettaglio.</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeOfflineModal()">Annulla</button>
+      <button class="btn primary" id="offline-btn" onclick="startOfflineMap()">Avvia conversione</button>
     </div>
   </div>
 </div>
@@ -446,6 +475,7 @@ function renderTabs() {
       ED = null;
       clearInterval(MATCH_TIMER);
       stopMeshPolling();
+      stopOfflinePolling();
       currentTab = tab.id; renderTabs(); tab.render();
     };
     nav.appendChild(btn);
@@ -2536,6 +2566,7 @@ async function loadOrders() {
 
   ORDERS_BY_UID = {};
   orders.forEach(o => ORDERS_BY_UID[o.id || o.orderId] = o);
+  await refreshOfflineJobs();
 
   const pages = Math.max(1, Math.ceil(TOTAL / PAGE_SIZE));
   box.innerHTML = `
@@ -2572,7 +2603,9 @@ function orderCard(o) {
         ${dls.map(d => `<button class="btn" onclick="downloadDeliverable('${esc(uid)}', '${d.type}')"
             title="Scarica il deliverable ${d.label}">⬇ ${d.label}${d.size ? " (" + fmtBytes(d.size) + ")" : ""}</button>`).join("")}
         ${o.tilesUrl ? `<button class="btn primary" onclick="skyfiDataPackage(this, '${esc(uid)}')"
-            title="Crea un data package con i tile per ATAK/EUD">📦 Data package ATAK</button>` : ""}
+            title="Data package leggero: ATAK scarica i tile da SkyFi in streaming (serve rete)">📦 Data package ATAK</button>` : ""}
+        ${hasOfflineSource(o) ? `<button class="btn primary" onclick="openOfflineModal('${esc(uid)}')"
+            title="Data package con la mappa dentro, alla risoluzione piena: funziona senza rete">🛰 Mappa offline HD</button>` : ""}
         ${dls.length ? `<button class="btn" onclick="openMissionModal('${esc(uid)}')"
             title="Aggiunge un asset ai contenuti di una missione Data Sync">🎯 Missione</button>` : ""}
         ${!dls.length && !o.tilesUrl ? '<span class="muted">nessun asset scaricabile (delivery non completata)</span>' : ""}
@@ -2582,6 +2615,7 @@ function orderCard(o) {
           : `<button class="btn" onclick="hideOrder('${esc(uid)}', '${esc(o.orderCode || "")}')"
               title="Toglie l'ordine dalla lista (rimozione logica: su SkyFi resta, ripristinabile con Mostra rimossi)">🗑 Rimuovi</button>`}
       </div>
+      <div class="offline-status" id="offline-${esc(uid)}">${offlineStatusHtml(OFFLINE.jobs[uid])}</div>
     </div>
   </div>`;
 }
@@ -2636,6 +2670,92 @@ async function skyfiDataPackage(btn, uid) {
     toast("Errore data package: " + e.message, false);
   } finally {
     btn.disabled = false;
+  }
+}
+
+/* ---- Mappa offline HD (GeoTIFF → GeoPackage nel data package) ---- */
+// La conversione gira in background sul server: qui si fa polling dello
+// stato finché c'è un job attivo, e solo mentre il tab SkyFi è aperto
+let OFFLINE = { jobs: {}, gdalMissing: [], timer: null, uid: null };
+const OFFLINE_POLL_MS = 4000;
+const OFFLINE_PHASES = { download: "download da SkyFi", analisi: "analisi del GeoTIFF", conversione: "conversione in GeoPackage",
+  "livelli di zoom": "livelli di zoom inferiori", "data package": "creazione del data package" };
+
+function hasOfflineSource(o) { return !!(o.downloadViewReadyCogUrl || o.downloadCogUrl); }
+
+function offlineStatusHtml(job) {
+  if (!job) return "";
+  if (job.status === "done") {
+    const r = job.result || {};
+    return `✅ Mappa offline pronta: <b>${esc(r.filename)}</b> (${fmtBytes(r.size)}, zoom fino a ${r.zoom}${r.zoom < r.native_zoom ? `, nativo ${r.native_zoom}` : ""}).
+      È tra i data package del server: su ATAK scaricala dai data package del server, oppure mettila in una missione.`;
+  }
+  if (job.status === "error") return `⚠️ Mappa offline fallita: ${esc(job.error)}`;
+  const pct = Math.round((job.progress || 0) * 100);
+  const phase = job.status === "queued" ? "in coda (un'altra conversione è in corso)" : (OFFLINE_PHASES[job.phase] || job.phase || "avvio");
+  const extra = job.phase === "download" && job.downloaded ? ` · ${fmtBytes(job.downloaded)}${job.source_size ? " di " + fmtBytes(job.source_size) : ""}` : "";
+  return `⏳ Mappa offline: ${esc(phase)} ${pct}%${extra}
+    <div class="offline-bar"><div style="width:${pct}%"></div></div>`;
+}
+
+async function refreshOfflineJobs() {
+  try {
+    const data = await api("/orders/offline_maps");
+    OFFLINE.jobs = data.jobs || {};
+    OFFLINE.gdalMissing = data.gdal_missing || [];
+  } catch (e) { return; }
+  for (const [uid, job] of Object.entries(OFFLINE.jobs)) {
+    const el = document.getElementById(`offline-${uid}`);
+    if (el) el.innerHTML = offlineStatusHtml(job);
+  }
+  const active = Object.values(OFFLINE.jobs).some(j => j.status === "queued" || j.status === "running");
+  if (active && !OFFLINE.timer) OFFLINE.timer = setInterval(refreshOfflineJobs, OFFLINE_POLL_MS);
+  if (!active) stopOfflinePolling();
+}
+
+function stopOfflinePolling() {
+  if (OFFLINE.timer) { clearInterval(OFFLINE.timer); OFFLINE.timer = null; }
+}
+
+function openOfflineModal(uid) {
+  const o = ORDERS_BY_UID[uid];
+  if (!o) return;
+  if (OFFLINE.gdalMissing.length) {
+    return toast(`GDAL non è installato sul server (mancano ${OFFLINE.gdalMissing.join(", ")}): da root «apt install gdal-bin», poi riprova.`, false);
+  }
+  OFFLINE.uid = uid;
+  const src = o.downloadViewReadyCogUrl ? ["view-ready", o.viewReadyCogSize] : ["COG", o.cogSize];
+  document.getElementById("offline-order").textContent =
+    `Ordine ${o.orderCode}${o.geocodeLocation ? " — " + o.geocodeLocation : ""}${o.resolution ? " · " + o.resolution : ""} · sorgente ${src[0]}${src[1] ? " (" + fmtBytes(src[1]) + ")" : ""}`;
+  const btn = document.getElementById("offline-btn");
+  btn.disabled = false;
+  btn.textContent = "Avvia conversione";
+  document.getElementById("offline-backdrop").classList.remove("hidden");
+}
+
+function closeOfflineModal() {
+  document.getElementById("offline-backdrop").classList.add("hidden");
+  OFFLINE.uid = null;
+}
+
+async function startOfflineMap() {
+  const uid = OFFLINE.uid;
+  if (!uid) return;
+  const btn = document.getElementById("offline-btn");
+  btn.disabled = true;
+  btn.textContent = "Avvio…";
+  try {
+    await api(`/orders/${encodeURIComponent(uid)}/offline_map`, {
+      method: "POST",
+      body: { max_zoom: document.getElementById("offline-zoom").value },
+    });
+    toast("Conversione avviata sul server: l'avanzamento compare sulla card dell'ordine.");
+    closeOfflineModal();
+    refreshOfflineJobs();
+  } catch (e) {
+    toast("Errore mappa offline: " + e.message, false);
+    btn.disabled = false;
+    btn.textContent = "Avvia conversione";
   }
 }
 

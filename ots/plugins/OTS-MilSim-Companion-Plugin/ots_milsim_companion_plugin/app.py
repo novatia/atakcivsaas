@@ -5,6 +5,7 @@ import json
 import mimetypes
 import os
 import pathlib
+import shutil
 import threading
 import traceback
 import uuid
@@ -39,7 +40,7 @@ from opentakserver.models.MissionContentMission import MissionContentMission
 from opentakserver.models.user import User
 from opentakserver.plugins.Plugin import Plugin
 
-from . import cot, datapackage, engine, health, mesh, skyfi, teams
+from . import cot, datapackage, engine, health, mesh, offline_map, skyfi, teams
 from .default_config import DefaultConfig
 from .game_modes import GAME_MODES, MARKER_TYPES, ZONE_TYPES, serialize_registry, validate_template
 from .models import (
@@ -203,6 +204,151 @@ def _generate_skyfi_thumbnail(uid: str, folder: str, headers: dict) -> None:
                 pass
         with _skyfi_thumbs_lock:
             _skyfi_thumbs_in_progress.discard(uid)
+
+
+# ----------------------------------------------------------------------
+# Mappa offline HD degli ordini SkyFi (GeoTIFF → GeoPackage → data package)
+# ----------------------------------------------------------------------
+# Stato dei job in memoria per uid ordine: si perde al riavvio di OTS (le
+# cartelle di lavoro rimaste vengono ripulite al job successivo). Una
+# conversione alla volta: GDAL usa tutti i core e il sorgente pesa GB.
+
+_offline_jobs: dict = {}
+_offline_lock = threading.Lock()
+_offline_gate = threading.BoundedSemaphore(1)
+OFFLINE_ACTIVE = ("queued", "running")
+
+
+def _offline_work_folder(flask_app) -> str:
+    folder = os.path.join(
+        flask_app.config.get("OTS_DATA_FOLDER"), "plugins", "ots_milsim_companion_plugin", "offline_maps"
+    )
+    os.makedirs(folder, exist_ok=True)
+    return folder
+
+
+def _offline_job_update(uid: str, **fields) -> None:
+    with _offline_lock:
+        _offline_jobs[uid].update(fields)
+
+
+def _offline_package_filename(base: str) -> str:
+    """DataPackage.filename è unico: se il nome è già preso si sale di _vN."""
+    filename = f"{base}.zip"
+    while db.session.execute(db.session.query(DataPackage).filter_by(filename=filename)).first():
+        filename = datapackage.next_version_name(filename)
+    return filename
+
+
+def _build_offline_map(flask_app, uid: str, order: dict, headers: dict, user_id: int, max_zoom: int | None) -> None:
+    """Job in background: scarica il GeoTIFF dell'ordine, lo converte in
+    GeoPackage e lo registra come data package di OTS. Mai nel thread
+    della richiesta HTTP: la UI segue l'avanzamento con /orders/offline_maps."""
+    work = None
+    try:
+        with _offline_gate, flask_app.app_context():
+            source = offline_map.pick_source(order)
+            if not source:
+                raise offline_map.OfflineMapError("l'ordine non ha un GeoTIFF scaricabile (view-ready o COG)")
+            kind, declared = source
+            work = os.path.join(_offline_work_folder(flask_app), uuid.uuid4().hex)
+            os.makedirs(work)
+            _offline_job_update(uid, status="running", phase="download", progress=0, source=kind)
+
+            r = requests.get(
+                f"{skyfi.BASE_URL}/orders/{uid}/{kind}",
+                headers=headers,
+                stream=True,
+                allow_redirects=True,
+                timeout=(10, 600),
+            )
+            if r.status_code != 200:
+                raise offline_map.OfflineMapError(f"download del {kind} da SkyFi fallito: HTTP {r.status_code}")
+            total = int(r.headers.get("Content-Length") or declared or 0)
+            source_path = os.path.join(work, "source.tif")
+            done = 0
+            with open(source_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=4 * 1024 * 1024):
+                    f.write(chunk)
+                    done += len(chunk)
+                    if total:
+                        _offline_job_update(uid, progress=min(done / total, 1.0), downloaded=done)
+            _offline_job_update(uid, downloaded=done, source_size=done)
+
+            gpkg = os.path.join(work, "map.gpkg")
+            result = offline_map.convert(
+                source_path,
+                gpkg,
+                work,
+                on_step=lambda phase, fraction: _offline_job_update(uid, phase=phase, progress=fraction),
+                max_zoom=max_zoom,
+            )
+            os.remove(source_path)  # libera spazio prima dello zip
+
+            _offline_job_update(uid, phase="data package", progress=0)
+            location = order.get("geocodeLocation") or order.get("label") or ""
+            map_name = skyfi.safe_name(f"SkyFi-{order.get('orderCode', uid)} {location} HD")
+            filename = _offline_package_filename(skyfi.safe_name(f"{map_name}-z{result['zoom']}"))
+            zip_path = os.path.join(work, "package.zip")
+            package_hash, size = offline_map.build_package(gpkg, zip_path, filename[:-4], map_name)
+            if size > offline_map.MAX_PACKAGE_BYTES:
+                raise offline_map.OfflineMapError(
+                    f"il data package pesa {size / 2**30:.1f} GB, oltre il limite di OTS (2 GB): "
+                    f"riprova con uno zoom massimo più basso (ogni livello in meno divide la dimensione per 4)"
+                )
+
+            existing = db.session.execute(db.session.query(DataPackage).filter_by(hash=package_hash)).scalar()
+            if not existing:
+                target = os.path.join(flask_app.config.get("UPLOAD_FOLDER"), f"{package_hash}.zip")
+                shutil.move(zip_path, target)
+                # creator_uid è FK verso euds.uid: l'ultimo EUD dell'utente
+                # che ha lanciato il job, come per il data package online
+                eud = (
+                    db.session.query(EUD)
+                    .filter_by(user_id=user_id)
+                    .order_by(EUD.last_event_time.desc().nulls_last())
+                    .first()
+                )
+                package = DataPackage()
+                package.filename = filename
+                package.hash = package_hash
+                package.creator_uid = eud.uid if eud else None
+                package.submission_time = datetime.now(timezone.utc)
+                package.submission_user = user_id
+                package.keywords = f"skyfi,{order.get('orderCode', uid)},offline"
+                package.mime_type = "application/zip"
+                package.size = size
+                package.tool = "public"
+                try:
+                    db.session.add(package)
+                    db.session.commit()
+                except BaseException:
+                    db.session.rollback()
+                    os.remove(target)
+                    raise
+            else:
+                filename = existing.filename
+
+            logger.info(
+                f"MilSim/SkyFi: mappa offline dell'ordine {uid} pronta: {filename} ({size} byte, "
+                f"zoom {result['zoom']}, nativo {result['native_zoom']})"
+            )
+            _offline_job_update(
+                uid,
+                status="done",
+                phase="completato",
+                progress=1.0,
+                finished_at=datetime.now(timezone.utc).isoformat(),
+                result={"filename": filename, "hash": package_hash, "size": size, **result},
+            )
+    except BaseException as e:
+        logger.error(f"MilSim/SkyFi: mappa offline dell'ordine {uid} fallita: {e}")
+        if not isinstance(e, offline_map.OfflineMapError):
+            logger.error(traceback.format_exc())
+        _offline_job_update(uid, status="error", error=str(e), finished_at=datetime.now(timezone.utc).isoformat())
+    finally:
+        if work:
+            shutil.rmtree(work, ignore_errors=True)
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -3519,6 +3665,104 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": True, "name": package_name, "hash": data_package_hash}), 200
         except BaseException as e:
             logger.error(f"Failed to create data package for {uid}: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # Mappa offline HD: qui @blueprint.route sta SOTTO @roles_accepted, come
+    # nel tab Data Package (route() registra la funzione che riceve)
+
+    @staticmethod
+    @blueprint.route("/orders/offline_maps", methods=["GET"])
+    @roles_accepted("administrator")
+    def offline_map_jobs():
+        """Stato dei job «mappa offline HD» e disponibilità di GDAL sul server."""
+        with _offline_lock:
+            jobs = {uid: dict(job) for uid, job in _offline_jobs.items()}
+        return jsonify({"jobs": jobs, "gdal_missing": offline_map.missing_tools()})
+
+    @staticmethod
+    @blueprint.route("/orders/<uid>/offline_map", methods=["POST"])
+    @roles_accepted("administrator")
+    def start_offline_map(uid: str):
+        """Avvia in background la conversione del GeoTIFF dell'ordine in un
+        data package con la mappa offline (GeoPackage). Risponde subito 202."""
+        try:
+            missing = offline_map.missing_tools()
+            if missing:
+                return jsonify({
+                    "success": False,
+                    "error": f"GDAL non installato sul server (mancano {', '.join(missing)}): "
+                             "da root «apt install gdal-bin», poi riprova",
+                }), 400
+
+            body = request.json or {}
+            max_zoom = body.get("max_zoom")
+            if max_zoom in (None, "", "native"):
+                max_zoom = None
+            else:
+                try:
+                    max_zoom = int(max_zoom)
+                except (TypeError, ValueError):
+                    return jsonify({"success": False, "error": "Zoom massimo non valido"}), 400
+                if not 10 <= max_zoom <= offline_map.MAX_ZOOM:
+                    return jsonify({"success": False, "error": f"Zoom massimo fra 10 e {offline_map.MAX_ZOOM}"}), 400
+
+            order = skyfi.get_order(uid)
+            if not order:
+                return jsonify({"success": False, "error": "Ordine non trovato su SkyFi"}), 404
+            source = offline_map.pick_source(order)
+            if not source:
+                return jsonify({
+                    "success": False,
+                    "error": "L'ordine non ha ancora un GeoTIFF scaricabile (view-ready o COG): delivery non completata?",
+                }), 400
+
+            flask_app = app._get_current_object()
+            work_folder = _offline_work_folder(flask_app)
+            free = shutil.disk_usage(work_folder).free
+            needed = source[1] * offline_map.DISK_FACTOR
+            if source[1] and free < needed:
+                return jsonify({
+                    "success": False,
+                    "error": f"Spazio disco insufficiente: servono circa {needed / 2**30:.1f} GB liberi, "
+                             f"ce ne sono {free / 2**30:.1f}",
+                }), 507
+
+            with _offline_lock:
+                if any(job.get("status") in OFFLINE_ACTIVE for job in _offline_jobs.values()):
+                    busy = True
+                else:
+                    busy = False
+                    # Nessun job attivo: le cartelle di lavoro rimaste sono di
+                    # job interrotti da un riavvio di OTS
+                    for leftover in os.listdir(work_folder):
+                        shutil.rmtree(os.path.join(work_folder, leftover), ignore_errors=True)
+                current = _offline_jobs.get(uid)
+                if current and current.get("status") in OFFLINE_ACTIVE:
+                    return jsonify({"success": False, "error": "Conversione già in corso per questo ordine"}), 409
+                _offline_jobs[uid] = {
+                    "uid": uid,
+                    "order_code": order.get("orderCode"),
+                    "status": "queued",
+                    "phase": "in coda" if busy else "avvio",
+                    "progress": 0,
+                    "source": source[0],
+                    "source_size": source[1],
+                    "max_zoom": max_zoom,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                    "started_by": current_user.username,
+                }
+                job = dict(_offline_jobs[uid])
+
+            threading.Thread(
+                target=_build_offline_map,
+                args=(flask_app, uid, order, skyfi.headers(), current_user.id, max_zoom),
+                daemon=True,
+                name=f"skyfi-offline-{uid[:8]}",
+            ).start()
+            return jsonify({"success": True, "job": job}), 202
+        except BaseException as e:
+            logger.error(f"MilSim/SkyFi: avvio mappa offline {uid} fallito: {e}")
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 500
 

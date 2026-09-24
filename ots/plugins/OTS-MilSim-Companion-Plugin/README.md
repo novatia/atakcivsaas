@@ -255,7 +255,22 @@ Ereditato dal fork OTS-SkyFi-Plugin (upstream brian7704, che non distribuisce la
 - **download dei deliverable** (image / payload / COG / view-ready) via **proxy
   backend**: l'API key SkyFi non arriva mai al browser;
 - **📦 Data package ATAK**: crea un data package OTS con i tile WMTS dell'ordine
-  (layer SkyFi + Google Hybrid), scaricabile dagli EUD;
+  (layer SkyFi + Google Hybrid), scaricabile dagli EUD. Pesa pochi KB perché
+  contiene solo l'XML della sorgente: ATAK scarica i tile da SkyFi in streaming
+  (serve rete) e allo zoom massimo sono più sgranati dell'immagine originale;
+- **🛰 Mappa offline HD**: il server scarica il GeoTIFF originale dell'ordine
+  (view-ready, altrimenti COG) e lo converte con GDAL in un **GeoPackage** a tile
+  EPSG:3857 dentro un data package: su ATAK la mappa si vede senza rete e alla
+  risoluzione piena. Pipeline in `offline_map.py`: riproiezione con `-tr` pari
+  alla risoluzione esatta del livello di zoom subito più fine del nativo e
+  `-tap` (pixel già sulla griglia delle tile, un solo ricampionamento cubico),
+  16 bit → 8 bit con stretch media ± 2,5σ per banda, tile JPEG qualità 85 (PNG
+  solo ai bordi trasparenti), livelli inferiori con `gdaladdo`. Zoom massimo
+  sceglibile (ogni livello in meno divide la dimensione per 4); limite 2 GB
+  per pacchetto (`data_packages.size` di OTS è un intero a 32 bit). Gira in
+  background, un job alla volta, con avanzamento sulla card dell'ordine; lo
+  stato dei job è in memoria e si perde al riavvio di OTS. Serve `gdal-bin`
+  sul server (lo script di install lo installa se manca);
 - **🎯 Missione**: scarica il deliverable sul server e lo aggiunge ai contenuti di
   una missione **Data Sync**, replicando il flusso di `/Marti/sync/upload` +
   `PUT /Marti/api/missions/<name>/contents` (dedup per sha256, MissionChange
@@ -538,6 +553,8 @@ restano invariate per compatibilità con i config esistenti.
 | `GET /orders/<uid>/image` | admin | Anteprima ordine (data-URI, via proxy) |
 | `GET /orders/<uid>/download/<tipo>` | admin | Proxy del deliverable (image/payload/cog/view-ready) |
 | `POST /orders/<uid>/data_package` | admin | Data package ATAK con i tile WMTS dell'ordine |
+| `POST /orders/<uid>/offline_map` | admin | `{"max_zoom": "native"\|10-22}`: avvia la mappa offline HD (202) |
+| `GET /orders/offline_maps` | admin | Stato dei job mappa offline + comandi GDAL mancanti |
 | `POST /orders/<uid>/mission` | admin | `{"mission", "deliverable_type"}`: asset nella missione Data Sync |
 | `GET /missions` · `GET /missions/<nome>/contents` | admin | Missioni Data Sync · contenuti condivisi |
 | `GET /missions/<nome>/contents/<hash>/download` · `/preview` | admin | Download / anteprima immagine di un contenuto |
@@ -578,8 +595,20 @@ delle scadute, riparazione (BOM e `<?visible?>` tolti, uid e resto dei byte
 invariati, manifest con name/uid nuovi, round-trip parsabile), file non CoT
 copiati identici, zip malformati, zip-slip e limiti di dimensione.
 
+`tests/test_offline_map.py` copre scelta del sorgente, livelli di zoom,
+argomenti GDAL (bande, stretch 16→8 bit, alfa, nodata), avanzamento e errori
+dei comandi, manifest e zip. Se sono installati i comandi GDAL e la libreria
+Python `osgeo`, converte anche due GeoTIFF sintetici (UInt16 RGB+NIR con nodata,
+Byte RGBA) e controlla nel GeoPackage zoom massimo, risoluzione esatta,
+tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
+
 ## Changelog
 
+- **3.16.0** — tab SkyFi: **🛰 Mappa offline HD**, data package con il
+  GeoPackage dell'immagine originale convertita da GDAL (risoluzione piena,
+  senza rete), job in background con avanzamento. La tab Data Package analizza
+  anche pacchetti oltre i 100 MB (legge solo indice e XML); la riparazione
+  resta limitata. Nuova dipendenza di sistema `gdal-bin`.
 - **3.15.0** — tab **Data Package**: stato delle entità CoT di ogni pacchetto
   (scadute, in scadenza, BOM/PI, errori), riparazione in una copia `_vN` con
   anteprima prima/dopo, download ed eliminazione dell'originale. Nuova chiave
