@@ -16,6 +16,13 @@
 # giù comunque (riavvio in loop, dipendenza rotta, disco pieno) qualcuno deve
 # essere avvisato invece di scoprirlo in campo.
 #
+# Il 2026-09-23 alle 23:20 UTC il caso inverso: il parser ha perso la sua
+# connessione a RabbitMQ ma il processo è rimasto VIVO e fermo (on_message
+# inghiotte ogni eccezione con `except BaseException`). Unit verde, processo
+# presente, zero CoT per 7 ore finché non è stato riavviato a mano. Per questo
+# il controllo 3 non si limita ad avvisare: se lo smistamento è fermo riavvia
+# il parser (riavviarlo non scollega gli EUD, che stanno su eud_handler).
+#
 # Uso:   check-services.sh          controlla, ripara e notifica (per il timer)
 #        check-services.sh --test   invia un messaggio di prova su Telegram
 #        check-services.sh --dry    controlla e riferisce senza riavviare nulla
@@ -32,6 +39,7 @@ set -u
 
 ENV_FILE=/etc/ots-notify.env
 STATE_FILE=/var/lib/ots-health/state
+PARSER_RESTART_FILE=/var/lib/ots-health/cot-parser-restart
 UNITS="rabbitmq-server opentakserver opentakserver-cot-parser opentakserver-eud-handler"
 
 [ -f "$ENV_FILE" ] && . "$ENV_FILE"
@@ -48,6 +56,10 @@ if [ -z "${OTS_DB_NAME:-}" ] && [ -r "$OTS_CONFIG" ]; then
 fi
 OTS_DB_NAME=${OTS_DB_NAME:-opentakserver}
 COT_STALE_MINUTES=${COT_STALE_MINUTES:-10}
+# Intervallo minimo fra due riavvii automatici del parser per «smistamento
+# fermo»: se il riavvio non basta (il guasto è altrove, es. eud_handler) non
+# lo si martella ogni 5 minuti.
+PARSER_RESTART_COOLDOWN_MINUTES=${PARSER_RESTART_COOLDOWN_MINUTES:-30}
 HOST=$(hostname -s 2>/dev/null || hostname)
 
 notify() {
@@ -76,6 +88,33 @@ fi
 
 PROBLEMS=""
 add_problem() { PROBLEMS="${PROBLEMS}${PROBLEMS:+; }$1"; }
+
+# Fotografia del parser appeso, PRIMA di riavviarlo: il riavvio cancella
+# l'unica prova di dove si era fermato. Stack Python di ogni processo (se c'è
+# py-spy: `pip install py-spy` nel venv), socket TCP aperti del processo (la
+# connessione a RabbitMQ :5672 c'è ancora?) e consumer della coda cot_parser.
+# Stampa il percorso del file scritto.
+snapshot_stalled_parser() {
+    local dir=/var/log/ots-health f pid spy
+    mkdir -p "$dir" 2>/dev/null || return 1
+    f="$dir/cot-parser-stall-$(date -u +%Y%m%dT%H%M%SZ).txt"
+    spy=$(command -v py-spy 2>/dev/null)
+    [ -z "$spy" ] && [ -x /home/ots/.opentakserver_venv/bin/py-spy ] && spy=/home/ots/.opentakserver_venv/bin/py-spy
+    {
+        for pid in $(pgrep -f "[.]opentakserver_venv/bin/cot_parser"); do
+            echo "=== PID $pid ($(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' '))"
+            ss -Htnp 2>/dev/null | grep "pid=$pid," || echo "(nessun socket TCP)"
+            if [ -n "$spy" ]; then
+                timeout 20 "$spy" dump --pid "$pid" 2>&1
+            else
+                echo "(py-spy non installato: niente stack)"
+            fi
+        done
+        echo "=== consumer della coda cot_parser"
+        timeout 30 rabbitmqctl -q list_consumers queue_name channel_pid ack_required 2>&1 | grep cot_parser
+    } > "$f" 2>&1
+    echo "$f"
+}
 
 # --- 1) Unit di sistema -------------------------------------------------
 # Ordine importante: rabbitmq-server è il primo della lista, così se è lui a
@@ -154,7 +193,27 @@ if [ "${EUD_CONNECTIONS:-0}" -gt 0 ]; then
             add_problem "$COT_CHECK"
         elif [ "$COT_AGE" -gt $((COT_STALE_MINUTES * 60)) ]; then
             COT_CHECK="ultimo CoT $((COT_AGE / 60)) minuti fa"
-            add_problem "$EUD_CONNECTIONS EUD collegati ma nessun CoT scritto da $((COT_AGE / 60)) minuti: smistamento fermo"
+            STALE_MSG="$EUD_CONNECTIONS EUD collegati ma nessun CoT scritto da $((COT_AGE / 60)) minuti: smistamento fermo"
+            LAST_RESTART=0
+            [ -f "$PARSER_RESTART_FILE" ] && LAST_RESTART=$(cat "$PARSER_RESTART_FILE" 2>/dev/null)
+            case "$LAST_RESTART" in ''|*[!0-9]*) LAST_RESTART=0 ;; esac
+            SINCE_RESTART=$(( $(date +%s) - LAST_RESTART ))
+            if [ "$DRY" -eq 1 ]; then
+                add_problem "$STALE_MSG (dry-run, parser non riavviato)"
+            elif ! systemctl is-enabled --quiet opentakserver-cot-parser 2>/dev/null; then
+                add_problem "$STALE_MSG"
+            elif [ "$SINCE_RESTART" -lt $((PARSER_RESTART_COOLDOWN_MINUTES * 60)) ]; then
+                add_problem "$STALE_MSG; il riavvio del parser di $((SINCE_RESTART / 60)) minuti fa non è bastato"
+            else
+                mkdir -p "$(dirname "$PARSER_RESTART_FILE")" 2>/dev/null
+                date +%s > "$PARSER_RESTART_FILE"
+                SNAPSHOT=$(snapshot_stalled_parser)
+                if systemctl restart opentakserver-cot-parser 2>/dev/null; then
+                    add_problem "$STALE_MSG; cot_parser riavviato (diagnosi in ${SNAPSHOT:-?})"
+                else
+                    add_problem "$STALE_MSG; riavvio di cot_parser FALLITO"
+                fi
+            fi
         else
             COT_CHECK="ultimo CoT ${COT_AGE}s fa"
         fi
@@ -164,15 +223,19 @@ fi
 # --- 4) Notifica solo sui cambi di stato --------------------------------
 # Il timer gira ogni 5 minuti: senza questo, un guasto persistente
 # manderebbe 288 messaggi al giorno e si smetterebbe di leggerli.
+# Lo stato si confronta SENZA i numeri: «da 14 minuti» e «da 19 minuti» sono
+# lo stesso guasto. Confrontando il testo intero (com'era fino al 2026-09-24)
+# ogni giro sembrava un guasto nuovo e partiva un messaggio ogni 5 minuti.
 mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null
 PREVIOUS=""
 [ -f "$STATE_FILE" ] && PREVIOUS=$(cat "$STATE_FILE" 2>/dev/null)
+STATE_KEY=$(printf '%s' "$PROBLEMS" | sed 's/[0-9][0-9]*/N/g')
 
 if [ -n "$PROBLEMS" ]; then
-    if [ "$PROBLEMS" != "$PREVIOUS" ]; then
+    if [ "$STATE_KEY" != "$PREVIOUS" ]; then
         notify "⚠️ $PROBLEMS"
     fi
-    [ "$DRY" -eq 0 ] && echo "$PROBLEMS" > "$STATE_FILE"
+    [ "$DRY" -eq 0 ] && echo "$STATE_KEY" > "$STATE_FILE"
     exit 1
 fi
 
