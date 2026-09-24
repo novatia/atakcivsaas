@@ -604,6 +604,10 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.16.1** — mappa offline HD: dentro OTS (eventlet/gevent) il pipe dei
+  comandi GDAL è non bloccante e la lettura dell'avanzamento falliva con
+  «[Errno 11] Resource temporarily unavailable»; ora si riprova dopo una pausa.
+  Il timeout dei comandi vale anche durante la lettura dell'output.
 - **3.16.0** — tab SkyFi: **🛰 Mappa offline HD**, data package con il
   GeoPackage dell'immagine originale convertita da GDAL (risoluzione piena,
   senza rete), job in background con avanzamento. La tab Data Package analizza

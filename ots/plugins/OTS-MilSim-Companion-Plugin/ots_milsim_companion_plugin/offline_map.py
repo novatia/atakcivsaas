@@ -31,6 +31,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import uuid
 import xml.etree.ElementTree as ET
 import zipfile
@@ -231,10 +232,24 @@ def run(cmd: list[str], on_progress: Callable[[float], None] | None = None, time
     except OSError as e:
         raise OfflineMapError(f"{cmd[0]} non eseguibile: {e}") from e
     output, tail = [], ""
+    deadline = time.monotonic() + timeout
+    fd = proc.stdout.fileno()
     try:
         # os.read restituisce quello che c'è già: la barra di GDAL arriva a
-        # pezzi senza a capo, una read(n) bufferizzata aspetterebbe la fine
-        while raw := os.read(proc.stdout.fileno(), 4096):
+        # pezzi senza a capo, una read(n) bufferizzata aspetterebbe la fine.
+        # Dentro OTS (eventlet/gevent) il pipe è non bloccante: senza dati
+        # os.read solleva EAGAIN invece di aspettare, e si riprova dopo una
+        # pausa (time.sleep lì è cooperativo, non blocca il server)
+        while True:
+            if time.monotonic() > deadline:
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            try:
+                raw = os.read(fd, 4096)
+            except BlockingIOError:
+                time.sleep(0.2)
+                continue
+            if not raw:
+                break
             chunk = raw.decode("utf-8", "replace")
             output.append(chunk)
             if on_progress:
@@ -242,7 +257,7 @@ def run(cmd: list[str], on_progress: Callable[[float], None] | None = None, time
                 values = _PROGRESS_RE.findall(tail)
                 if values:
                     on_progress(min(int(values[-1]), 100) / 100)
-        proc.wait(timeout=timeout)
+        proc.wait(timeout=max(1.0, deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
         proc.kill()
         raise OfflineMapError(f"{cmd[0]} oltre il tempo massimo") from None

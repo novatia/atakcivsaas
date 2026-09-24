@@ -128,6 +128,25 @@ def test_run_reads_progress_and_errors():
         om.run(["comando-che-non-esiste-davvero"])
 
 
+def test_run_survives_non_blocking_pipe(monkeypatch):
+    # Dentro OTS (eventlet/gevent) il pipe è non bloccante: os.read senza
+    # dati pronti solleva EAGAIN («[Errno 11] Resource temporarily unavailable»)
+    real_read = om.os.read
+    calls = {"n": 0}
+
+    def flaky_read(fd, n):
+        calls["n"] += 1
+        if calls["n"] % 2:
+            raise BlockingIOError(11, "Resource temporarily unavailable")
+        return real_read(fd, n)
+
+    monkeypatch.setattr(om.os, "read", flaky_read)
+    monkeypatch.setattr(om.time, "sleep", lambda s: None)
+    seen = []
+    out = om.run([sys.executable, "-c", "print('0...50...100 - done.')"], seen.append)
+    assert "done" in out and seen[-1] == 1.0 and calls["n"] > 2
+
+
 def test_build_package(tmp_path):
     gpkg = tmp_path / "map.gpkg"
     gpkg.write_bytes(b"finto geopackage")
