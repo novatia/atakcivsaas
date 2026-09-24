@@ -337,3 +337,89 @@ def test_convert_geotiff_is_pixel_identical(tmp_path):
     gt = out.GetGeoTransform()
     ox, oy = round((SKYFI_GT[0] - gt[0]) / gt[1]), round((SKYFI_GT[3] - gt[3]) / gt[5])
     assert np.array_equal(out.ReadAsArray(ox, oy, w, h)[:3], data)
+
+
+# ----------------------------------------------------------------------
+# Stato della vegetazione (NDVI)
+# ----------------------------------------------------------------------
+
+SKYFI_COG_INFO = {"bands": [_band(1, "Red"), _band(2, "Green"), _band(3, "Blue"), _band(4, "Undefined")]}
+
+
+def test_red_nir_bands():
+    assert om.red_nir_bands(SKYFI_COG_INFO) == (1, 4)  # quarta banda senza etichetta = nir (metadati SkyFi)
+    described = {"bands": [_band(1, "Red"), _band(2, "Undefined", description="NIR")]}
+    assert om.red_nir_bands(described) == (1, 2)
+    with pytest.raises(om.OfflineMapError, match="infrarossa"):
+        om.red_nir_bands(RGBA8)  # view-ready: niente infrarosso
+
+
+def test_vegetation_stops_relative_and_color_table():
+    absolute = om.vegetation_stops("assoluta")
+    assert absolute == om.VEGETATION_STOPS
+    rel = om.vegetation_stops("relativa", 0.094, 0.504)
+    xs = [x for x, _ in rel]
+    assert xs == sorted(xs)
+    assert xs[-1] == pytest.approx(0.504)  # il verde più scuro sul 98° percentile della scena
+    assert [c for _, c in rel] == [c for _, c in absolute]  # stessi colori, valori ridistribuiti
+    table = om.color_table(rel).splitlines()
+    assert table[0] == "nv 0 0 0 0" and table[-1] == "1.0001 0 0 0 0"  # NaN e inf fuori area trasparenti
+    with pytest.raises(om.OfflineMapError):
+        om.vegetation_stops("relativa")
+
+
+def test_build_package_with_extra_files(tmp_path):
+    tif = tmp_path / "map.tif"
+    tif.write_bytes(b"tiff")
+    legend = tmp_path / "leg.png"
+    legend.write_bytes(b"png")
+    om.build_package(str(tif), str(tmp_path / "p.zip"), "X", "X", ".tif", [(str(legend), "Legenda vegetazione.png")])
+    with zipfile.ZipFile(tmp_path / "p.zip") as zf:
+        entries = [c.get("zipEntry") for c in ET.fromstring(zf.read("MANIFEST/manifest.xml")).iter("Content")]
+        assert entries[0].endswith("/X.tif") and entries[1].endswith("/Legenda vegetazione.png")
+        assert zf.read(entries[1]) == b"png"
+
+
+@needs_gdal
+def test_vegetation_end_to_end(tmp_path):
+    import numpy as np
+    from osgeo import osr
+
+    gdal.UseExceptions()
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(3857)
+    src = tmp_path / "cog4.tif"
+    w, h = 400, 300
+    ds = gdal.GetDriverByName("GTiff").Create(str(src), w, h, 4, gdal.GDT_Byte)
+    ds.SetGeoTransform(SKYFI_GT)
+    ds.SetProjection(srs.ExportToWkt())
+    red = np.full((h, w), 40, np.uint8)
+    nir = np.full((h, w), 40, np.uint8)
+    nir[:, 100:200] = 120   # NDVI 0,5: vegetazione
+    red[:, 200:300] = 120   # NDVI -0,5: acqua
+    red[:, 300:], nir[:, 300:] = 0, 0  # fuori area
+    for i, (band, interp) in enumerate([(red, gdal.GCI_RedBand), (red, gdal.GCI_GreenBand), (red, gdal.GCI_BlueBand), (nir, gdal.GCI_Undefined)]):
+        ds.GetRasterBand(i + 1).WriteArray(band)
+        ds.GetRasterBand(i + 1).SetColorInterpretation(interp)
+    ds = None
+
+    out = tmp_path / "veg.tif"
+    result = om.vegetation(str(src), str(out), str(tmp_path), scale="assoluta")
+    assert result["product"] == "vegetation" and result["aligned"] and result["zoom"] == 20
+    img = gdal.Open(str(out))
+    gt = img.GetGeoTransform()
+    ox, oy = round((SKYFI_GT[0] - gt[0]) / gt[1]), round((SKYFI_GT[3] - gt[3]) / gt[5])
+    a = img.ReadAsArray(ox, oy, w, h)
+    soil, veg, water, outside = (a[:, 150, x] for x in (50, 150, 250, 350))
+    assert tuple(soil[:3]) == (120, 90, 70)          # NDVI 0 = suolo nudo
+    assert veg[1] > veg[0] and veg[1] > veg[2]       # NDVI 0,5 = verde
+    assert water[2] > water[0]                       # NDVI -0,5 = blu
+    assert soil[3] == veg[3] == water[3] == 255 and outside[3] == 0  # fuori area trasparente
+
+    rel = om.vegetation(str(src), str(tmp_path / "veg_rel.tif"), str(tmp_path), scale="relativa")
+    # unica vegetazione della scena a NDVI 0,5 (istogramma a classi da ~0,008)
+    assert rel["ndvi_range"][0] == pytest.approx(0.5, abs=0.01)
+
+    legend = tmp_path / "legenda.png"
+    om.vegetation_legend(str(legend), rel["stops"], "relativa", "Stato della vegetazione · prova", "immagine del 6 aprile 2023")
+    assert legend.stat().st_size > 1000

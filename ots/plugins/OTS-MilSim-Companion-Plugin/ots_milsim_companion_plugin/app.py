@@ -241,7 +241,8 @@ def _offline_package_filename(base: str) -> str:
 
 
 def _build_offline_map(flask_app, uid: str, order: dict, headers: dict, user_id: int, max_zoom: int | None,
-                       source_kind: str | None = None, tile_format: str = offline_map.DEFAULT_FORMAT) -> None:
+                       source_kind: str | None = None, tile_format: str = offline_map.DEFAULT_FORMAT,
+                       product: str = "visible", scale: str = "relativa") -> None:
     """Job in background: scarica il GeoTIFF dell'ordine, lo converte in
     GeoPackage e lo registra come data package di OTS. Mai nel thread
     della richiesta HTTP: la UI segue l'avanzamento con /orders/offline_maps."""
@@ -276,29 +277,47 @@ def _build_offline_map(flask_app, uid: str, order: dict, headers: dict, user_id:
                         _offline_job_update(uid, progress=min(done / total, 1.0), downloaded=done)
             _offline_job_update(uid, downloaded=done, source_size=done)
 
-            extension = offline_map.FORMAT_EXTENSIONS.get(tile_format, ".gpkg")
-            gpkg = os.path.join(work, f"map{extension}")
-            result = offline_map.convert(
-                source_path,
-                gpkg,
-                work,
-                on_step=lambda phase, fraction: _offline_job_update(uid, phase=phase, progress=fraction),
-                max_zoom=max_zoom,
-                tile_format=tile_format,
-            )
+            on_step = lambda phase, fraction: _offline_job_update(uid, phase=phase, progress=fraction)
+            location = order.get("geocodeLocation") or order.get("label") or ""
+            extra_files = []
+            if product == "vegetation":
+                # Stato della vegetazione (NDVI) dalla banda infrarossa del COG,
+                # sempre GeoTIFF; nel pacchetto anche la legenda, che ATAK non disegna
+                extension = ".tif"
+                gpkg = os.path.join(work, "map.tif")
+                result = offline_map.vegetation(source_path, gpkg, work, on_step=on_step, scale=scale, max_zoom=max_zoom)
+                legend = os.path.join(work, "legenda.png")
+                # data di ripresa dall'ordine SkyFi, se c'è (conta: la vegetazione cambia con le stagioni)
+                date = str(order.get("captureTimestamp") or (order.get("archive") or {}).get("captureTimestamp") or "")[:10]
+                offline_map.vegetation_legend(
+                    legend, result["stops"], scale,
+                    f"Stato della vegetazione · SkyFi {order.get('orderCode', uid)}",
+                    " · ".join(p for p in (location, f"immagine del {date}" if date else "") if p),
+                )
+                extra_files = [(legend, "Legenda vegetazione.png")]
+                map_name = skyfi.safe_name(f"SkyFi-{order.get('orderCode', uid)} {location} vegetazione")
+                suffix = f"-z{result['zoom']}-{scale}"
+            else:
+                extension = offline_map.FORMAT_EXTENSIONS.get(tile_format, ".gpkg")
+                gpkg = os.path.join(work, f"map{extension}")
+                result = offline_map.convert(
+                    source_path, gpkg, work, on_step=on_step, max_zoom=max_zoom, tile_format=tile_format
+                )
+                map_name = skyfi.safe_name(f"SkyFi-{order.get('orderCode', uid)} {location} HD")
+                suffix = f"-z{result['zoom']}-{tile_format}"
             os.remove(source_path)  # libera spazio prima dello zip
 
             _offline_job_update(uid, phase="data package", progress=0)
-            location = order.get("geocodeLocation") or order.get("label") or ""
-            map_name = skyfi.safe_name(f"SkyFi-{order.get('orderCode', uid)} {location} HD")
-            filename = _offline_package_filename(skyfi.safe_name(f"{map_name}-z{result['zoom']}-{tile_format}"))
+            filename = _offline_package_filename(skyfi.safe_name(f"{map_name}{suffix}"))
             zip_path = os.path.join(work, "package.zip")
             # Il .gpkg porta il nome (unico) del pacchetto, non solo quello
             # dell'ordine: ATAK lo copia fra le imagery col suo nome, e se un
             # pacchetto precedente dello stesso ordine ha già installato un
             # file omonimo (layer in uso) l'import fallisce e ATAK riscarica
             # in loop — visto con «…HD-z20.zip» e «…HD-z20-png.zip»
-            package_hash, size = offline_map.build_package(gpkg, zip_path, filename[:-4], filename[:-4], extension)
+            package_hash, size = offline_map.build_package(
+                gpkg, zip_path, filename[:-4], filename[:-4], extension, extra_files
+            )
             if size > offline_map.MAX_PACKAGE_BYTES:
                 raise offline_map.OfflineMapError(
                     f"il data package pesa {size / 2**30:.1f} GB, oltre il limite di OTS (2 GB): "
@@ -347,7 +366,8 @@ def _build_offline_map(flask_app, uid: str, order: dict, headers: dict, user_id:
                 phase="completato",
                 progress=1.0,
                 finished_at=datetime.now(timezone.utc).isoformat(),
-                result={"filename": filename, "hash": package_hash, "size": size, "source": kind, **result},
+                result={"filename": filename, "hash": package_hash, "size": size, "source": kind, "product": product,
+                        **{k: v for k, v in result.items() if k != "stops"}},
             )
     except BaseException as e:
         logger.error(f"MilSim/SkyFi: mappa offline dell'ordine {uid} fallita: {e}")
@@ -3990,6 +4010,20 @@ class MilSimCompanionPlugin(Plugin):
             tile_format = body.get("format") or offline_map.DEFAULT_FORMAT
             if tile_format not in offline_map.FORMATS:
                 return jsonify({"success": False, "error": f"Formato non valido: {tile_format}"}), 400
+            product = body.get("product") or "visible"
+            if product not in offline_map.PRODUCTS:
+                return jsonify({"success": False, "error": f"Prodotto non valido: {product}"}), 400
+            scale = body.get("scale") or "relativa"
+            if scale not in offline_map.VEGETATION_SCALES:
+                return jsonify({"success": False, "error": f"Scala non valida: {scale}"}), 400
+            if product == "vegetation":
+                # L'infrarosso c'è solo nel COG (4 bande); il view-ready è RGB
+                if "cog" not in offline_map.available_sources(order):
+                    return jsonify({
+                        "success": False,
+                        "error": "La mappa della vegetazione richiede il COG dell'ordine (banda infrarossa), che non è disponibile",
+                    }), 400
+                source_kind, tile_format = "cog", "geotiff"
             source = offline_map.pick_source(order, source_kind)
             if not source:
                 return jsonify({
@@ -4030,6 +4064,8 @@ class MilSimCompanionPlugin(Plugin):
                     "source_size": source[1],
                     "max_zoom": max_zoom,
                     "format": tile_format,
+                    "product": product,
+                    "scale": scale if product == "vegetation" else None,
                     "started_at": datetime.now(timezone.utc).isoformat(),
                     "started_by": current_user.username,
                 }
@@ -4037,7 +4073,8 @@ class MilSimCompanionPlugin(Plugin):
 
             threading.Thread(
                 target=_build_offline_map,
-                args=(flask_app, uid, order, skyfi.headers(), current_user.id, max_zoom, source[0], tile_format),
+                args=(flask_app, uid, order, skyfi.headers(), current_user.id, max_zoom, source[0], tile_format,
+                      product, scale),
                 daemon=True,
                 name=f"skyfi-offline-{uid[:8]}",
             ).start()

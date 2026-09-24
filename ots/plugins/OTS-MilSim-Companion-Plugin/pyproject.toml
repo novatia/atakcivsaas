@@ -1,6 +1,6 @@
 [project]
 name = "OTS-MilSim-Companion-Plugin"
-version = "3.20.1"
+version = "3.21.0"
 description = "MilSim Soft-Air Companion per OpenTAKServer: calendario eventi con RSVP e presenze, punteggi e gradi, modalità di gioco (CTF, Bomb Defusal, TDM, Dominio) con template, luce verde e match engine lato server, ordini SkyFi, missioni Data Sync, stato mappe PCN e monitor Meshtastic con instradamento canale-gruppo"
 authors = [{name = "Andrea Novati", email = "email@nov41337.online"}]
 readme = "README.md"

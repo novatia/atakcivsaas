@@ -116,6 +116,13 @@ elif command -v apt-get >/dev/null 2>&1; then
 else
     warn "GDAL assente e apt-get non disponibile: installa i comandi GDAL a mano per la mappa offline HD."
 fi
+# Font della legenda della mappa della vegetazione (3.21.0+): senza, la
+# legenda esce col font incorporato di Pillow e senza accenti
+if [[ ! -f /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf ]] && command -v apt-get >/dev/null 2>&1; then
+    log "Installo fonts-dejavu-core (legenda della mappa della vegetazione)."
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q fonts-dejavu-core \
+        || warn "fonts-dejavu-core non installato: la legenda userà testo senza accenti."
+fi
 
 step "Installazione plugin nel venv (utente ${OTS_USER})"
 sudo -u "${OTS_USER}" "${PIP}" install --upgrade "${PLUGIN_DIR}"

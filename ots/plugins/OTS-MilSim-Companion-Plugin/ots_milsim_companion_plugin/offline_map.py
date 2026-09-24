@@ -39,7 +39,40 @@ import xml.etree.ElementTree as ET
 import zipfile
 from typing import Callable
 
-GDAL_TOOLS = ("gdalinfo", "gdal_translate", "gdalwarp", "gdaladdo")
+GDAL_TOOLS = ("gdalinfo", "gdal_translate", "gdalwarp", "gdaladdo", "gdaldem")
+
+# Prodotti: «visible» è l'immagine a colori; «vegetation» la mappa dello stato
+# della vegetazione (NDVI) calcolata dalla banda infrarossa del COG
+PRODUCTS = ("visible", "vegetation")
+VEGETATION_SCALES = ("relativa", "assoluta")
+
+# Tavolozza NDVI → colore (punti di controllo interpolati da gdaldem). La scala
+# «assoluta» usa questi valori; la «relativa» ridistribuisce i punti dalla
+# vegetazione in su (>= VEG_FIRST_STOP) fra il 2° e il 98° percentile della
+# scena: a inizio aprile un bosco in foglia nuova ha NDVI 0,2-0,4 e in scala
+# assoluta sembrerebbe «sofferente» (ordine 2639L3JY, Emilia-Romagna).
+VEGETATION_STOPS = [
+    (-0.30, (30, 70, 160)),    # acqua
+    (-0.02, (90, 150, 210)),
+    (0.00, (120, 90, 70)),     # suolo nudo, strade, costruito
+    (0.12, (175, 120, 80)),
+    (0.22, (215, 90, 50)),     # vegetazione scarsa o poco attiva
+    (0.32, (245, 165, 60)),
+    (0.42, (250, 225, 90)),    # vegetazione rada o intermedia
+    (0.52, (190, 225, 90)),
+    (0.62, (110, 190, 70)),    # vegetazione fitta
+    (0.72, (40, 140, 50)),
+    (0.85, (10, 80, 30)),      # la più fitta e vigorosa
+]
+VEG_FIRST_STOP = 0.12
+VEGETATION_LEGEND = [
+    ((30, 70, 160), "acqua (anche tetti scuri e ombre profonde)"),
+    ((120, 90, 70), "suolo nudo, strade, costruito"),
+    ((215, 90, 50), "vegetazione scarsa o poco attiva"),
+    ((250, 225, 90), "vegetazione rada o intermedia"),
+    ((110, 190, 70), "vegetazione fitta"),
+    ((10, 80, 30), "vegetazione la più fitta e vigorosa"),
+]
 
 # Preferenza fra i deliverable: il COG è l'immagine originale a piena qualità
 # (di solito 16 bit, 4 bande: va riscalata a 8 bit), il view-ready è una
@@ -416,6 +449,244 @@ def convert(
     }
 
 
+# ----------------------------------------------------------------------
+# Stato della vegetazione (NDVI dalla banda infrarossa)
+# ----------------------------------------------------------------------
+
+
+def red_nir_bands(info: dict) -> tuple[int, int]:
+    """(banda rossa, banda infrarossa). Il COG SkyFi ha R, G, B e una quarta
+    banda senza colorInterpretation che nei metadati dell'ordine è «nir»."""
+    bands = info.get("bands") or []
+    red = next((b["band"] for b in bands if _band_interp(b) == "red"), None)
+    nir = next(
+        (b["band"] for b in bands
+         if _band_interp(b) in ("nir", "nearinfrared") or "nir" in (b.get("description") or "").lower()),
+        None,
+    )
+    if nir is None and len(bands) == 4 and [_band_interp(b) for b in bands[:3]] == ["red", "green", "blue"] \
+            and _band_interp(bands[3]) != "alpha":
+        nir = 4
+    if red is None or nir is None:
+        raise OfflineMapError(
+            "il GeoTIFF non ha la banda infrarossa: la mappa della vegetazione si fa dal COG (4 bande), non dal view-ready"
+        )
+    return red, nir
+
+
+def _derived_vrt(width: int, height: int, info: dict, function: str, sources: list[tuple[str, int]]) -> str:
+    root = ET.Element("VRTDataset", {"rasterXSize": str(width), "rasterYSize": str(height)})
+    wkt = (info.get("coordinateSystem") or {}).get("wkt")
+    if wkt:
+        ET.SubElement(root, "SRS").text = wkt
+    if info.get("geoTransform"):
+        ET.SubElement(root, "GeoTransform").text = ", ".join(repr(float(v)) for v in info["geoTransform"])
+    band = ET.SubElement(root, "VRTRasterBand", {"dataType": "Float32", "band": "1", "subClass": "VRTDerivedRasterBand"})
+    ET.SubElement(band, "NoDataValue").text = "nan"
+    ET.SubElement(band, "PixelFunctionType").text = function
+    ET.SubElement(band, "SourceTransferType").text = "Float32"
+    for path, index in sources:
+        src = ET.SubElement(band, "SimpleSource")
+        ET.SubElement(src, "SourceFilename", {"relativeToVRT": "0"}).text = path
+        ET.SubElement(src, "SourceBand").text = str(index)
+    return ET.tostring(root, encoding="unicode")
+
+
+def ndvi_vrt(source: str, info: dict, work_dir: str) -> str:
+    """VRT virtuale con NDVI = (NIR − R) / (NIR + R), calcolato da GDAL pixel
+    per pixel (funzioni diff, sum, div): niente numpy, niente file intermedi.
+    Fuori dall'area dell'ordine (NIR = R = 0) esce inf o NaN a seconda della
+    versione di GDAL: la tavolozza li rende entrambi trasparenti."""
+    red, nir = red_nir_bands(info)
+    width, height = (info.get("size") or [0, 0])[:2]
+    source = os.path.abspath(source) if not source.startswith("/vsi") else source
+    paths = {}
+    for name, function in (("diff", "diff"), ("sum", "sum")):
+        paths[name] = os.path.join(work_dir, f"ndvi_{name}.vrt")
+        with open(paths[name], "w", encoding="utf-8") as f:
+            f.write(_derived_vrt(width, height, info, function, [(source, nir), (source, red)]))
+    vrt = os.path.join(work_dir, "ndvi.vrt")
+    with open(vrt, "w", encoding="utf-8") as f:
+        f.write(_derived_vrt(width, height, info, "div", [(paths["diff"], 1), (paths["sum"], 1)]))
+    return vrt
+
+
+def ndvi_percentiles(vrt: str, work_dir: str, low: float = 2, high: float = 98) -> tuple[float, float]:
+    """Percentili dell'NDVI della vegetazione (> 0,05) della scena, da una
+    copia ridotta a 1/8 riscalata a Byte (-1..1 → 0..254, 255 = fuori area)."""
+    small = os.path.join(work_dir, "ndvi_small.tif")
+    run(["gdal_translate", "-q", "-ot", "Byte", "-scale", "-1", "1", "0", "254", "-a_nodata", "255",
+         "-outsize", "12.5%", "12.5%", vrt, small])
+    info = gdalinfo_hist(small)
+    hist = (info.get("bands") or [{}])[0].get("histogram") or {}
+    buckets = hist.get("buckets") or []
+    lo, hi, n = float(hist.get("min", -0.5)), float(hist.get("max", 255.5)), len(buckets)
+    values = []  # (valore NDVI al centro del bucket, conteggio)
+    for i, count in enumerate(buckets):
+        byte = lo + (i + 0.5) * (hi - lo) / n
+        if byte >= 254.5:
+            continue
+        ndvi = byte / 254 * 2 - 1
+        if ndvi > 0.05 and count:
+            values.append((ndvi, count))
+    total = sum(c for _, c in values)
+    if not total:
+        raise OfflineMapError("nella scena non c'è vegetazione misurabile (NDVI > 0,05)")
+
+    def percentile(p):
+        target, acc = total * p / 100, 0
+        for value, count in values:
+            acc += count
+            if acc >= target:
+                return value
+        return values[-1][0]
+
+    p_lo, p_hi = percentile(low), percentile(high)
+    if p_hi - p_lo < 0.05:
+        p_hi = p_lo + 0.05
+    return p_lo, p_hi
+
+
+def gdalinfo_hist(path: str) -> dict:
+    text = run(["gdalinfo", "-json", "-hist", path])
+    try:
+        return json.loads(text[text.index("{"):])
+    except ValueError as e:
+        raise OfflineMapError(f"gdalinfo: risposta non leggibile ({e})") from e
+
+
+def vegetation_stops(scale: str, p_lo: float | None = None, p_hi: float | None = None) -> list:
+    if scale == "assoluta":
+        return list(VEGETATION_STOPS)
+    if scale != "relativa" or p_lo is None or p_hi is None:
+        raise OfflineMapError(f"scala non valida: {scale}")
+    fixed = [s for s in VEGETATION_STOPS if s[0] < VEG_FIRST_STOP]
+    veg = [s for s in VEGETATION_STOPS if s[0] >= VEG_FIRST_STOP]
+    a0, a1 = veg[0][0], veg[-1][0]
+    # la parte relativa non deve scendere sotto il suolo nudo (0)
+    start = max(p_lo, fixed[-1][0] + 0.01)
+    stops = fixed + [(start + (x - a0) / (a1 - a0) * (p_hi - start), c) for x, c in veg]
+    return stops
+
+
+def color_table(stops: list) -> str:
+    """Tavolozza per gdaldem color-relief -alpha: NaN (nv) e tutto ciò che sta
+    sopra 1, cioè inf fuori area, trasparenti; l'NDVI vero sta in [-1, 1]."""
+    lines = ["nv 0 0 0 0", f"-1 {' '.join(map(str, stops[0][1]))} 255"]
+    lines += [f"{x:.4f} {r} {g} {b} 255" for x, (r, g, b) in stops if -1 < x < 1]
+    lines += [f"1 {' '.join(map(str, stops[-1][1]))} 255", "1.0001 0 0 0 0"]
+    return "\n".join(lines) + "\n"
+
+
+def vegetation(
+    source: str,
+    out_tif: str,
+    work_dir: str,
+    on_step: Callable[[str, float], None] | None = None,
+    scale: str = "relativa",
+    max_zoom: int | None = None,
+) -> dict:
+    """COG a 4 bande → GeoTIFF COG a colori con lo stato della vegetazione,
+    stessa griglia e risoluzione della mappa visibile. Ritorna il risultato
+    di convert() più product, scale, ndvi_range, stops."""
+    step = on_step or (lambda phase, fraction: None)
+    step("analisi", 0)
+    info = gdalinfo(source)
+    vrt = ndvi_vrt(source, info, work_dir)
+    p_lo = p_hi = None
+    if scale == "relativa":
+        p_lo, p_hi = ndvi_percentiles(vrt, work_dir)
+    stops = vegetation_stops(scale, p_lo, p_hi)
+    table = os.path.join(work_dir, "ndvi_colori.txt")
+    with open(table, "w", encoding="utf-8") as f:
+        f.write(color_table(stops))
+
+    step("indice di vegetazione", 0)
+    colored = os.path.join(work_dir, "vegetazione_rgba.tif")
+    run(["gdaldem", "color-relief", vrt, table, colored, "-alpha",
+         "-co", "TILED=YES", "-co", "COMPRESS=DEFLATE", "-co", "BIGTIFF=IF_SAFER"],
+        lambda f: step("indice di vegetazione", f))
+    try:
+        result = convert(colored, out_tif, work_dir, on_step=step, max_zoom=max_zoom, tile_format="geotiff")
+    finally:
+        if os.path.exists(colored):
+            os.remove(colored)
+    result.update({
+        "product": "vegetation",
+        "scale": scale,
+        "ndvi_range": [round(p_lo, 3), round(p_hi, 3)] if p_lo is not None else None,
+        "stops": [[round(x, 4), list(c)] for x, c in stops],
+    })
+    return result
+
+
+def vegetation_legend(path: str, stops: list, scale: str, title: str, subtitle: str = "") -> None:
+    """Legenda PNG da mettere nel data package (ATAK non la disegna): barra
+    dei colori con i valori NDVI e le classi a parole."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    # Il font incorporato in Pillow non ha «ù» né le frecce: prima un font di
+    # sistema, altrimenti quello incorporato con il testo senza accenti
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+    ]
+    ttf = next((c for c in candidates if os.path.exists(c)), None)
+
+    def font(size):
+        if ttf:
+            return ImageFont.truetype(ttf, size)
+        try:
+            return ImageFont.load_default(size=size)
+        except TypeError:  # Pillow < 10.1
+            return ImageFont.load_default()
+
+    def txt(s):
+        if ttf:
+            return s
+        return s.replace("ù", "u'").replace("è", "e'").replace("à", "a'").replace("←", "<").replace("→", ">")
+
+    title, subtitle = txt(title), txt(subtitle)
+
+    stops = [(float(x), tuple(int(v) for v in c)) for x, c in stops]
+    width, pad = 1100, 40
+    img = Image.new("RGB", (width, 620), (250, 250, 246))
+    d = ImageDraw.Draw(img)
+    d.text((pad, 28), title, fill=(20, 24, 18), font=font(30))
+    if subtitle:
+        d.text((pad, 70), subtitle, fill=(90, 95, 85), font=font(20))
+    lo, hi = stops[0][0], stops[-1][0]
+    bar_y, bar_h, bar_w = 120, 50, width - 2 * pad
+    xs = [s[0] for s in stops]
+    for i in range(bar_w):
+        v = lo + (hi - lo) * i / (bar_w - 1)
+        j = max(k for k in range(len(xs)) if xs[k] <= v) if v >= xs[0] else 0
+        if j >= len(xs) - 1:
+            c = stops[-1][1]
+        else:
+            t = (v - xs[j]) / (xs[j + 1] - xs[j])
+            c = tuple(round(stops[j][1][k] + t * (stops[j + 1][1][k] - stops[j][1][k])) for k in range(3))
+        d.line([(pad + i, bar_y), (pad + i, bar_y + bar_h)], fill=c)
+    for x, _ in stops[::2]:
+        px = pad + (x - lo) / (hi - lo) * (bar_w - 1)
+        d.line([(px, bar_y + bar_h), (px, bar_y + bar_h + 8)], fill=(60, 60, 60))
+        d.text((px - 18, bar_y + bar_h + 12), f"{x:.2f}", fill=(60, 60, 60), font=font(16))
+    d.text((pad, bar_y + bar_h + 40), txt("NDVI: meno vegetazione attiva ← → più vegetazione attiva"), fill=(60, 60, 60), font=font(18))
+    y = bar_y + bar_h + 90
+    for color, label in VEGETATION_LEGEND:
+        d.rectangle([pad, y, pad + 36, y + 26], fill=color, outline=(80, 80, 80))
+        d.text((pad + 52, y + 1), txt(label), fill=(20, 24, 18), font=font(22))
+        y += 40
+    note = ("Scala relativa: i colori coprono i valori presenti in questa area e in questa data."
+            if scale == "relativa" else "Scala assoluta: soglie NDVI fisse, confrontabili fra aree diverse.")
+    d.text((pad, y + 10), txt(note), fill=(90, 95, 85), font=font(18))
+    d.text((pad, y + 40), txt("Misura la vegetazione vista dall'alto: non dice se sotto gli alberi si passa."),
+           fill=(90, 95, 85), font=font(18))
+    img.save(path)
+
+
 def center_lat(info: dict) -> float:
     """Latitudine del centro di un raster in EPSG:3857 (per i metri a terra)."""
     center = (info.get("cornerCoordinates") or {}).get("center") or [0, 0]
@@ -427,24 +698,31 @@ def center_lat(info: dict) -> float:
 # ----------------------------------------------------------------------
 
 
-def manifest_xml(package_name: str, package_uid: str, entry: str) -> bytes:
+def manifest_xml(package_name: str, package_uid: str, entry: str, extra_entries: list[str] = ()) -> bytes:
     root = ET.Element("MissionPackageManifest", {"version": "2"})
     config = ET.SubElement(root, "Configuration")
     ET.SubElement(config, "Parameter", {"name": "uid", "value": package_uid})
     ET.SubElement(config, "Parameter", {"name": "name", "value": package_name})
     contents = ET.SubElement(root, "Contents")
-    ET.SubElement(contents, "Content", {"ignore": "false", "zipEntry": entry})
+    for e in (entry, *extra_entries):
+        ET.SubElement(contents, "Content", {"ignore": "false", "zipEntry": e})
     return b'<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode").encode("utf-8")
 
 
-def build_package(gpkg: str, zip_path: str, package_name: str, map_name: str, extension: str = ".gpkg") -> tuple[str, int]:
+def build_package(gpkg: str, zip_path: str, package_name: str, map_name: str, extension: str = ".gpkg",
+                  extra_files: list[tuple[str, str]] = ()) -> tuple[str, int]:
     """Zip TAK con manifest + mappa (STORED: tile JPEG/PNG o GeoTIFF DEFLATE
-    sono già compressi, ricomprimerli costa solo CPU). Ritorna (sha256, dimensione)."""
+    sono già compressi, ricomprimerli costa solo CPU) + eventuali file in più
+    [(percorso, nome nel pacchetto)], es. la legenda della vegetazione.
+    Ritorna (sha256, dimensione)."""
     package_uid = str(uuid.uuid4())
     entry = f"{package_uid}/{map_name}{extension}"
+    extra = [(path, f"{package_uid}/{name}") for path, name in extra_files]
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
-        zf.writestr("MANIFEST/manifest.xml", manifest_xml(package_name, package_uid, entry))
+        zf.writestr("MANIFEST/manifest.xml", manifest_xml(package_name, package_uid, entry, [e for _, e in extra]))
         zf.write(gpkg, entry, compress_type=zipfile.ZIP_STORED)
+        for path, e in extra:
+            zf.write(path, e)
 
     sha256 = hashlib.sha256()
     with open(zip_path, "rb") as f:

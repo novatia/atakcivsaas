@@ -287,6 +287,20 @@ Ereditato dal fork OTS-SkyFi-Plugin (upstream brian7704, che non distribuisce la
     `gdal-bin` sul server (lo script di install lo installa se manca).
   - Oltre lo zoom nativo ATAK può solo ingrandire i pixel: nessun formato
     aggiunge dettaglio che l'immagine non ha.
+  - **Prodotto «Stato della vegetazione»**: dalla banda infrarossa del COG
+    (la quarta, `nir` nei metadati SkyFi) il plugin calcola l'**NDVI** =
+    (NIR − Rosso) / (NIR + Rosso) e lo colora (blu acqua, marrone suolo nudo,
+    rosso/arancio vegetazione scarsa, giallo intermedia, verdi fitta). Solo
+    comandi GDAL, niente numpy: un VRT con le funzioni pixel `diff`/`sum`/`div`,
+    poi `gdaldem color-relief -alpha`, poi la stessa conversione GeoTIFF del
+    visibile (pixel sulla griglia di ATAK). Fuori area (0/0) GDAL dà inf o NaN
+    secondo la versione: la tavolozza rende trasparente tutto ciò che è sopra 1
+    e il nodata. Scala **relativa** (default: i colori della vegetazione fra il
+    2° e il 98° percentile dell'NDVI della scena, da una copia a 1/8) o
+    **assoluta** (soglie fisse). Nel pacchetto c'è anche `Legenda
+    vegetazione.png` (Pillow; font DejaVu installato dallo script). Ordine
+    2639L3JY (Emilia-Romagna, 6 aprile 2023): 727 MB, 141 s sul PC di prova.
+    Misura la vegetazione vista dall'alto: non dice se sotto gli alberi si passa.
 - **🎯 Missione**: scarica il deliverable sul server e lo aggiunge ai contenuti di
   una missione **Data Sync**, replicando il flusso di `/Marti/sync/upload` +
   `PUT /Marti/api/missions/<name>/contents` (dedup per sha256, MissionChange
@@ -600,7 +614,7 @@ restano invariate per compatibilità con i config esistenti.
 | `GET /orders/<uid>/image` | admin | Anteprima ordine (data-URI, via proxy) |
 | `GET /orders/<uid>/download/<tipo>` | admin | Proxy del deliverable (image/payload/cog/view-ready) |
 | `POST /orders/<uid>/data_package` | admin | Data package ATAK con i tile WMTS dell'ordine |
-| `POST /orders/<uid>/offline_map` | admin | `{"max_zoom": "native"\|10-22, "source": "cog"\|"view-ready", "format": "png"\|"jpeg95"\|"jpeg85"\|"geotiff"}`: avvia la mappa offline HD (202) |
+| `POST /orders/<uid>/offline_map` | admin | `{"max_zoom": "native"\|10-22, "source": "cog"\|"view-ready", "format": "png"\|"jpeg95"\|"jpeg85"\|"geotiff", "product": "visible"\|"vegetation", "scale": "relativa"\|"assoluta"}`: avvia la mappa offline HD (202) |
 | `GET /orders/offline_maps` | admin | Stato dei job mappa offline + comandi GDAL mancanti |
 | `POST /orders/<uid>/mission` | admin | `{"mission", "deliverable_type"}`: asset nella missione Data Sync |
 | `GET /missions` · `GET /missions/<nome>/contents` | admin | Missioni Data Sync · contenuti condivisi |
@@ -651,6 +665,10 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.21.0** — mappa offline HD: prodotto **Stato della vegetazione** (NDVI
+  dalla banda infrarossa del COG, scala relativa o assoluta) come GeoTIFF in un
+  data package, con la legenda PNG nel pacchetto. `gdaldem` fra i comandi
+  richiesti; lo script di install aggiunge `fonts-dejavu-core`.
 - **3.20.1** — mappa offline HD: GeoTIFF COG formato di default (verificato su
   ATAK-CIV: dettaglio pieno, circa un terzo del COG di SkyFi).
 - **3.20.0** — mappa offline HD: formato **GeoTIFF COG senza perdita** (niente

@@ -291,10 +291,22 @@
   <div class="modal" onclick="event.stopPropagation()">
     <h2>🛰 Mappa offline HD</h2>
     <div id="offline-order" class="muted"></div>
-    <label>Immagine di partenza
+    <label>Prodotto
+      <select id="offline-product" onchange="offlineProductChanged()">
+        <option value="visible" selected>Mappa a colori (come la vedi a occhio)</option>
+        <option value="vegetation">Stato della vegetazione (NDVI, dalla banda infrarossa)</option>
+      </select>
+    </label>
+    <label id="offline-scale-label" class="hidden">Scala dei colori
+      <select id="offline-scale">
+        <option value="relativa" selected>Relativa: colori sui valori di quest'area e di questa data (consigliata)</option>
+        <option value="assoluta">Assoluta: soglie fisse, per confrontare aree o date diverse</option>
+      </select>
+    </label>
+    <label id="offline-source-label">Immagine di partenza
       <select id="offline-source"></select>
     </label>
-    <label>Formato
+    <label id="offline-format-label">Formato
       <select id="offline-format">
         <option value="geotiff" selected>GeoTIFF (COG) senza perdita: ATAK lo mostra al dettaglio pieno (consigliato)</option>
         <option value="png">GeoPackage PNG senza perdita (ATAK-CIV lo mostra meno dettagliato)</option>
@@ -317,6 +329,9 @@
       Se il sorgente è già sulla griglia di ATAK (i deliverable SkyFi lo sono) i pixel vengono copiati identici.
       Può durare da qualche minuto a oltre un'ora; ogni livello di zoom in meno divide la dimensione per 4.
       Oltre lo zoom nativo ATAK può solo ingrandire i pixel: nessun formato aggiunge dettaglio che l'immagine non ha.</p>
+    <p class="muted hidden" id="offline-veg-note" style="margin:0">La vegetazione si calcola dal <b>COG</b> (serve la banda
+      infrarossa) e diventa un GeoTIFF a colori alla stessa risoluzione della mappa normale, con la legenda nel data package.
+      Misura la vegetazione vista dall'alto: non dice se sotto gli alberi si passa. Come leggerla: Manuale Operatore, sez. 8.</p>
     <div class="modal-actions">
       <button class="btn" onclick="closeOfflineModal()">Annulla</button>
       <button class="btn primary" id="offline-btn" onclick="startOfflineMap()">Avvia conversione</button>
@@ -2710,10 +2725,17 @@ async function skyfiDataPackage(btn, uid) {
 // stato finché c'è un job attivo, e solo mentre il tab SkyFi è aperto
 let OFFLINE = { jobs: {}, gdalMissing: [], timer: null, uid: null };
 const OFFLINE_POLL_MS = 4000;
-const OFFLINE_PHASES = { download: "download da SkyFi", analisi: "analisi del GeoTIFF", conversione: "conversione in GeoPackage",
+const OFFLINE_PHASES = { download: "download da SkyFi", analisi: "analisi del GeoTIFF", conversione: "conversione",
+  "indice di vegetazione": "calcolo dell'indice di vegetazione",
   "livelli di zoom": "livelli di zoom inferiori", "data package": "creazione del data package" };
 
 const OFFLINE_FORMATS = { png: "PNG senza perdita", jpeg95: "JPEG 95", jpeg85: "JPEG 85", geotiff: "GeoTIFF COG senza perdita" };
+
+function offlineProductChanged() {
+  const veg = document.getElementById("offline-product").value === "vegetation";
+  for (const id of ["offline-scale-label", "offline-veg-note"]) document.getElementById(id).classList.toggle("hidden", !veg);
+  for (const id of ["offline-source-label", "offline-format-label"]) document.getElementById(id).classList.toggle("hidden", veg);
+}
 
 function hasOfflineSource(o) { return !!(o.downloadViewReadyCogUrl || o.downloadCogUrl); }
 
@@ -2724,7 +2746,10 @@ function offlineStatusHtml(job) {
     const ground = r.ground_resolution ? `, ${Math.round(r.ground_resolution * 1000) / 10} cm/pixel a terra` : "";
     const how = [r.source === "cog" ? "dal COG" : r.source ? "dal " + esc(r.source) : "",
       r.aligned ? "pixel copiati identici" : "", OFFLINE_FORMATS[r.tile_format] || ""].filter(Boolean).join(", ");
-    return `✅ Mappa offline pronta: <b>${esc(r.filename)}</b> (${fmtBytes(r.size)}, zoom fino a ${r.zoom}${r.zoom < r.native_zoom ? `, nativo ${r.native_zoom}` : ""}${ground}${how ? "; " + how : ""}).
+    const what = r.product === "vegetation"
+      ? `Mappa della vegetazione pronta (scala ${esc(r.scale || "")}${r.ndvi_range ? `, NDVI ${r.ndvi_range[0]}–${r.ndvi_range[1]}` : ""})`
+      : "Mappa offline pronta";
+    return `✅ ${what}: <b>${esc(r.filename)}</b> (${fmtBytes(r.size)}, zoom fino a ${r.zoom}${r.zoom < r.native_zoom ? `, nativo ${r.native_zoom}` : ""}${ground}${how ? "; " + how : ""}).
       È tra i data package del server: su ATAK scaricala dai data package del server, oppure mettila in una missione.`;
   }
   if (job.status === "error") return `⚠️ Mappa offline fallita: ${esc(job.error)}`;
@@ -2766,6 +2791,11 @@ function openOfflineModal(uid) {
   if (o.downloadViewReadyCogUrl) sources.push(`<option value="view-ready">View-ready: già compresso JPEG da SkyFi${o.viewReadyCogSize ? " (" + fmtBytes(o.viewReadyCogSize) + ")" : ""}</option>`);
   document.getElementById("offline-source").innerHTML = sources.join("");
   document.getElementById("offline-format").value = "geotiff";
+  document.getElementById("offline-product").value = "visible";
+  document.getElementById("offline-scale").value = "relativa";
+  // La vegetazione richiede il COG (banda infrarossa)
+  document.querySelector('#offline-product option[value="vegetation"]').disabled = !o.downloadCogUrl;
+  offlineProductChanged();
   document.getElementById("offline-zoom").value = "native";
   document.getElementById("offline-order").textContent =
     `Ordine ${o.orderCode}${o.geocodeLocation ? " — " + o.geocodeLocation : ""}${o.resolution ? " · " + o.resolution : ""}`;
@@ -2793,6 +2823,8 @@ async function startOfflineMap() {
         max_zoom: document.getElementById("offline-zoom").value,
         source: document.getElementById("offline-source").value,
         format: document.getElementById("offline-format").value,
+        product: document.getElementById("offline-product").value,
+        scale: document.getElementById("offline-scale").value,
       },
     });
     toast("Conversione avviata sul server: l'avanzamento compare sulla card dell'ordine.");
