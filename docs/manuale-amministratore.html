@@ -204,7 +204,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MA-TAK-001 · Rev 15 · 2026-09-20</span><span>Server: n3test002</span></div>
+    <div class="doc-meta"><span>MA-TAK-001 · Rev 17 · 2026-09-24</span><span>Server: n3test002</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Amministratore<br>Tactical Scout Codogno</h1>
@@ -388,6 +388,30 @@ sudo certbot certonly --nginx -d tacticalscout.3utilities.com --deploy-hook "sys
 sudo certbot renew --dry-run   <span class="c"># deve chiudere con "all simulated renewals succeeded"</span></pre>
     <p><code>certbot certonly</code> installa solo i file in <code>/etc/letsencrypt/live/</code> e <strong>non tocca la configurazione nginx</strong> (la regola d'oro sulla 8443 resta al sicuro). Se la validazione fallisce con timeout o «unauthorized», verificare che la regola firewall GCP per la porta 80 sia aperta verso internet.</p></div>
 
+    <h3>Sentinella dei servizi: riavvio automatico e avvisi Telegram</h3>
+    <p>Un secondo timer (<code>ots-health-check.timer</code>, ogni 5 minuti) esegue <code>ots/scripts/check-services.sh</code> direttamente dal clone del repo. A ogni giro fa tre controlli, e ripara quello che può:</p>
+    <div class="tblwrap"><table>
+      <tr><th>Controllo</th><th>Se fallisce</th></tr>
+      <tr><td>Le unit <code>rabbitmq-server</code>, <code>opentakserver</code>, <code>opentakserver-cot-parser</code>, <code>opentakserver-eud-handler</code> sono attive</td><td>Riavvia l'unit caduta (RabbitMQ per primo)</td></tr>
+      <tr><td>Il processo <code>cot_parser</code> esiste davvero</td><td>Riavvia <code>opentakserver-cot-parser</code></td></tr>
+      <tr><td>Con EUD collegati sulla 8089, la tabella <code>cot</code> è cresciuta negli ultimi 10 minuti</td><td>Salva una diagnosi del parser, poi lo riavvia (al massimo una volta ogni 30 minuti)</td></tr>
+    </table></div>
+    <p>Riavviare il parser <strong>non scollega gli EUD</strong>: le connessioni dei telefoni stanno su <code>eud_handler</code>. Gli avvisi arrivano sullo stesso bot Telegram dei certificati, solo quando lo stato cambia: un messaggio quando il guasto compare, uno quando si risolve (✅).</p>
+    <p>Installazione, o aggiornamento dopo una modifica allo script:</p>
+    <pre>cd /home/ots/atakcivsaas &amp;&amp; git pull
+chmod +x ots/scripts/check-services.sh
+sudo -u ots /home/ots/.opentakserver_venv/bin/pip install py-spy   <span class="c"># per lo stack nella diagnosi</span>
+sudo cp ots/systemd/ots-health-check.{service,timer} /etc/systemd/system/   <span class="c"># solo la prima volta</span>
+sudo systemctl daemon-reload &amp;&amp; sudo systemctl enable --now ots-health-check.timer</pre>
+    <p>Verifica:</p>
+    <pre>sudo /home/ots/atakcivsaas/ots/scripts/check-services.sh --dry   <span class="c"># controlla senza riavviare niente</span>
+systemctl list-timers ots-health-check.timer --no-pager            <span class="c"># NEXT a meno di 5 minuti</span>
+sudo /home/ots/atakcivsaas/ots/scripts/check-services.sh --test  <span class="c"># messaggio di prova su Telegram</span></pre>
+    <p>Con tutto a posto <code>--dry</code> risponde con una riga come <code>tutto a posto · unit: 4 verificate · EUD collegati: 8 · CoT: ultimo CoT 78s fa</code>. Le soglie si cambiano in <code>/etc/ots-notify.env</code>: <code>COT_STALE_MINUTES</code> (default 10) e <code>PARSER_RESTART_COOLDOWN_MINUTES</code> (default 30).</p>
+    <div class="warn"><span class="tag">Caso reale (2026-09-23)</span><p>Alle 23:20 UTC il <code>cot_parser</code> ha perso la sua connessione locale a RabbitMQ ma il processo è <strong>rimasto vivo</strong>: <code>on_message</code> intercetta ogni eccezione (<code>except BaseException</code>) e prosegue. Unit verde, processo presente, EUD collegati, ma nessun CoT smistato né scritto per 7 ore, finché non è stato riavviato a mano. Né <code>Restart=always</code> né il controllo sul processo potevano accorgersene: per questo la sentinella guarda i dati, non i processi. Non si è trattato di un attacco: la connessione caduta era locale (<code>127.0.0.1</code>, utente <code>guest</code>). Verificato su OpenTAKServer 1.7.13.</p></div>
+    <p><strong>Quando arriva l'avviso «… smistamento fermo; cot_parser riavviato (diagnosi in …)»</strong> il servizio si è già ripreso da solo. Il file indicato, <code>/var/log/ots-health/cot-parser-stall-&lt;data&gt;.txt</code>, contiene lo stack Python di ogni processo del parser al momento del blocco (<code>py-spy dump</code>), le sue connessioni TCP e i consumer della coda <code>cot_parser</code>: va conservato e allegato alla segnalazione del bug, perché è l'unica prova di dove il parser si era fermato. Se invece arriva <strong>«il riavvio del parser … non è bastato»</strong>, il guasto è altrove (tipicamente <code>eud_handler</code> o RabbitMQ): partire dalla <a href="#s9">sez. 9</a>.</p>
+    <div class="note"><span class="tag">Se serve riavviare a mano</span><p>Prima del riavvio salvare lo stack del parser appeso, altrimenti la prova va persa: <code>sudo /home/ots/.opentakserver_venv/bin/py-spy dump --pid $(pgrep -f "bin/cot_parser" | tail -1)</code>, poi <code>sudo systemctl restart opentakserver-cot-parser</code>.</p></div>
+
     <h3>Tracce GPS, replay delle giocate e retention</h3>
     <p>Ogni posizione trasmessa da un EUD collegato viene salvata dal <code>cot_parser</code> nel database, senza alcuna configurazione: tabella <code>points</code> (lat/lon, quota, velocità, rotta, batteria, timestamp <strong>in UTC</strong>), collegata a <code>cot</code> (l'XML grezzo dell'evento) e a <code>euds</code> (anagrafica dispositivi, con <code>callsign</code>, <code>last_status</code> e <code>last_event_time</code>). È il motivo per cui la unit <code>opentakserver-cot-parser</code> deve sempre girare (v. «Servizi»).</p>
     <p>Su queste tabelle si appoggia il <strong>replay delle giocate</strong> del plugin EventCalendar (dalla v2.3.0): bottone <strong>«▶ Giocata»</strong> su ogni evento del calendario → player su mappa con velocità 1x/3x/5x/10x/100x, slider temporale e scie per EUD. Funziona retroattivamente su tutto lo storico già in <code>points</code>; le tracce esistono solo per gli EUD che erano <em>collegati al server</em> durante l'evento. Gli orari del calendario sono interpretati nel fuso <code>OTS_EVENTCALENDAR_TIMEZONE</code> (default <code>Europe/Rome</code>) — il server è in UTC, la conversione la fa il plugin.</p>
@@ -410,6 +434,125 @@ OTS_DELETE_OLD_DATA_WEEKS: 0</pre>
 ss -tlnp | grep -E '8080|8089|8443'
 pgrep -af 'bin/eud_handler'   <span class="c"># una sola riga</span>
 tail -20 /home/ots/ots/logs/opentakserver.log</pre>
+
+    <h3>Nodo Meshtastic su Raspberry Pi: sistema operativo e meshtasticd</h3>
+    <p>Un Raspberry Pi con radio LoRa collegata via SPI può fare da <strong>gateway Meshtastic</strong> per il server: riceve la mesh via LoRa e la inoltra a OpenTAKServer via MQTT (Path B, v. «Integrazione col server» in sez. 5 e il documento <code>docs/meshtastic-architettura.md</code> nel repo per l'analisi completa del meccanismo di instradamento). Questa sezione documenta la procedura verificata passo-passo su un Raspberry Pi 3B+ reale.</p>
+    <p>Sistema operativo: <strong>Raspberry Pi OS Lite 64-bit</strong> (Bookworm o Trixie) — mai la variante 32-bit, <code>meshtasticd</code> non la supporta. Verifica dopo l'installazione:</p>
+    <pre>uname -m   <span class="c"># deve dare "aarch64", non "armv7l"</span></pre>
+    <p><code>meshtasticd</code> non è nei repository Raspberry Pi OS: si installa dal repo openSUSE Build Service <code>network:Meshtastic:beta</code>, che pubblica un pacchetto per ogni versione di Debian. Il repo da usare dipende dalla versione Debian <em>sottostante</em>, non dal nome in codice di Raspberry Pi OS — si verifica con:</p>
+    <pre>cat /etc/os-release   <span class="c"># VERSION_CODENAME=bookworm -> Debian_12, VERSION_CODENAME=trixie -> Debian_13</span></pre>
+    <pre><span class="c"># sostituire &lt;N&gt; con 12 (bookworm) o 13 (trixie)</span>
+sudo apt install -y curl gnupg
+curl -fsSL https://download.opensuse.org/repositories/network:Meshtastic:beta/Debian_&lt;N&gt;/Release.key \
+  | gpg --dearmor | sudo tee /usr/share/keyrings/meshtastic-archive-keyring.gpg &gt; /dev/null
+echo "deb [signed-by=/usr/share/keyrings/meshtastic-archive-keyring.gpg] \
+https://download.opensuse.org/repositories/network:Meshtastic:beta/Debian_&lt;N&gt;/ /" \
+  | sudo tee /etc/apt/sources.list.d/meshtastic.list
+sudo apt update
+sudo apt install -y meshtasticd</pre>
+    <div class="warn"><span class="tag">Attenzione</span><p>Usare il repo per la versione Debian sbagliata (es. <code>Debian_11</code> su un sistema Bookworm) installa comunque un pacchetto, ma con librerie incompatibili: <code>meshtasticd</code> parte e poi crasha in modo poco chiaro. Verificare sempre <code>/etc/os-release</code> prima, non fidarsi del nome in codice ricordato a memoria.</p></div>
+
+    <h3>HAT non compatibili: il caso Waveshare E22 UART</h3>
+    <p>Alcuni HAT LoRa in vendita dichiarano nel marketing «Support Meshtastic Project» ma <strong>non sono compatibili con <code>meshtasticd</code></strong>: gli HAT Waveshare basati sul modulo <strong>EBYTE E22</strong> con interfaccia <strong>UART</strong> parlano un protocollo proprietario via seriale, non SPI diretto — <code>meshtasticd</code> richiede l'accesso diretto al chip radio (SX126x/SX127x) via SPI, non un modulo che lo incapsula dietro un firmware UART.</p>
+    <p>Riconoscibili da: modulo <strong>E22-xxxT22S</strong> visibile sulla scheda, jumper di configurazione <strong>M0/M1</strong>, connettore <strong>USB-to-UART CP2102</strong> a bordo. Restano utilizzabili con altri stack che parlano UART, ad esempio <strong>Reticulum</strong> come <code>SerialInterface</code> — ma non con questo plugin/integrazione, pensata per <code>meshtasticd</code>.</p>
+    <div class="note"><span class="tag">Scoperto in sessione</span><p>Il primo HAT provato in questo collaudo era proprio di questo tipo (E22-xxxT22S, jumper M0/M1, CP2102 a bordo): si accoppiava e sembrava rispondere, ma <code>meshtasticd</code> non riusciva mai a inizializzare la radio. Riconoscere questi segni <em>prima</em> di ordinare hardware evita il giro a vuoto.</p></div>
+
+    <h3>Hardware funzionante: Adafruit RFM9x via SPI diretto</h3>
+    <p>Verificato funzionante: <strong>Adafruit RFM9x LoRa Radio Transceiver Breakout</strong> (chip <strong>SX1276</strong>, variante <strong>868 MHz</strong> per l'Europa), collegato via <strong>SPI diretto</strong> — non un HAT plug-and-play, cablaggio a mano su breadboard o dupont.</p>
+    <div class="tblwrap"><table>
+      <tr><th>Segnale RFM9x</th><th>GPIO BCM</th><th>Pin fisico</th></tr>
+      <tr><td>VCC</td><td>—</td><td>1 (3.3V)</td></tr>
+      <tr><td>GND</td><td>—</td><td>6 (GND)</td></tr>
+      <tr><td>SCK</td><td>GPIO11</td><td>23</td></tr>
+      <tr><td>MISO</td><td>GPIO9</td><td>21</td></tr>
+      <tr><td>MOSI</td><td>GPIO10</td><td>19</td></tr>
+      <tr><td>CS</td><td>GPIO7 (CE1)</td><td>26</td></tr>
+      <tr><td>RST</td><td>GPIO25</td><td>22</td></tr>
+      <tr><td>G0 / IRQ</td><td>GPIO22</td><td>15</td></tr>
+      <tr><td>EN, G1–G5</td><td colspan="2">non collegati</td></tr>
+    </table></div>
+    <p>Preset di <code>meshtasticd</code> da abilitare: <code>/etc/meshtasticd/available.d/lora-Adafruit-RFM9x.yaml</code> (copiarlo o linkarlo in <code>config.d/</code> secondo la convenzione del pacchetto, poi riavviare il servizio).</p>
+
+    <h3>Fix critico: <code>dtoverlay=spi0-0cs</code> in <code>config.txt</code></h3>
+    <p>Con il cablaggio sopra (CS su GPIO7/CE1), senza un overlay dedicato <code>meshtasticd</code> crasha all'avvio con:</p>
+    <pre>gpiod_line_request_reconfigure_lines: Assertion 'request' failed</pre>
+    <p>La causa: il kernel Raspberry Pi tiene <strong>GPIO7 (CE1)</strong> riservato come chip-select hardware nativo dello SPI, ma <code>meshtasticd</code> vuole controllarlo <strong>via software</strong> (libgpiod). I due meccanismi confliggono sulla stessa linea. Il fix è liberare tutti i chip-select hardware dallo SPI0, aggiungendo in <code>/boot/firmware/config.txt</code>, sotto <code>[all]</code>, accanto a <code>dtparam=spi=on</code> già presente:</p>
+    <pre>dtparam=spi=on
+dtoverlay=spi0-0cs</pre>
+    <p>Riavvio richiesto dopo la modifica.</p>
+    <div class="warn"><span class="tag">Bug noto del kernel</span><p>Su Pi 3B+ e Zero 2W con <strong>Debian 12/Bookworm</strong> è documentato un bug del kernel per cui questo overlay non viene sempre rispettato (<a href="https://github.com/raspberrypi/linux/issues/5835">github.com/raspberrypi/linux/issues/5835</a>). In questa sessione, su <strong>Raspberry Pi OS Trixie</strong>, l'overlay ha funzionato correttamente al primo tentativo. Se su Bookworm il crash persiste nonostante la riga in <code>config.txt</code>, questo bug upstream è il primo sospetto.</p></div>
+
+    <h3>Debug hardware: «RF95 init result -2» / chip non trovato</h3>
+    <p>Con questo messaggio nel log di <code>meshtasticd</code> la causa è quasi sempre <strong>cablaggio fisico</strong>, non configurazione software: MISO/MOSI scambiati, o (il caso reale di questa sessione) il pin <strong>CS collegato al pin fisico sbagliato</strong>.</p>
+    <p>Metodo di isolamento verificato: testare la radio con la libreria Python <code>adafruit-circuitpython-rfm9x</code>, indipendente da <code>meshtasticd</code> — se anche questa non trova il chip, il problema è nel cablaggio, non nello stack Meshtastic; se lo trova, il problema è nella configurazione di <code>meshtasticd</code> (preset o overlay SPI).</p>
+
+    <h3>Impostare la regione radio</h3>
+    <p>Il firmware parte di default su <code>UNSET</code>, che in pratica usa la banda <strong>US915</strong> (902–928 MHz) — sbagliata per l'Europa e non interoperabile con le radio del gruppo. Da impostare subito dopo il primo avvio:</p>
+    <pre>meshtastic --host localhost --set lora.region EU_868</pre>
+    <p>Verifica nei log che la regione sia stata applicata cercando <code>myRegion-&gt;freqStart</code>: deve riportare l'intervallo europeo, non quello americano.</p>
+
+    <h3>Bridge MQTT verso OpenTAKServer: sicurezza preliminare</h3>
+    <div class="warn"><span class="tag">Prima di collegare qualunque nodo reale</span><p>Verificare che il plugin MQTT di RabbitMQ non accetti connessioni anonime: <code>grep mqtt.allow_anonymous /etc/rabbitmq/rabbitmq.conf</code>. Su questo server la porta 1883 era stata trovata esposta su internet con accesso anonimo attivo, e uno scanner (Censys) aveva già creato code spazzatura sfruttandolo (v. <a href="#s7">sez. 7</a> e il registro degli incidenti del server). Con l'accesso anonimo attivo, <strong>chiunque su internet</strong> può pubblicare o sottoscrivere sull'exchange MQTT, incluso spacciarsi per un nodo Meshtastic legittimo: disabilitarlo prima di procedere, non dopo.</p>
+      <p><strong>Stato attuale (verificato il 2026-09-24):</strong> <code>mqtt.allow_anonymous = false</code> dal 2026-09-22 e la coda di Censys non esiste più. La 1883 resta aperta di proposito per i gateway (utente <code>meshtastic_pi</code>). Attenzione: con <code>auth_backends.2 = http</code> RabbitMQ accetta anche gli <strong>account di OpenTAKServer</strong>, quindi una password OTS debole apre anche MQTT; la 1883 non è cifrata. Per ricontrollare l'accesso e le code:</p>
+      <pre>sudo rabbitmq-diagnostics environment | grep -iE "allow_anonymous|loopback_users"
+for vh in $(sudo rabbitmqctl list_vhosts -q); do sudo rabbitmqctl list_queues -q -p "$vh" name; done | grep -i censys   <span class="c"># nessun output = nessuna coda</span>
+sudo rabbitmqctl list_connections name peer_host protocol user | grep -i mqtt</pre></div>
+
+    <h3>Utente RabbitMQ dedicato al nodo Meshtastic</h3>
+    <p>Ogni nodo Meshtastic che pubblica via MQTT deve avere un <strong>utente RabbitMQ dedicato</strong>, non le credenziali di OpenTAKServer. È il passaggio con più insidie di tutta la procedura: un utente che si autentica ma non può pubblicare/sottoscrivere sembra «funzionare» (connessione accettata) mentre in realtà non passa un solo messaggio.</p>
+    <pre>sudo rabbitmqctl add_user &lt;nodo&gt; '&lt;password&gt;'
+sudo rabbitmqctl set_user_tags &lt;nodo&gt; ""   <span class="c"># nessun tag: non è un utente di amministrazione</span></pre>
+    <p>I permessi di <strong>base</strong> (configure/write/read) vanno impostati così — sono il requisito minimo perché un client MQTT funzioni con RabbitMQ, non solo per Meshtastic: ogni client MQTT ottiene una coda di sessione privata (<code>mqtt-subscription-*</code>), quindi serve poterla creare (<code>configure</code>), collegarla all'exchange (<code>write</code>+<code>read</code> per il bind) e consumarne i messaggi (<code>read</code>), oltre a poter pubblicare sull'exchange <code>amq.topic</code> (<code>write</code>):</p>
+    <pre>sudo rabbitmqctl set_permissions -p / &lt;nodo&gt; \
+  "^mqtt-subscription-.*$" \
+  "^(amq\.topic|mqtt-subscription-.*)$" \
+  "^(amq\.topic|mqtt-subscription-.*)$"</pre>
+    <p>Facoltativo ma consigliato in aggiunta (non al posto dei permessi di base sopra): restringere <strong>a livello di topic</strong> ciò che l'utente può pubblicare/sottoscrivere al solo prefisso del proprio nodo, così un nodo compromesso non può spacciarsi per un altro:</p>
+    <pre>sudo rabbitmqctl set_topic_permissions -p / &lt;nodo&gt; amq.topic "^&lt;topic_root&gt;\..*" "^&lt;topic_root&gt;\..*"</pre>
+    <div class="note"><span class="tag">Diagnosi quando qualcosa non torna</span><p>Il modo più affidabile per capire quale permesso manca <strong>non</strong> è indovinare i pattern: è guardare il log di RabbitMQ mentre si ripete il tentativo di connessione del nodo.</p>
+    <pre>sudo tail -f /var/log/rabbitmq/rabbit@&lt;hostname&gt;.log</pre>
+    <p>Il log riporta esattamente quale risorsa e quale permesso sono stati negati, ad esempio «write access to queue 'mqtt-subscription-...' refused» — da lì si vede subito quale dei tre pattern (configure/write/read) manca.</p></div>
+    <p>Test isolato consigliato prima di accendere il nodo reale: pacchetto <code>mosquitto-clients</code>, per parlare col broker MQTT con le credenziali del nodo bypassando completamente Meshtastic.</p>
+    <pre>sudo apt install -y mosquitto-clients
+mosquitto_sub -h localhost -p 1883 -u &lt;nodo&gt; -P '&lt;password&gt;' -t '#' -v</pre>
+    <p>Se questo funziona ma il nodo reale no, il problema è nello stack Meshtastic (configurazione MQTT del nodo, § successivo). Se non funziona nemmeno questo, il problema è nei permessi RabbitMQ appena impostati.</p>
+
+    <h3>Configurazione di OpenTAKServer (config.yml)</h3>
+    <p>In <code>/home/ots/ots/config.yml</code>, per abilitare l'osservazione MQTT del monitor MilSim Companion (v. <code>docs/meshtastic-architettura.md</code> per il dettaglio dell'architettura a due percorsi):</p>
+    <pre>OTS_ENABLE_MESHTASTIC: True
+OTS_MESHTASTIC_TOPIC: opentakserver
+OTS_MESHTASTIC_GROUP: Meshtastic
+OTS_MILSIM_MESH_MQTT_OBSERVER: True
+OTS_MILSIM_MESH_FALLBACK_POLICY: source_eud_group</pre>
+    <pre>sudo systemctl restart opentakserver</pre>
+    <p>L'avvio corretto si verifica nei log applicativi dedicati, <strong>non</strong> in <code>journalctl</code> — OpenTAKServer logga su file, non sul journal di systemd:</p>
+    <pre>tail -f /home/ots/ots/logs/opentakserver.log</pre>
+    <p>Cercare, nell'ordine in cui compaiono all'avvio:</p>
+    <ul>
+      <li><code>MilSim mesh: observer MQTT avviato</code></li>
+      <li><code>MilSim mesh: mqtt connesso a RabbitMQ</code></li>
+      <li><code>MilSim mesh: firehose connesso a RabbitMQ</code></li>
+    </ul>
+
+    <h3>Configurazione del nodo Meshtastic (lato Raspberry Pi)</h3>
+    <pre>meshtastic --host localhost --set mqtt.enabled true
+meshtastic --host localhost --set mqtt.address &lt;host&gt;:1883
+meshtastic --host localhost --set mqtt.username &lt;nodo&gt;
+meshtastic --host localhost --set mqtt.password '&lt;password&gt;'
+meshtastic --host localhost --set mqtt.root opentakserver
+meshtastic --host localhost --set mqtt.encryption_enabled true
+meshtastic --host localhost --ch-index 0 --ch-set uplink_enabled true</pre>
+    <p><code>mqtt.root</code> deve combaciare con <code>OTS_MESHTASTIC_TOPIC</code> lato server; <code>uplink_enabled</code> va abilitato sul canale (indice <code>0</code> è il canale primario, <code>LongFast</code> di default) che deve raggiungere il server — senza, il nodo resta sulla mesh locale e non pubblica nulla via MQTT.</p>
+
+    <h3>Path A o Path B: che cosa arriva davvero al server</h3>
+    <p>Esistono due modi in cui un tag Meshtastic raggiunge OpenTAKServer, e portano informazioni molto diverse — la scelta/comprensione di quale via è in uso determina cosa si può vedere e mappare per canale:</p>
+    <div class="tblwrap"><table>
+      <tr><th>Via</th><th>Come arriva</th><th>Canale Meshtastic</th><th>RSSI/SNR/hop</th></tr>
+      <tr><td><strong>Path A</strong> — relay ATAK</td><td>Radio → telefono via Bluetooth → plugin Meshtastic di ATAK → «Relay to Server»</td><td>NO — <code>&lt;__meshtastic/&gt;</code> arriva sempre vuoto, è solo un flag di provenienza</td><td>NO</td></tr>
+      <tr><td><strong>Path B</strong> — questo bridge MQTT</td><td>Radio → nodo gateway (questa procedura) → MQTT → RabbitMQ → OpenTAKServer</td><td><strong>SÌ</strong> — sta nella routing key del topic MQTT</td><td><strong>SÌ</strong> — dal protobuf</td></tr>
+    </table></div>
+    <p>Un EUD ATAK con il plugin Meshtastic attivo rilancia sempre via Path A in aggiunta a quanto arriva via Path B: non sono alternativi, convivono. Per il dettaglio di come MilSim Companion instrada per canale, la policy di fallback quando il canale non è noto, e i limiti strutturali del relay ATAK (perché il canale non può comparire lì senza una modifica al plugin upstream), vedere <code>docs/meshtastic-architettura.md</code> nel repo — l'analisi è stata condotta leggendo il sorgente reale di OpenTAKServer, del plugin ATAK e di <code>mesh.py</code>, non sulla documentazione.</p>
+    <div class="note"><span class="tag">Verificato</span><p>Procedura end-to-end (nodo Raspberry Pi + bridge MQTT) verificata funzionante il 2026-09-22 su Raspberry Pi 3B+, Raspberry Pi OS Trixie 64-bit, meshtasticd 2.7.26, OpenTAKServer 1.7.13.</p></div>
   </section>
 
   <section id="s8">
@@ -480,6 +623,11 @@ sudo /home/ots/atakcivsaas/ots/scripts/install-eventcalendar-plugin.sh --check</
         <td>EUD connessi ma invisibili in mappa; chat e data package non arrivano; tabelle <code>cot</code>/<code>points</code> vuote</td>
         <td><code>cot_parser</code> non in esecuzione</td>
         <td><code>systemctl restart opentakserver-cot-parser</code> e verifica con <code>ps aux | grep cot_parser</code></td>
+      </tr>
+      <tr>
+        <td>Come sopra, ma <code>cot_parser</code> <strong>è in esecuzione</strong>; su Telegram «N EUD collegati ma nessun CoT scritto da N minuti: smistamento fermo»</td>
+        <td>Parser vivo ma appeso: ha perso la connessione a RabbitMQ senza morire</td>
+        <td>La sentinella lo riavvia da sola; a mano: <code>py-spy dump</code> e poi restart (v. «Sentinella dei servizi», sez. 7)</td>
       </tr>
       <tr>
         <td>Un solo dispositivo non compare, gli altri sì</td>
@@ -582,7 +730,9 @@ rm /tmp/eud.pem   <span class="c"># pulizia: contiene la chiave privata</span></
   </section>
 
   <footer>
-    <span>MA-TAK-001 · Rev 15</span>
-    <span>Aggiornato il 2026-09-15: mai ricreare una missione (token stantii → 401 su Upload All), invito vs QR</span>
+    <span>MA-TAK-001 · Rev 17</span>
+    <span>Aggiornato il 2026-09-24: sez. 7, sentinella dei servizi (riavvio automatico del cot_parser appeso, diagnosi, avvisi Telegram) e verifica dell'accesso MQTT; sez. 9, parser vivo ma fermo</span>
   </footer>
 </div>
+
+</body></html>
