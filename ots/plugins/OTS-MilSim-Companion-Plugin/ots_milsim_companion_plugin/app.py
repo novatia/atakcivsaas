@@ -276,7 +276,8 @@ def _build_offline_map(flask_app, uid: str, order: dict, headers: dict, user_id:
                         _offline_job_update(uid, progress=min(done / total, 1.0), downloaded=done)
             _offline_job_update(uid, downloaded=done, source_size=done)
 
-            gpkg = os.path.join(work, "map.gpkg")
+            extension = offline_map.FORMAT_EXTENSIONS.get(tile_format, ".gpkg")
+            gpkg = os.path.join(work, f"map{extension}")
             result = offline_map.convert(
                 source_path,
                 gpkg,
@@ -297,7 +298,7 @@ def _build_offline_map(flask_app, uid: str, order: dict, headers: dict, user_id:
             # pacchetto precedente dello stesso ordine ha già installato un
             # file omonimo (layer in uso) l'import fallisce e ATAK riscarica
             # in loop — visto con «…HD-z20.zip» e «…HD-z20-png.zip»
-            package_hash, size = offline_map.build_package(gpkg, zip_path, filename[:-4], filename[:-4])
+            package_hash, size = offline_map.build_package(gpkg, zip_path, filename[:-4], filename[:-4], extension)
             if size > offline_map.MAX_PACKAGE_BYTES:
                 raise offline_map.OfflineMapError(
                     f"il data package pesa {size / 2**30:.1f} GB, oltre il limite di OTS (2 GB): "
@@ -3987,7 +3988,7 @@ class MilSimCompanionPlugin(Plugin):
             if source_kind is not None and source_kind not in offline_map.SOURCE_FIELDS:
                 return jsonify({"success": False, "error": f"Sorgente non valida: {source_kind}"}), 400
             tile_format = body.get("format") or offline_map.DEFAULT_FORMAT
-            if tile_format not in offline_map.TILE_FORMATS:
+            if tile_format not in offline_map.FORMATS:
                 return jsonify({"success": False, "error": f"Formato non valido: {tile_format}"}), 400
             source = offline_map.pick_source(order, source_kind)
             if not source:

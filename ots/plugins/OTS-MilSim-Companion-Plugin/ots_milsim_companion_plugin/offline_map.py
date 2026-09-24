@@ -56,7 +56,13 @@ TILE_FORMATS = {
     "jpeg95": ("AUTO", 95),
     "jpeg85": ("AUTO", 85),  # compatto; AUTO = PNG solo ai bordi trasparenti
 }
+# «geotiff»: niente tile, un GeoTIFF COG (DEFLATE, senza perdita, overview
+# interne) che ATAK apre come immagine nativa con GDAL. Il GeoPackage PNG
+# dell'ordine 26383Z2P aveva lo zoom 20 completo (3715 tile), ma ATAK-CIV lo
+# mostrava a blocchi da ~0,9 m, cioè allo zoom 17.
+FORMATS = (*TILE_FORMATS, "geotiff")
 DEFAULT_FORMAT = "png"
+FORMAT_EXTENSIONS = {"geotiff": ".tif"}  # gli altri: .gpkg
 
 # Stretch dei raster non a 8 bit: media ± K deviazioni standard per banda
 STRETCH_SIGMA = 2.5
@@ -204,11 +210,39 @@ def translate_args(info: dict, tile_format: str = DEFAULT_FORMAT) -> list[str]:
     if tile_format not in TILE_FORMATS:
         raise OfflineMapError(f"formato non valido: {tile_format}")
     gdal_format, quality = TILE_FORMATS[tile_format]
+    return ["-of", "GPKG", *band_args(info), *[
+        "-co", "TILING_SCHEME=GoogleMapsCompatible",
+        # Il VRT è già sulla risoluzione esatta del livello: AUTO lo prende
+        # così com'è, senza un secondo ricampionamento
+        "-co", "ZOOM_LEVEL_STRATEGY=AUTO",
+        "-co", "RESAMPLING=CUBIC",
+        "-co", f"TILE_FORMAT={gdal_format}",
+        *(["-co", f"QUALITY={quality}"] if quality else []),
+        "--config", "GDAL_NUM_THREADS", "ALL_CPUS",
+    ]]
+
+
+def geotiff_args(info: dict) -> list[str]:
+    """gdal_translate dal VRT riproiettato a un GeoTIFF COG senza perdita:
+    stesse bande del GeoPackage, DEFLATE con predictor, overview interne
+    (il driver COG le crea da solo) per gli zoom bassi."""
+    return ["-of", "COG", *band_args(info), *[
+        "-co", "COMPRESS=DEFLATE",
+        "-co", "PREDICTOR=2",
+        "-co", "BIGTIFF=IF_SAFER",
+        "-co", "OVERVIEW_RESAMPLING=AVERAGE",
+        "-co", "NUM_THREADS=ALL_CPUS",
+        "--config", "GDAL_NUM_THREADS", "ALL_CPUS",
+    ]]
+
+
+def band_args(info: dict) -> list[str]:
+    """Selezione RGB(+alfa) e, se non a 8 bit, stretch a Byte."""
     chosen = color_bands(info)
     alpha_source = _alpha_band(info)
     warped_alpha = len(info["bands"]) + (0 if alpha_source else 1)
 
-    args = ["-of", "GPKG"]
+    args = []
     for b in chosen:
         args += ["-b", str(b["band"])]
     args += ["-b", str(warped_alpha)]
@@ -221,17 +255,6 @@ def translate_args(info: dict, tile_format: str = DEFAULT_FORMAT) -> list[str]:
             args += [f"-scale_{i}", _num(low), _num(high), "0", "255"]
         # L'alfa di gdalwarp ha già massimo 255 (DST_ALPHA_MAX)
         args += [f"-scale_{len(chosen) + 1}", "0", "255", "0", "255"]
-
-    args += [
-        "-co", "TILING_SCHEME=GoogleMapsCompatible",
-        # Il VRT è già sulla risoluzione esatta del livello: AUTO lo prende
-        # così com'è, senza un secondo ricampionamento
-        "-co", "ZOOM_LEVEL_STRATEGY=AUTO",
-        "-co", "RESAMPLING=CUBIC",
-        "-co", f"TILE_FORMAT={gdal_format}",
-        *(["-co", f"QUALITY={quality}"] if quality else []),
-        "--config", "GDAL_NUM_THREADS", "ALL_CPUS",
-    ]
     return args
 
 
@@ -340,11 +363,14 @@ def convert(
     max_zoom: int | None = None,
     tile_format: str = DEFAULT_FORMAT,
 ) -> dict:
-    """GeoTIFF → GeoPackage. `on_step(fase, frazione)` riceve l'avanzamento;
-    `max_zoom` limita il livello più dettagliato (None = nativo).
+    """GeoTIFF → GeoPackage (o GeoTIFF COG con tile_format="geotiff": allora
+    `gpkg` è il percorso del .tif). `on_step(fase, frazione)` riceve
+    l'avanzamento; `max_zoom` limita il livello più dettagliato (None = nativo).
     Ritorna {native_zoom, zoom, resolution, ground_resolution, aligned,
     resampling, tile_format, width, height}."""
     step = on_step or (lambda phase, fraction: None)
+    if tile_format not in FORMATS:
+        raise OfflineMapError(f"formato non valido: {tile_format}")
 
     step("analisi", 0)
     info = gdalinfo(source, stats=True)
@@ -367,13 +393,14 @@ def convert(
     step("conversione", 0)
     if os.path.exists(gpkg):
         os.remove(gpkg)
-    run(["gdal_translate", *translate_args(info, tile_format), vrt, gpkg], lambda f: step("conversione", f))
+    args = geotiff_args(info) if tile_format == "geotiff" else translate_args(info, tile_format)
+    run(["gdal_translate", *args, vrt, gpkg], lambda f: step("conversione", f))
 
     out = gdalinfo(gpkg)
     width, height = (out.get("size") or [0, 0])[:2]
-    factors = overview_factors(int(width), int(height))
-    step("livelli di zoom", 0)
+    factors = overview_factors(int(width), int(height)) if tile_format != "geotiff" else []
     if factors:
+        step("livelli di zoom", 0)
         run(["gdaladdo", "-r", "average", gpkg, *factors], lambda f: step("livelli di zoom", f))
     return {
         "native_zoom": native,
@@ -409,11 +436,11 @@ def manifest_xml(package_name: str, package_uid: str, entry: str) -> bytes:
     return b'<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode").encode("utf-8")
 
 
-def build_package(gpkg: str, zip_path: str, package_name: str, map_name: str) -> tuple[str, int]:
-    """Zip TAK con manifest + GeoPackage (STORED: le tile sono già JPEG/PNG,
-    ricomprimerle costa solo CPU). Ritorna (sha256, dimensione)."""
+def build_package(gpkg: str, zip_path: str, package_name: str, map_name: str, extension: str = ".gpkg") -> tuple[str, int]:
+    """Zip TAK con manifest + mappa (STORED: tile JPEG/PNG o GeoTIFF DEFLATE
+    sono già compressi, ricomprimerli costa solo CPU). Ritorna (sha256, dimensione)."""
     package_uid = str(uuid.uuid4())
-    entry = f"{package_uid}/{map_name}.gpkg"
+    entry = f"{package_uid}/{map_name}{extension}"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
         zf.writestr("MANIFEST/manifest.xml", manifest_xml(package_name, package_uid, entry))
         zf.write(gpkg, entry, compress_type=zipfile.ZIP_STORED)

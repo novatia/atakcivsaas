@@ -297,6 +297,7 @@
     <label>Formato delle tile
       <select id="offline-format">
         <option value="png" selected>PNG senza perdita: pixel identici all'originale (pacchetto più grande)</option>
+        <option value="geotiff">GeoTIFF (COG) senza perdita: niente tile, ATAK lo apre come immagine nativa</option>
         <option value="jpeg95">JPEG 95: quasi senza perdita, circa metà del PNG</option>
         <option value="jpeg85">JPEG 85: compatto, perde un po' di dettaglio fine</option>
       </select>
@@ -2712,7 +2713,7 @@ const OFFLINE_POLL_MS = 4000;
 const OFFLINE_PHASES = { download: "download da SkyFi", analisi: "analisi del GeoTIFF", conversione: "conversione in GeoPackage",
   "livelli di zoom": "livelli di zoom inferiori", "data package": "creazione del data package" };
 
-const OFFLINE_FORMATS = { png: "PNG senza perdita", jpeg95: "JPEG 95", jpeg85: "JPEG 85" };
+const OFFLINE_FORMATS = { png: "PNG senza perdita", jpeg95: "JPEG 95", jpeg85: "JPEG 85", geotiff: "GeoTIFF COG senza perdita" };
 
 function hasOfflineSource(o) { return !!(o.downloadViewReadyCogUrl || o.downloadCogUrl); }
 

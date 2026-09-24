@@ -307,3 +307,33 @@ def test_convert_aligned_source_is_pixel_identical(tmp_path):
     gt = out.GetGeoTransform()
     ox, oy = round((SKYFI_GT[0] - gt[0]) / gt[1]), round((SKYFI_GT[3] - gt[3]) / gt[5])
     assert np.array_equal(out.ReadAsArray(ox, oy, w, h)[:3], data)  # PNG: pixel identici
+
+
+@needs_gdal
+def test_convert_geotiff_is_pixel_identical(tmp_path):
+    import numpy as np
+    from osgeo import osr
+
+    gdal.UseExceptions()
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(3857)
+    src = tmp_path / "aligned.tif"
+    w, h = 700, 600
+    ds = gdal.GetDriverByName("GTiff").Create(str(src), w, h, 3, gdal.GDT_Byte)
+    ds.SetGeoTransform(SKYFI_GT)
+    ds.SetProjection(srs.ExportToWkt())
+    data = np.random.default_rng(2).integers(1, 256, size=(3, h, w), dtype=np.uint8)
+    for i in range(3):
+        ds.GetRasterBand(i + 1).WriteArray(data[i])
+        ds.GetRasterBand(i + 1).SetColorInterpretation([gdal.GCI_RedBand, gdal.GCI_GreenBand, gdal.GCI_BlueBand][i])
+    ds = None
+
+    tif = tmp_path / "map.tif"
+    result = om.convert(str(src), str(tif), str(tmp_path), tile_format="geotiff")
+    assert result["aligned"] and result["tile_format"] == "geotiff"
+    out = gdal.Open(str(tif))
+    assert out.GetMetadata("IMAGE_STRUCTURE").get("COMPRESSION") == "DEFLATE"
+    assert out.GetRasterBand(1).GetOverviewCount() >= 1
+    gt = out.GetGeoTransform()
+    ox, oy = round((SKYFI_GT[0] - gt[0]) / gt[1]), round((SKYFI_GT[3] - gt[3]) / gt[5])
+    assert np.array_equal(out.ReadAsArray(ox, oy, w, h)[:3], data)
