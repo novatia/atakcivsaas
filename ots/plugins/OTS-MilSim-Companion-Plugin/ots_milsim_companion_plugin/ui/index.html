@@ -291,6 +291,16 @@
   <div class="modal" onclick="event.stopPropagation()">
     <h2>🛰 Mappa offline HD</h2>
     <div id="offline-order" class="muted"></div>
+    <label>Immagine di partenza
+      <select id="offline-source"></select>
+    </label>
+    <label>Formato delle tile
+      <select id="offline-format">
+        <option value="png" selected>PNG senza perdita: pixel identici all'originale (pacchetto più grande)</option>
+        <option value="jpeg95">JPEG 95: quasi senza perdita, circa metà del PNG</option>
+        <option value="jpeg85">JPEG 85: compatto, perde un po' di dettaglio fine</option>
+      </select>
+    </label>
     <label>Zoom massimo
       <select id="offline-zoom">
         <option value="native" selected>Nativo: tutta la risoluzione dell'immagine</option>
@@ -300,11 +310,12 @@
         <option value="17">17 (~84 cm/pixel)</option>
       </select>
     </label>
-    <p class="muted" style="margin:0">Il server scarica da SkyFi il GeoTIFF originale (view-ready, altrimenti COG),
-      lo converte in un GeoPackage allineato alla griglia di ATAK e crea un data package con la mappa
-      <b>dentro</b>: su ATAK si vede senza rete e alla risoluzione piena. Può durare da qualche minuto a
-      oltre un'ora e il pacchetto pesa centinaia di MB: ogni livello di zoom in meno lo divide per 4.
-      Lo zoom nativo non va mai oltre la risoluzione dell'immagine: scegliere un valore più alto non aggiunge dettaglio.</p>
+    <p class="muted" style="margin:0">Il server scarica da SkyFi il GeoTIFF scelto, lo converte in un GeoPackage
+      allineato alla griglia di ATAK e crea un data package con la mappa <b>dentro</b>: su ATAK si vede senza rete.
+      Il <b>COG</b> è l'originale senza perdita; il view-ready è la stessa immagine già compressa in JPEG da SkyFi.
+      Se il sorgente è già sulla griglia di ATAK (i deliverable SkyFi lo sono) i pixel vengono copiati identici.
+      Può durare da qualche minuto a oltre un'ora; ogni livello di zoom in meno divide la dimensione per 4.
+      Oltre lo zoom nativo ATAK può solo ingrandire i pixel: nessun formato aggiunge dettaglio che l'immagine non ha.</p>
     <div class="modal-actions">
       <button class="btn" onclick="closeOfflineModal()">Annulla</button>
       <button class="btn primary" id="offline-btn" onclick="startOfflineMap()">Avvia conversione</button>
@@ -2701,13 +2712,18 @@ const OFFLINE_POLL_MS = 4000;
 const OFFLINE_PHASES = { download: "download da SkyFi", analisi: "analisi del GeoTIFF", conversione: "conversione in GeoPackage",
   "livelli di zoom": "livelli di zoom inferiori", "data package": "creazione del data package" };
 
+const OFFLINE_FORMATS = { png: "PNG senza perdita", jpeg95: "JPEG 95", jpeg85: "JPEG 85" };
+
 function hasOfflineSource(o) { return !!(o.downloadViewReadyCogUrl || o.downloadCogUrl); }
 
 function offlineStatusHtml(job) {
   if (!job) return "";
   if (job.status === "done") {
     const r = job.result || {};
-    return `✅ Mappa offline pronta: <b>${esc(r.filename)}</b> (${fmtBytes(r.size)}, zoom fino a ${r.zoom}${r.zoom < r.native_zoom ? `, nativo ${r.native_zoom}` : ""}).
+    const ground = r.ground_resolution ? `, ${Math.round(r.ground_resolution * 1000) / 10} cm/pixel a terra` : "";
+    const how = [r.source === "cog" ? "dal COG" : r.source ? "dal " + esc(r.source) : "",
+      r.aligned ? "pixel copiati identici" : "", OFFLINE_FORMATS[r.tile_format] || ""].filter(Boolean).join(", ");
+    return `✅ Mappa offline pronta: <b>${esc(r.filename)}</b> (${fmtBytes(r.size)}, zoom fino a ${r.zoom}${r.zoom < r.native_zoom ? `, nativo ${r.native_zoom}` : ""}${ground}${how ? "; " + how : ""}).
       È tra i data package del server: su ATAK scaricala dai data package del server, oppure mettila in una missione.`;
   }
   if (job.status === "error") return `⚠️ Mappa offline fallita: ${esc(job.error)}`;
@@ -2744,9 +2760,14 @@ function openOfflineModal(uid) {
     return toast(`GDAL non è installato sul server (mancano ${OFFLINE.gdalMissing.join(", ")}): da root «apt install gdal-bin», poi riprova.`, false);
   }
   OFFLINE.uid = uid;
-  const src = o.downloadViewReadyCogUrl ? ["view-ready", o.viewReadyCogSize] : ["COG", o.cogSize];
+  const sources = [];
+  if (o.downloadCogUrl) sources.push(`<option value="cog">COG: originale senza perdita${o.cogSize ? " (" + fmtBytes(o.cogSize) + ")" : ""}</option>`);
+  if (o.downloadViewReadyCogUrl) sources.push(`<option value="view-ready">View-ready: già compresso JPEG da SkyFi${o.viewReadyCogSize ? " (" + fmtBytes(o.viewReadyCogSize) + ")" : ""}</option>`);
+  document.getElementById("offline-source").innerHTML = sources.join("");
+  document.getElementById("offline-format").value = "png";
+  document.getElementById("offline-zoom").value = "native";
   document.getElementById("offline-order").textContent =
-    `Ordine ${o.orderCode}${o.geocodeLocation ? " — " + o.geocodeLocation : ""}${o.resolution ? " · " + o.resolution : ""} · sorgente ${src[0]}${src[1] ? " (" + fmtBytes(src[1]) + ")" : ""}`;
+    `Ordine ${o.orderCode}${o.geocodeLocation ? " — " + o.geocodeLocation : ""}${o.resolution ? " · " + o.resolution : ""}`;
   const btn = document.getElementById("offline-btn");
   btn.disabled = false;
   btn.textContent = "Avvia conversione";
@@ -2767,7 +2788,11 @@ async function startOfflineMap() {
   try {
     await api(`/orders/${encodeURIComponent(uid)}/offline_map`, {
       method: "POST",
-      body: { max_zoom: document.getElementById("offline-zoom").value },
+      body: {
+        max_zoom: document.getElementById("offline-zoom").value,
+        source: document.getElementById("offline-source").value,
+        format: document.getElementById("offline-format").value,
+      },
     });
     toast("Conversione avviata sul server: l'avanzamento compare sulla card dell'ordine.");
     closeOfflineModal();

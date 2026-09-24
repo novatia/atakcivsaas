@@ -40,11 +40,27 @@ def _pairs(args, flag):
 # ----------------------------------------------------------------------
 
 
-def test_pick_source_prefers_view_ready():
+def test_pick_source_prefers_cog():
+    # il COG è l'originale senza perdita, il view-ready è già JPEG
     order = {"downloadCogUrl": "x", "cogSize": 5, "downloadViewReadyCogUrl": "y", "viewReadyCogSize": 3}
-    assert om.pick_source(order) == ("view-ready", 3)
-    assert om.pick_source({"downloadCogUrl": "x", "cogSize": 5}) == ("cog", 5)
+    assert om.pick_source(order) == ("cog", 5)
+    assert om.pick_source(order, "view-ready") == ("view-ready", 3)
+    assert om.pick_source({"downloadViewReadyCogUrl": "y"}, "cog") == ("view-ready", 0)
     assert om.pick_source({"downloadPayloadUrl": "x"}) is None
+
+
+# Deliverable SkyFi reale (ordine 26383Z2P): EPSG:3857, pixel dello zoom 20
+SKYFI_GT = [1099736.400833335472271, 0.149291070869492, 0, 5637217.996999653056264, 0, -0.149291070869638]
+
+
+def test_aligned_zoom_detects_skyfi_grid():
+    wkt = 'PROJCRS["WGS 84 / Pseudo-Mercator", ID["EPSG",3857]]'
+    info = {"coordinateSystem": {"wkt": wkt}, "geoTransform": SKYFI_GT}
+    assert om.aligned_zoom(info) == 20
+    shifted = {**info, "geoTransform": [SKYFI_GT[0] + 0.05, *SKYFI_GT[1:]]}
+    assert om.aligned_zoom(shifted) is None  # origine a mezzo pixel
+    utm = {"coordinateSystem": {"wkt": 'PROJCRS["UTM 32N", ID["EPSG",32632]]'}, "geoTransform": SKYFI_GT}
+    assert om.aligned_zoom(utm) is None
 
 
 def test_native_zoom_never_loses_detail():
@@ -78,6 +94,15 @@ def test_translate_16bit_rgb_nir():
     assert "-scale_4" in args
     assert "ZOOM_LEVEL_STRATEGY=AUTO" in args
     assert "TILING_SCHEME=GoogleMapsCompatible" in args
+    assert "TILE_FORMAT=PNG" in args and not any(a.startswith("QUALITY=") for a in args)  # default senza perdita
+
+
+def test_translate_tile_formats():
+    assert "QUALITY=95" in om.translate_args(RGBA8, "jpeg95")
+    args = om.translate_args(RGBA8, "jpeg85")
+    assert "TILE_FORMAT=AUTO" in args and "QUALITY=85" in args
+    with pytest.raises(om.OfflineMapError):
+        om.translate_args(RGBA8, "tiff")
 
 
 def test_translate_8bit_with_alpha_keeps_values():
@@ -105,6 +130,7 @@ def test_warp_args():
     assert "-dstalpha" in args and "-tap" in args
     assert "-srcnodata" not in om.warp_args(RGBA8)  # l'alfa del sorgente basta
     assert "-tr" not in om.warp_args(RGBA8)
+    assert _pairs(om.warp_args(RGBA8, 0.3, "near"), "-r") == ["near"]
 
 
 # ----------------------------------------------------------------------
@@ -220,7 +246,7 @@ def test_convert_end_to_end(tmp_path, kind):
     ).fetchone()[0]
     assert top == 19 and pixel == pytest.approx(om.zoom_resolution(19))
     kinds = {bytes(d[:2]) for (d,) in db.execute(f"select tile_data from '{table}' where zoom_level=19")}
-    assert b"\xff\xd8" in kinds  # JPEG dove l'immagine è piena
+    assert kinds == {b"\x89P"}  # default: PNG senza perdita
     db.close()
 
     ds = gdal.Open(str(gpkg))
@@ -231,8 +257,53 @@ def test_convert_end_to_end(tmp_path, kind):
 
 
 @needs_gdal
+def test_convert_jpeg_tiles(tmp_path):
+    src = tmp_path / "src.tif"
+    _geotiff(src, gdal.GDT_Byte, 4, alpha=True)
+    gpkg = tmp_path / "map.gpkg"
+    assert om.convert(str(src), str(gpkg), str(tmp_path), tile_format="jpeg85")["tile_format"] == "jpeg85"
+    db = sqlite3.connect(gpkg)
+    table = db.execute("select table_name from gpkg_contents").fetchone()[0]
+    kinds = {bytes(d[:2]) for (d,) in db.execute(f"select tile_data from '{table}' where zoom_level=19")}
+    db.close()
+    assert b"\xff\xd8" in kinds  # JPEG dove l'immagine è piena, PNG solo ai bordi
+
+
+@needs_gdal
 def test_convert_zoom_cap(tmp_path):
     src = tmp_path / "src.tif"
     _geotiff(src, gdal.GDT_Byte, 4, alpha=True)
     result = om.convert(str(src), str(tmp_path / "map.gpkg"), str(tmp_path), max_zoom=17)
     assert result == {**result, "native_zoom": 19, "zoom": 17}
+
+
+@needs_gdal
+def test_convert_aligned_source_is_pixel_identical(tmp_path):
+    # Come i deliverable SkyFi: EPSG:3857, pixel dello zoom 20, origine sulla griglia
+    import numpy as np
+    from osgeo import osr
+
+    gdal.UseExceptions()
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(3857)
+    src = tmp_path / "aligned.tif"
+    w, h = 700, 600
+    ds = gdal.GetDriverByName("GTiff").Create(str(src), w, h, 3, gdal.GDT_Byte)
+    ds.SetGeoTransform(SKYFI_GT)
+    ds.SetProjection(srs.ExportToWkt())
+    rng = np.random.default_rng(1)
+    data = rng.integers(1, 256, size=(3, h, w), dtype=np.uint8)  # rumore: qualsiasi filtro si vedrebbe
+    for i in range(3):
+        ds.GetRasterBand(i + 1).WriteArray(data[i])
+        ds.GetRasterBand(i + 1).SetColorInterpretation([gdal.GCI_RedBand, gdal.GCI_GreenBand, gdal.GCI_BlueBand][i])
+    ds = None
+
+    gpkg = tmp_path / "map.gpkg"
+    result = om.convert(str(src), str(gpkg), str(tmp_path))
+    assert result["aligned"] and result["resampling"] == "near" and result["zoom"] == 20
+    assert result["ground_resolution"] == pytest.approx(0.1054, abs=1e-3)  # 10,5 cm a Codogno
+
+    out = gdal.Open(str(gpkg))
+    gt = out.GetGeoTransform()
+    ox, oy = round((SKYFI_GT[0] - gt[0]) / gt[1]), round((SKYFI_GT[3] - gt[3]) / gt[5])
+    assert np.array_equal(out.ReadAsArray(ox, oy, w, h)[:3], data)  # PNG: pixel identici

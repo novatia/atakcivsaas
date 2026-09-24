@@ -13,9 +13,11 @@ Pipeline (comandi GDAL di sistema, pacchetto `gdal-bin`):
 2. `gdalwarp -of VRT` in 3857, una prima volta per sapere la risoluzione
    nativa, poi con `-tr` pari alla risoluzione ESATTA del livello di zoom
    subito più fine (o del tetto scelto) e `-tap`: i pixel cadono sulla
-   griglia delle tile, così il ricampionamento (cubico) avviene una volta sola
+   griglia delle tile, così il ricampionamento (cubico) avviene una volta sola.
+   Se il sorgente è già su quella griglia (i deliverable SkyFi lo sono:
+   EPSG:3857, pixel dello zoom 20) si usa `near`: pixel copiati identici
 3. `gdal_translate -of GPKG` → solo RGB + alfa, 16 bit riportati a 8 con uno
-   stretch media ± 2,5σ per banda, tile JPEG (PNG solo ai bordi trasparenti)
+   stretch media ± 2,5σ per banda, tile PNG senza perdita (default) o JPEG
 4. `gdaladdo -r average` → livelli di zoom inferiori, fino a una sola tile
 
 Il modulo non conosce Flask né il DB: scaricare, registrare il DataPackage e
@@ -39,14 +41,23 @@ from typing import Callable
 
 GDAL_TOOLS = ("gdalinfo", "gdal_translate", "gdalwarp", "gdaladdo")
 
-# Preferenza fra i deliverable: view-ready è già a 8 bit RGB «da vedere»;
-# il COG può essere a 16 bit o multispettrale e va riscalato
+# Preferenza fra i deliverable: il COG è l'immagine originale a piena qualità
+# (di solito 16 bit, 4 bande: va riscalata a 8 bit), il view-ready è una
+# versione già compressa da SkyFi (ordine 26383Z2P, 3 km²: COG 1,1 GB contro
+# view-ready 92 MB) e ricomprimerlo in JPEG toglie altro dettaglio
 SOURCE_FIELDS = {
-    "view-ready": ("downloadViewReadyCogUrl", "viewReadyCogSize"),
     "cog": ("downloadCogUrl", "cogSize"),
+    "view-ready": ("downloadViewReadyCogUrl", "viewReadyCogSize"),
 }
 
-JPEG_QUALITY = 85
+# Formato delle tile del GeoPackage: (TILE_FORMAT di GDAL, qualità JPEG)
+TILE_FORMATS = {
+    "png": ("PNG", None),  # senza perdita: 3-5 volte più grande del JPEG
+    "jpeg95": ("AUTO", 95),
+    "jpeg85": ("AUTO", 85),  # compatto; AUTO = PNG solo ai bordi trasparenti
+}
+DEFAULT_FORMAT = "png"
+
 # Stretch dei raster non a 8 bit: media ± K deviazioni standard per banda
 STRETCH_SIGMA = 2.5
 
@@ -71,12 +82,22 @@ def missing_tools() -> list[str]:
     return [tool for tool in GDAL_TOOLS if shutil.which(tool) is None]
 
 
-def pick_source(order: dict) -> tuple[str, int] | None:
-    """(tipo di deliverable, dimensione dichiarata) da usare per l'ordine."""
-    for kind, (url_key, size_key) in SOURCE_FIELDS.items():
-        if order.get(url_key):
-            return kind, int(order.get(size_key) or 0)
-    return None
+def available_sources(order: dict) -> dict:
+    """{tipo di deliverable: dimensione dichiarata} dei GeoTIFF dell'ordine."""
+    return {
+        kind: int(order.get(size_key) or 0)
+        for kind, (url_key, size_key) in SOURCE_FIELDS.items()
+        if order.get(url_key)
+    }
+
+
+def pick_source(order: dict, prefer: str | None = None) -> tuple[str, int] | None:
+    """(tipo di deliverable, dimensione dichiarata) da usare per l'ordine:
+    `prefer` se c'è, altrimenti il primo di SOURCE_FIELDS (il COG)."""
+    sources = available_sources(order)
+    if prefer in sources:
+        return prefer, sources[prefer]
+    return next(iter(sources.items()), None)
 
 
 # ----------------------------------------------------------------------
@@ -136,13 +157,34 @@ def _nodata(info: dict):
     return next((b["noDataValue"] for b in info.get("bands") or [] if b.get("noDataValue") is not None), None)
 
 
-def warp_args(info: dict, resolution: float | None = None) -> list[str]:
+def aligned_zoom(info: dict) -> int | None:
+    """Livello di zoom su cui il sorgente è GIÀ allineato (EPSG:3857, pixel
+    della risoluzione esatta del livello, origine su un pixel intero della
+    griglia delle tile), altrimenti None. È il caso dei deliverable SkyFi:
+    lì si copiano i pixel così come sono, senza ricampionare."""
+    wkt = (info.get("coordinateSystem") or {}).get("wkt") or ""
+    if "3857" not in wkt and "Pseudo-Mercator" not in wkt:
+        return None
+    gt = info.get("geoTransform") or []
+    if len(gt) < 6 or gt[2] or gt[4] or gt[1] <= 0 or gt[5] >= 0 or abs(abs(gt[5]) - gt[1]) > gt[1] * 1e-9:
+        return None
+    zoom = native_zoom(gt[1])
+    res = zoom_resolution(zoom)
+    if abs(gt[1] - res) > res * 1e-9:
+        return None
+    col, row = (gt[0] + WORLD_METERS / 2) / res, (WORLD_METERS / 2 - gt[3]) / res
+    if abs(col - round(col)) > 1e-3 or abs(row - round(row)) > 1e-3:
+        return None
+    return zoom
+
+
+def warp_args(info: dict, resolution: float | None = None, resampling: str = "cubic") -> list[str]:
     """gdalwarp verso un VRT in 3857 con banda alfa di uscita (bordi della
     riproiezione e nodata trasparenti invece che neri)."""
     args = [
         "-of", "VRT", "-overwrite",
         "-t_srs", "EPSG:3857",
-        "-r", "cubic",
+        "-r", resampling,
         "-dstalpha",
         "-wo", "DST_ALPHA_MAX=255",
         "-wo", "NUM_THREADS=ALL_CPUS",
@@ -155,10 +197,13 @@ def warp_args(info: dict, resolution: float | None = None) -> list[str]:
     return args
 
 
-def translate_args(info: dict, quality: int = JPEG_QUALITY) -> list[str]:
+def translate_args(info: dict, tile_format: str = DEFAULT_FORMAT) -> list[str]:
     """gdal_translate dal VRT riproiettato al GeoPackage. Nel VRT le bande
     non-alfa del sorgente mantengono la loro numerazione e l'alfa creata da
-    -dstalpha è l'ultima."""
+    -dstalpha è l'ultima. `tile_format` è una chiave di TILE_FORMATS."""
+    if tile_format not in TILE_FORMATS:
+        raise OfflineMapError(f"formato non valido: {tile_format}")
+    gdal_format, quality = TILE_FORMATS[tile_format]
     chosen = color_bands(info)
     alpha_source = _alpha_band(info)
     warped_alpha = len(info["bands"]) + (0 if alpha_source else 1)
@@ -183,8 +228,8 @@ def translate_args(info: dict, quality: int = JPEG_QUALITY) -> list[str]:
         # così com'è, senza un secondo ricampionamento
         "-co", "ZOOM_LEVEL_STRATEGY=AUTO",
         "-co", "RESAMPLING=CUBIC",
-        "-co", "TILE_FORMAT=AUTO",
-        "-co", f"QUALITY={int(quality)}",
+        "-co", f"TILE_FORMAT={gdal_format}",
+        *(["-co", f"QUALITY={quality}"] if quality else []),
         "--config", "GDAL_NUM_THREADS", "ALL_CPUS",
     ]
     return args
@@ -228,7 +273,11 @@ def run(cmd: list[str], on_progress: Callable[[float], None] | None = None, time
     """Esegue un comando GDAL leggendo la barra di avanzamento dallo stdout.
     Ritorna l'output; solleva OfflineMapError se il comando fallisce."""
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        # Cache dei blocchi di GDAL limitata: sul sorgente da 1,2 GB di SkyFi
+        # gdal_translate arrivava a 2,5 GB di RAM col default (5% della RAM,
+        # più i buffer), sul server convive con OTS e PostgreSQL
+        env = {**os.environ, "GDAL_CACHEMAX": os.environ.get("GDAL_CACHEMAX", "512")}
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
     except OSError as e:
         raise OfflineMapError(f"{cmd[0]} non eseguibile: {e}") from e
     output, tail = [], ""
@@ -289,11 +338,12 @@ def convert(
     work_dir: str,
     on_step: Callable[[str, float], None] | None = None,
     max_zoom: int | None = None,
-    quality: int = JPEG_QUALITY,
+    tile_format: str = DEFAULT_FORMAT,
 ) -> dict:
     """GeoTIFF → GeoPackage. `on_step(fase, frazione)` riceve l'avanzamento;
     `max_zoom` limita il livello più dettagliato (None = nativo).
-    Ritorna {native_zoom, zoom, resolution, width, height}."""
+    Ritorna {native_zoom, zoom, resolution, ground_resolution, aligned,
+    resampling, tile_format, width, height}."""
     step = on_step or (lambda phase, fraction: None)
 
     step("analisi", 0)
@@ -303,15 +353,21 @@ def convert(
 
     vrt = os.path.join(work_dir, "warped.vrt")
     run(["gdalwarp", *warp_args(info), source, vrt])
-    native = native_zoom(pixel_size(gdalinfo(vrt)))
+    first = gdalinfo(vrt)
+    native = native_zoom(pixel_size(first))
+    ground = pixel_size(first) * math.cos(math.radians(center_lat(first)))
     zoom = min(native, max_zoom) if max_zoom is not None else native
     resolution = zoom_resolution(zoom)
-    run(["gdalwarp", *warp_args(info, resolution), source, vrt])
+    # Sorgente già sulla griglia del livello scelto: «near» copia i pixel
+    # identici (con cubic sarebbero comunque quasi uguali, ma non bit a bit)
+    aligned = aligned_zoom(info) == zoom
+    resampling = "near" if aligned else "cubic"
+    run(["gdalwarp", *warp_args(info, resolution, resampling), source, vrt])
 
     step("conversione", 0)
     if os.path.exists(gpkg):
         os.remove(gpkg)
-    run(["gdal_translate", *translate_args(info, quality), vrt, gpkg], lambda f: step("conversione", f))
+    run(["gdal_translate", *translate_args(info, tile_format), vrt, gpkg], lambda f: step("conversione", f))
 
     out = gdalinfo(gpkg)
     width, height = (out.get("size") or [0, 0])[:2]
@@ -319,7 +375,23 @@ def convert(
     step("livelli di zoom", 0)
     if factors:
         run(["gdaladdo", "-r", "average", gpkg, *factors], lambda f: step("livelli di zoom", f))
-    return {"native_zoom": native, "zoom": zoom, "resolution": resolution, "width": width, "height": height}
+    return {
+        "native_zoom": native,
+        "zoom": zoom,
+        "resolution": resolution,
+        "ground_resolution": ground,
+        "aligned": aligned,
+        "resampling": resampling,
+        "tile_format": tile_format,
+        "width": width,
+        "height": height,
+    }
+
+
+def center_lat(info: dict) -> float:
+    """Latitudine del centro di un raster in EPSG:3857 (per i metri a terra)."""
+    center = (info.get("cornerCoordinates") or {}).get("center") or [0, 0]
+    return math.degrees(math.atan(math.sinh(center[1] / 6378137)))
 
 
 # ----------------------------------------------------------------------

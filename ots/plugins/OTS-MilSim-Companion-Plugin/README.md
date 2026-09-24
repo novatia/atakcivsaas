@@ -258,19 +258,29 @@ Ereditato dal fork OTS-SkyFi-Plugin (upstream brian7704, che non distribuisce la
   (layer SkyFi + Google Hybrid), scaricabile dagli EUD. Pesa pochi KB perché
   contiene solo l'XML della sorgente: ATAK scarica i tile da SkyFi in streaming
   (serve rete) e allo zoom massimo sono più sgranati dell'immagine originale;
-- **🛰 Mappa offline HD**: il server scarica il GeoTIFF originale dell'ordine
-  (view-ready, altrimenti COG) e lo converte con GDAL in un **GeoPackage** a tile
-  EPSG:3857 dentro un data package: su ATAK la mappa si vede senza rete e alla
-  risoluzione piena. Pipeline in `offline_map.py`: riproiezione con `-tr` pari
-  alla risoluzione esatta del livello di zoom subito più fine del nativo e
-  `-tap` (pixel già sulla griglia delle tile, un solo ricampionamento cubico),
-  16 bit → 8 bit con stretch media ± 2,5σ per banda, tile JPEG qualità 85 (PNG
-  solo ai bordi trasparenti), livelli inferiori con `gdaladdo`. Zoom massimo
-  sceglibile (ogni livello in meno divide la dimensione per 4); limite 2 GB
-  per pacchetto (`data_packages.size` di OTS è un intero a 32 bit). Gira in
-  background, un job alla volta, con avanzamento sulla card dell'ordine; lo
-  stato dei job è in memoria e si perde al riavvio di OTS. Serve `gdal-bin`
-  sul server (lo script di install lo installa se manca);
+- **🛰 Mappa offline HD**: il server scarica il GeoTIFF dell'ordine e lo
+  converte con GDAL in un **GeoPackage** a tile EPSG:3857 dentro un data
+  package: su ATAK la mappa si vede senza rete e alla risoluzione piena.
+  - **Sorgente**: di default il **COG**, l'originale senza perdita; il
+    view-ready è la stessa immagine già compressa da SkyFi in JPEG (ordine
+    26383Z2P, 3 km²: COG 1,2 GB LZW contro view-ready 97 MB JPEG q95, stessi
+    15798×22130 pixel da 10,5 cm a terra). Il payload (bande grezze) non si usa.
+  - **Formato**: PNG senza perdita (default), JPEG 95 o JPEG 85.
+  - Pipeline in `offline_map.py`: riproiezione con `-tr` pari alla risoluzione
+    esatta del livello di zoom subito più fine del nativo e `-tap` (un solo
+    ricampionamento cubico); se il sorgente è già sulla griglia di quel livello
+    — i deliverable SkyFi lo sono: EPSG:3857, pixel dello zoom 20, origine su un
+    pixel intero — si usa `near` e con le tile PNG i **pixel sono identici**
+    all'originale. 16 bit → 8 bit con stretch media ± 2,5σ per banda, livelli
+    inferiori con `gdaladdo`. Sulla card: zoom, cm/pixel a terra, sorgente e
+    se i pixel sono stati copiati identici.
+  - Zoom massimo sceglibile (ogni livello in meno divide la dimensione per 4);
+    limite 2 GB per pacchetto (`data_packages.size` di OTS è un intero a 32
+    bit). Gira in background, un job alla volta, con avanzamento sulla card;
+    lo stato dei job è in memoria e si perde al riavvio di OTS. Serve
+    `gdal-bin` sul server (lo script di install lo installa se manca).
+  - Oltre lo zoom nativo ATAK può solo ingrandire i pixel: nessun formato
+    aggiunge dettaglio che l'immagine non ha.
 - **🎯 Missione**: scarica il deliverable sul server e lo aggiunge ai contenuti di
   una missione **Data Sync**, replicando il flusso di `/Marti/sync/upload` +
   `PUT /Marti/api/missions/<name>/contents` (dedup per sha256, MissionChange
@@ -584,7 +594,7 @@ restano invariate per compatibilità con i config esistenti.
 | `GET /orders/<uid>/image` | admin | Anteprima ordine (data-URI, via proxy) |
 | `GET /orders/<uid>/download/<tipo>` | admin | Proxy del deliverable (image/payload/cog/view-ready) |
 | `POST /orders/<uid>/data_package` | admin | Data package ATAK con i tile WMTS dell'ordine |
-| `POST /orders/<uid>/offline_map` | admin | `{"max_zoom": "native"\|10-22}`: avvia la mappa offline HD (202) |
+| `POST /orders/<uid>/offline_map` | admin | `{"max_zoom": "native"\|10-22, "source": "cog"\|"view-ready", "format": "png"\|"jpeg95"\|"jpeg85"}`: avvia la mappa offline HD (202) |
 | `GET /orders/offline_maps` | admin | Stato dei job mappa offline + comandi GDAL mancanti |
 | `POST /orders/<uid>/mission` | admin | `{"mission", "deliverable_type"}`: asset nella missione Data Sync |
 | `GET /missions` · `GET /missions/<nome>/contents` | admin | Missioni Data Sync · contenuti condivisi |
@@ -635,6 +645,11 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.19.0** — mappa offline HD: sorgente di default il **COG** (originale
+  senza perdita) invece del view-ready già JPEG, tile **PNG senza perdita** di
+  default (JPEG 95/85 a scelta), pixel copiati identici (`near`) quando il
+  sorgente è già sulla griglia di ATAK come i deliverable SkyFi; la card
+  mostra cm/pixel a terra, sorgente e formato.
 - **3.18.1** — la rinomina cambia anche il `name` del manifest dentro lo zip
   (quello che ATAK mostra da installato), con lo stesso uid; il nuovo hash
   viene propagato a contenuti delle missioni e template.

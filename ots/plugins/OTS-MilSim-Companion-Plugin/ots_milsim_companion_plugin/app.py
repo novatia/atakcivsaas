@@ -240,16 +240,17 @@ def _offline_package_filename(base: str) -> str:
     return filename
 
 
-def _build_offline_map(flask_app, uid: str, order: dict, headers: dict, user_id: int, max_zoom: int | None) -> None:
+def _build_offline_map(flask_app, uid: str, order: dict, headers: dict, user_id: int, max_zoom: int | None,
+                       source_kind: str | None = None, tile_format: str = offline_map.DEFAULT_FORMAT) -> None:
     """Job in background: scarica il GeoTIFF dell'ordine, lo converte in
     GeoPackage e lo registra come data package di OTS. Mai nel thread
     della richiesta HTTP: la UI segue l'avanzamento con /orders/offline_maps."""
     work = None
     try:
         with _offline_gate, flask_app.app_context():
-            source = offline_map.pick_source(order)
+            source = offline_map.pick_source(order, source_kind)
             if not source:
-                raise offline_map.OfflineMapError("l'ordine non ha un GeoTIFF scaricabile (view-ready o COG)")
+                raise offline_map.OfflineMapError("l'ordine non ha un GeoTIFF scaricabile (COG o view-ready)")
             kind, declared = source
             work = os.path.join(_offline_work_folder(flask_app), uuid.uuid4().hex)
             os.makedirs(work)
@@ -282,13 +283,14 @@ def _build_offline_map(flask_app, uid: str, order: dict, headers: dict, user_id:
                 work,
                 on_step=lambda phase, fraction: _offline_job_update(uid, phase=phase, progress=fraction),
                 max_zoom=max_zoom,
+                tile_format=tile_format,
             )
             os.remove(source_path)  # libera spazio prima dello zip
 
             _offline_job_update(uid, phase="data package", progress=0)
             location = order.get("geocodeLocation") or order.get("label") or ""
             map_name = skyfi.safe_name(f"SkyFi-{order.get('orderCode', uid)} {location} HD")
-            filename = _offline_package_filename(skyfi.safe_name(f"{map_name}-z{result['zoom']}"))
+            filename = _offline_package_filename(skyfi.safe_name(f"{map_name}-z{result['zoom']}-{tile_format}"))
             zip_path = os.path.join(work, "package.zip")
             package_hash, size = offline_map.build_package(gpkg, zip_path, filename[:-4], map_name)
             if size > offline_map.MAX_PACKAGE_BYTES:
@@ -339,7 +341,7 @@ def _build_offline_map(flask_app, uid: str, order: dict, headers: dict, user_id:
                 phase="completato",
                 progress=1.0,
                 finished_at=datetime.now(timezone.utc).isoformat(),
-                result={"filename": filename, "hash": package_hash, "size": size, **result},
+                result={"filename": filename, "hash": package_hash, "size": size, "source": kind, **result},
             )
     except BaseException as e:
         logger.error(f"MilSim/SkyFi: mappa offline dell'ordine {uid} fallita: {e}")
@@ -3976,11 +3978,17 @@ class MilSimCompanionPlugin(Plugin):
             order = skyfi.get_order(uid)
             if not order:
                 return jsonify({"success": False, "error": "Ordine non trovato su SkyFi"}), 404
-            source = offline_map.pick_source(order)
+            source_kind = body.get("source") or None
+            if source_kind is not None and source_kind not in offline_map.SOURCE_FIELDS:
+                return jsonify({"success": False, "error": f"Sorgente non valida: {source_kind}"}), 400
+            tile_format = body.get("format") or offline_map.DEFAULT_FORMAT
+            if tile_format not in offline_map.TILE_FORMATS:
+                return jsonify({"success": False, "error": f"Formato non valido: {tile_format}"}), 400
+            source = offline_map.pick_source(order, source_kind)
             if not source:
                 return jsonify({
                     "success": False,
-                    "error": "L'ordine non ha ancora un GeoTIFF scaricabile (view-ready o COG): delivery non completata?",
+                    "error": "L'ordine non ha ancora un GeoTIFF scaricabile (COG o view-ready): delivery non completata?",
                 }), 400
 
             flask_app = app._get_current_object()
@@ -4015,6 +4023,7 @@ class MilSimCompanionPlugin(Plugin):
                     "source": source[0],
                     "source_size": source[1],
                     "max_zoom": max_zoom,
+                    "format": tile_format,
                     "started_at": datetime.now(timezone.utc).isoformat(),
                     "started_by": current_user.username,
                 }
@@ -4022,7 +4031,7 @@ class MilSimCompanionPlugin(Plugin):
 
             threading.Thread(
                 target=_build_offline_map,
-                args=(flask_app, uid, order, skyfi.headers(), current_user.id, max_zoom),
+                args=(flask_app, uid, order, skyfi.headers(), current_user.id, max_zoom, source[0], tile_format),
                 daemon=True,
                 name=f"skyfi-offline-{uid[:8]}",
             ).start()
