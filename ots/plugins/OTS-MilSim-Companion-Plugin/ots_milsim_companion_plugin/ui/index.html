@@ -147,8 +147,10 @@
   .kw { display: inline-block; background: var(--tab); border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px; font-size: 11px; color: var(--muted); margin-right: 4px; }
   .pcn-status { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px;
     margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
-  #modal-backdrop, #play-backdrop, #tpl-preview-backdrop, #dp-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
-  #modal-backdrop.hidden, #play-backdrop.hidden, #tpl-preview-backdrop.hidden, #dp-backdrop.hidden { display: none; }
+  #modal-backdrop, #play-backdrop, #tpl-preview-backdrop, #dp-backdrop, #dpf-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
+  #modal-backdrop.hidden, #play-backdrop.hidden, #tpl-preview-backdrop.hidden, #dp-backdrop.hidden, #dpf-backdrop.hidden { display: none; }
+  .dpf-list { font-size: 12.5px; max-height: 200px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+  .dpf-list:empty { display: none; }
   #offline-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
   #offline-backdrop.hidden { display: none; }
   .offline-status { font-size: 12.5px; margin-top: 6px; }
@@ -359,6 +361,24 @@
     <div class="modal-actions">
       <button class="btn" onclick="closeDpModal()">Annulla</button>
       <button class="btn primary" id="dp-confirm-btn" disabled onclick="confirmDpRepair()">🔧 Crea copia riparata</button>
+    </div>
+  </div>
+</div>
+<div id="dpf-backdrop" class="hidden" onclick="closeDpFilesModal()">
+  <div class="modal" style="width:min(560px, 94vw)" onclick="event.stopPropagation()">
+    <h2 id="dpf-title">📎 Aggiungi file</h2>
+    <div id="dpf-info" class="muted"></div>
+    <label id="dpf-name-label">Nome del data package
+      <input id="dpf-name" placeholder="es. Regolamento e mappe campo Codogno">
+    </label>
+    <label>File da consultare (PDF, immagini, documenti: anche più di uno)
+      <input type="file" id="dpf-files" multiple onchange="drawDpFilesList()">
+    </label>
+    <div id="dpf-list" class="dpf-list"></div>
+    <p class="muted" style="margin:0" id="dpf-note"></p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeDpFilesModal()">Annulla</button>
+      <button class="btn primary" id="dpf-confirm-btn" disabled onclick="confirmDpFiles()">📎 Crea</button>
     </div>
   </div>
 </div>
@@ -2933,6 +2953,8 @@ async function renderDataPackages() {
     <div class="toolbar">
       <h2 style="margin:0">Data package sul server</h2>
       <span style="flex:1"></span>
+      <button class="btn primary" onclick="openDpFilesModal(null)"
+        title="Crea un data package con PDF, immagini o altri file da consultare su ATAK">➕ Nuovo data package</button>
       <button class="btn" onclick="renderDataPackages()">↻ Aggiorna</button>
     </div>
     <p class="muted" style="margin-top:0">Per ogni pacchetto: lo stato delle entità CoT che contiene.
@@ -2978,6 +3000,8 @@ function drawDpList() {
           ${a ? `<button class="btn small" onclick="toggleDp('${esc(p.hash)}')">${open ? "▾" : "▸"} Dettagli</button>` : ""}
           <button class="btn small" ${p.on_disk ? "" : "disabled"} onclick="downloadDp('${esc(p.hash)}')">⬇ Scarica</button>
           ${a && a.needs_repair && !p.server_config ? `<button class="btn small primary" onclick="openDpModal(${i})">🔧 Ripara</button>` : ""}
+          ${p.on_disk && !p.server_config ? `<button class="btn small" onclick="openDpFilesModal(${i})"
+              title="Crea una nuova versione _vN del pacchetto con in più PDF, immagini o altri file">📎 Aggiungi file</button>` : ""}
           ${p.server_config ? "" : `<button class="btn small danger" onclick="deleteDp(${i}, this)">🗑 Elimina</button>`}
         </div>
       </div>
@@ -3113,15 +3137,31 @@ function renderDpLastRepair() {
   const box = document.getElementById("dp-last");
   if (!box || !DP_LAST_REPAIR) return;
   const { original, result } = DP_LAST_REPAIR;
+  const files = DP_LAST_REPAIR.kind === "files";
+  const what = files
+    ? `con ${result.added.length} file${original ? " aggiunti" : ""} (${result.added.map(f => esc(f.name)).join(", ")})`
+    : `(${result.renewed} entità rinnovate, stale fino al ${esc(fmtDT(result.new_stale))})`;
+  if (!original) {
+    box.innerHTML = `<div class="dp-card" style="border-color:var(--present)">
+      ✅ Creato <b>${esc(result.new_filename)}</b> ${what}.
+      <div class="muted" style="font-size:12.5px; margin-top:6px">Su ATAK si scarica dai data package del server;
+        oppure mettilo nei contenuti di una missione o di un template.</div>
+      <div class="toolbar" style="margin:8px 0 0">
+        <button class="btn small" onclick="downloadDp('${esc(result.new_hash)}')">⬇ Scarica</button>
+        <button class="btn small" onclick="DP_LAST_REPAIR = null; document.getElementById('dp-last').innerHTML = ''">Chiudi</button>
+      </div>
+    </div>`;
+    return;
+  }
   box.innerHTML = `<div class="dp-card" style="border-color:var(--present)">
-    ✅ <b>${esc(result.new_filename)}</b> creato da <b>${esc(original.filename)}</b>
-    (${result.renewed} entità rinnovate, stale fino al ${esc(fmtDT(result.new_stale))}).
+    ✅ <b>${esc(result.new_filename)}</b> creato da <b>${esc(original.filename)}</b> ${what}.
     ${result.warning ? `<div class="dp-issue">⚠️ ${esc(result.warning)}</div>` : ""}
-    <div class="muted" style="font-size:12.5px; margin-top:6px">L'originale è ancora sul server: gli EUD che lo
-      scaricano ricevono ancora le aree scadute. Su ATAK elimina il vecchio pacchetto importato prima di
-      importare il nuovo.</div>
+    <div class="muted" style="font-size:12.5px; margin-top:6px">${files
+      ? "L'originale è ancora sul server, senza i nuovi file: se non serve più eliminalo, così nessuno scarica la versione vecchia."
+      : "L'originale è ancora sul server: gli EUD che lo scaricano ricevono ancora le aree scadute."}
+      Su ATAK elimina il vecchio pacchetto importato prima di importare il nuovo.</div>
     <div class="toolbar" style="margin:8px 0 0">
-      <button class="btn small" onclick="downloadDp('${esc(result.new_hash)}')">⬇ Scarica il riparato</button>
+      <button class="btn small" onclick="downloadDp('${esc(result.new_hash)}')">⬇ Scarica il nuovo</button>
       <button class="btn small" onclick="downloadDp('${esc(original.hash)}')">⬇ Scarica l'originale</button>
       <button class="btn small danger" onclick="deleteDpByHash('${esc(original.hash)}', this)">🗑 Elimina l'originale</button>
       <button class="btn small" onclick="DP_LAST_REPAIR = null; document.getElementById('dp-last').innerHTML = ''">Chiudi</button>
@@ -3129,12 +3169,78 @@ function renderDpLastRepair() {
   </div>`;
 }
 
+/* ---- Aggiungi file a un data package / nuovo data package con file ---- */
+// Il server crea sempre un pacchetto NUOVO (per l'aggiunta: versione _vN,
+// come la riparazione) e non tocca l'originale
+let DPF_TARGET = undefined; // pacchetto di partenza, null = nuovo da zero
+const DPF_MAX_FILE = 500 * 1024 * 1024;
+
+function openDpFilesModal(i) {
+  DPF_TARGET = i === null ? null : DP_PACKAGES[i];
+  const isNew = DPF_TARGET === null;
+  document.getElementById("dpf-title").textContent = isNew ? "➕ Nuovo data package" : "📎 Aggiungi file";
+  document.getElementById("dpf-info").innerHTML = isNew ? "" :
+    `<b>${esc(DPF_TARGET.filename)}</b> · ${fmtBytes(DPF_TARGET.size)}`;
+  document.getElementById("dpf-name-label").classList.toggle("hidden", !isNew);
+  document.getElementById("dpf-name").value = "";
+  document.getElementById("dpf-files").value = "";
+  document.getElementById("dpf-note").innerHTML = isNew
+    ? "Il pacchetto contiene solo i file scelti. Su ATAK si scarica dai data package del server: i file si aprono dal Data Package tool con l'app del telefono (PDF, immagini…)."
+    : "Viene creato un <b>nuovo</b> data package (suffisso _vN, uid del manifest nuovo, così ATAK non riusa quello già importato) con tutto il contenuto dell'originale più i file scelti. L'originale resta com'è: potrai eliminarlo dopo.";
+  drawDpFilesList();
+  document.getElementById("dpf-backdrop").classList.remove("hidden");
+}
+
+function closeDpFilesModal() {
+  document.getElementById("dpf-backdrop").classList.add("hidden");
+  DPF_TARGET = undefined;
+}
+
+function drawDpFilesList() {
+  const files = [...document.getElementById("dpf-files").files];
+  const tooBig = files.filter(f => f.size > DPF_MAX_FILE);
+  document.getElementById("dpf-list").innerHTML = files.map(f =>
+    `<div>${f.size > DPF_MAX_FILE ? "⛔" : "📄"} ${esc(f.name)} <span class="muted">· ${fmtBytes(f.size)}</span></div>`).join("")
+    + (tooBig.length ? `<div class="dp-issue">⛔ Oltre 500 MB per file: togli ${tooBig.map(f => esc(f.name)).join(", ")}</div>` : "");
+  const btn = document.getElementById("dpf-confirm-btn");
+  btn.disabled = !files.length || tooBig.length > 0;
+  const total = files.reduce((n, f) => n + f.size, 0);
+  btn.textContent = files.length ? `📎 Crea (${files.length} file, ${fmtBytes(total)})` : "📎 Crea";
+}
+
+async function confirmDpFiles() {
+  if (DPF_TARGET === undefined) return;
+  const target = DPF_TARGET, isNew = target === null;
+  const form = new FormData();
+  if (isNew) {
+    const name = document.getElementById("dpf-name").value.trim();
+    if (!name) return toast("Dai un nome al data package", false);
+    form.append("name", name);
+  }
+  for (const f of document.getElementById("dpf-files").files) form.append("files", f, f.name);
+  const btn = document.getElementById("dpf-confirm-btn");
+  btn.disabled = true;
+  btn.textContent = "Caricamento…";
+  try {
+    const r = await api(isNew ? "/datapackages" : `/datapackages/${encodeURIComponent(target.hash)}/files`,
+      { method: "POST", body: form });
+    DP_LAST_REPAIR = { kind: "files", original: target, result: r };
+    closeDpFilesModal();
+    toast(`Creato ${r.new_filename} con ${r.added.length} file`);
+    renderDataPackages();
+  } catch (e) {
+    // 413 = il server web (nginx client_max_body_size) rifiuta l'upload prima del plugin
+    toast(/413/.test(e.message) ? "File troppo grandi per il server web (limite di upload di nginx)" : e.message, false);
+    drawDpFilesList();
+  }
+}
+
 async function deleteDp(i, btn) {
   await deleteDpByHash(DP_PACKAGES[i].hash, btn);
 }
 
 async function deleteDpByHash(hash, btn) {
-  const p = DP_PACKAGES.find(x => x.hash === hash) || (DP_LAST_REPAIR && DP_LAST_REPAIR.original.hash === hash ? DP_LAST_REPAIR.original : null);
+  const p = DP_PACKAGES.find(x => x.hash === hash) || (DP_LAST_REPAIR && DP_LAST_REPAIR.original && DP_LAST_REPAIR.original.hash === hash ? DP_LAST_REPAIR.original : null);
   const name = p ? p.filename : hash;
   if (!confirm(`Eliminare il data package "${name}" dal server?\n\nFile e riga nel database vengono cancellati: non si può annullare.`)) return;
   if (!confirm(`Conferma di nuovo: eliminare DEFINITIVAMENTE "${name}"?\n\nScaricalo prima se vuoi tenerne una copia.`)) return;
@@ -3142,7 +3248,7 @@ async function deleteDpByHash(hash, btn) {
   try {
     await api(`/datapackages/${encodeURIComponent(hash)}`, { method: "DELETE" });
     toast(`Eliminato ${name}`);
-    if (DP_LAST_REPAIR && DP_LAST_REPAIR.original.hash === hash) DP_LAST_REPAIR = null;
+    if (DP_LAST_REPAIR && DP_LAST_REPAIR.original && DP_LAST_REPAIR.original.hash === hash) DP_LAST_REPAIR = null;
     renderDataPackages();
   } catch (e) {
     toast(e.message, false);

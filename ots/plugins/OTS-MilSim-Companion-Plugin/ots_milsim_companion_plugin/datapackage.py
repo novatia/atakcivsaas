@@ -419,7 +419,7 @@ def clean_cot(raw: bytes, new_times: tuple[str, str, str] | None) -> bytes:
     return body
 
 
-def _rewrite_manifest(raw: bytes, new_name: str, new_uid: str) -> bytes:
+def _rewrite_manifest(raw: bytes, new_name: str, new_uid: str, add_entries: list[str] = ()) -> bytes:
     body = raw[len(BOM):] if raw.startswith(BOM) else raw
     root = ET.fromstring(body)
     config = next((el for el in root if _local(el.tag) == "Configuration"), None)
@@ -434,7 +434,18 @@ def _rewrite_manifest(raw: bytes, new_name: str, new_uid: str) -> bytes:
     for key, value in (("uid", new_uid), ("name", new_name)):
         if key not in found:
             ET.SubElement(config, "Parameter", {"name": key, "value": value})
+    if add_entries:
+        contents = next((el for el in root if _local(el.tag) == "Contents"), None)
+        if contents is None:
+            contents = ET.SubElement(root, "Contents")
+        for entry in add_entries:
+            ET.SubElement(contents, "Content", {"ignore": "false", "zipEntry": entry})
     return b'<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode").encode("utf-8")
+
+
+def new_manifest(name: str, uid: str, entries: list[str]) -> bytes:
+    """Manifest v2 minimo, come lo scrive ATAK: name, uid e una Content per file."""
+    return _rewrite_manifest(b'<MissionPackageManifest version="2"/>', name, uid, entries)
 
 
 def repair(
@@ -531,4 +542,108 @@ def _repair(zf, years, mode, now, new_name, new_uid) -> tuple[bytes, dict]:
         "skipped": skipped,
         "renewed": sum(1 for c in changes if c["renewed"]),
         "size": len(result),
+    }
+
+
+# ----------------------------------------------------------------------
+# File allegati (PDF, immagini, documenti da consultare)
+# ----------------------------------------------------------------------
+
+# Limiti dei file aggiunti dalla tab Data Package. Il pacchetto di partenza
+# può essere grande (mappa offline): si copia a blocchi, mai in memoria.
+MAX_ADDED_FILES = 50
+MAX_ADDED_FILE_BYTES = 500 * 1024 * 1024
+
+_UNSAFE_NAME_RE = re.compile(r"[^\w.\-()' ]+")
+
+
+def safe_file_name(name: str) -> str:
+    """Nome del file dentro lo zip: solo il basename, niente separatori o
+    caratteri strani, estensione conservata. Le lettere accentate restano."""
+    base = re.split(r"[\\/]", name or "")[-1]
+    base = _UNSAFE_NAME_RE.sub("_", base).strip(" ._") or "file"
+    stem, ext = os.path.splitext(base)
+    return stem[:120] + ext[:16] if len(base) > 136 else base
+
+
+def add_files(
+    source: str | os.PathLike | None,
+    out_path: str | os.PathLike,
+    files: list[tuple[str, str | os.PathLike]],
+    new_name: str,
+    new_uid: str | None = None,
+) -> dict:
+    """Scrive in `out_path` un nuovo data package: il contenuto di `source`
+    (None = pacchetto nuovo, vuoto) più `files` = [(nome, percorso locale)].
+
+    Ogni file va in una cartella propria `<uid>/<nome>` come fa ATAK, così
+    due file con lo stesso nome non si pestano, ed è elencato nel manifest.
+    Name e uid del manifest cambiano sempre: ATAK non deve riusare il
+    pacchetto già importato. Le voci esistenti sono copiate identiche,
+    compressione compresa."""
+    if not files:
+        raise DataPackageError("nessun file da aggiungere")
+    if len(files) > MAX_ADDED_FILES:
+        raise DataPackageError(f"troppi file in una volta ({len(files)}, massimo {MAX_ADDED_FILES})")
+    for name, path in files:
+        size = os.path.getsize(path)
+        if size > MAX_ADDED_FILE_BYTES:
+            raise DataPackageError(
+                f"{name}: {size // (1024 * 1024)} MB, massimo {MAX_ADDED_FILE_BYTES // (1024 * 1024)} MB per file"
+            )
+    new_uid = new_uid or str(uuid.uuid4())
+    added = []
+    for name, path in files:
+        clean = safe_file_name(name)
+        added.append({"name": clean, "entry": f"{uuid.uuid4()}/{clean}", "size": os.path.getsize(path), "path": path})
+    entries = [a["entry"] for a in added]
+
+    existing = []
+    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zout:
+        if source is None:
+            zout.writestr(MANIFEST_PATH, new_manifest(new_name, new_uid, entries))
+        else:
+            with open_package(source, check_size=False) as zf:
+                infos = zf.infolist()
+                if len(infos) + len(added) > MAX_ENTRIES:
+                    raise DataPackageError(f"troppe voci nello zip (massimo {MAX_ENTRIES})")
+                manifest_info = next((i for i in infos if _is_manifest_name(i.filename)), None)
+                files_in_zip = [i.filename for i in infos if not i.is_dir() and not _is_manifest_name(i.filename)]
+                if manifest_info is None:
+                    # Pacchetto senza manifest: se ne scrive uno che elenca tutto
+                    zout.writestr(MANIFEST_PATH, new_manifest(new_name, new_uid, files_in_zip + entries))
+                else:
+                    try:
+                        raw = _read_xml_entry(zf, manifest_info)
+                        manifest = _rewrite_manifest(raw, new_name, new_uid, entries)
+                    except ET.ParseError as e:
+                        raise DataPackageError(f"manifest non leggibile: {e}") from e
+                    target = zipfile.ZipInfo(manifest_info.filename, date_time=manifest_info.date_time)
+                    target.compress_type = zipfile.ZIP_DEFLATED
+                    zout.writestr(target, manifest)
+                for info in infos:
+                    if _is_manifest_name(info.filename):
+                        continue
+                    target = zipfile.ZipInfo(info.filename, date_time=info.date_time)
+                    target.compress_type = info.compress_type
+                    target.external_attr = info.external_attr
+                    if info.is_dir():
+                        zout.writestr(target, b"")
+                        continue
+                    with zf.open(info) as src, zout.open(target, "w", force_zip64=True) as dst:
+                        while chunk := src.read(1024 * 1024):
+                            dst.write(chunk)
+                    existing.append(os.path.basename(info.filename))
+        for a in added:
+            zout.write(a["path"], a["entry"])
+
+    names = set(existing)
+    return {
+        "new_name": new_name,
+        "new_uid": new_uid,
+        "added": [
+            {"name": a["name"], "entry": a["entry"], "size": a["size"], "duplicate": a["name"] in names}
+            for a in added
+        ],
+        "size": os.path.getsize(out_path),
     }

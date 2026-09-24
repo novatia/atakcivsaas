@@ -868,6 +868,86 @@ def _dp_new_names(package: DataPackage, manifest_name: str | None) -> tuple[str,
     return datapackage.with_version(filename, version), new_manifest
 
 
+def _dp_register(filename: str, file_hash: str, size: int, like: DataPackage | None = None) -> DataPackage:
+    """Nuova riga DataPackage per uno zip già in UPLOAD_FOLDER/<hash>.zip.
+    `like` = pacchetto di partenza da cui copiare keywords/tool/flag di
+    installazione. creator_uid è FK verso euds.uid: l'ultimo EUD dell'utente
+    corrente (v3.7.1); senza EUD resta nullo."""
+    eud = (
+        db.session.query(EUD)
+        .filter_by(user_id=current_user.id)
+        .order_by(EUD.last_event_time.desc().nulls_last())
+        .first()
+    )
+    package = DataPackage()
+    package.filename = filename
+    package.hash = file_hash
+    package.creator_uid = eud.uid if eud else None
+    package.submission_time = datetime.now(timezone.utc)
+    package.submission_user = current_user.id
+    package.mime_type = "application/zip"
+    package.size = size
+    if like is not None:
+        package.keywords = like.keywords
+        package.tool = like.tool
+        package.expiration = like.expiration
+        package.install_on_enrollment = like.install_on_enrollment
+        package.install_on_connection = like.install_on_connection
+    else:
+        package.keywords = "milsim,file"
+        package.tool = "public"
+    db.session.add(package)
+    db.session.commit()
+    return package
+
+
+def _dp_uploads_folder() -> str:
+    folder = os.path.join(
+        app.config.get("OTS_DATA_FOLDER"), "plugins", "ots_milsim_companion_plugin", "dp_uploads", uuid.uuid4().hex
+    )
+    os.makedirs(folder)
+    return folder
+
+
+def _dp_save_uploads(folder: str) -> list[tuple[str, str]]:
+    """Salva su disco i file del form (campo `files`, multiplo) e ritorna
+    [(nome originale, percorso)]. Werkzeug li tiene già in file temporanei:
+    niente GB in memoria."""
+    saved = []
+    for i, upload in enumerate(request.files.getlist("files")):
+        if not upload or not upload.filename:
+            continue
+        path = os.path.join(folder, f"{i:03d}.upload")
+        upload.save(path)
+        saved.append((upload.filename, path))
+    return saved
+
+
+def _dp_build_and_register(source: str | None, files: list, folder: str, filename: str,
+                           manifest_name: str, like: DataPackage | None) -> dict:
+    """Costruisce lo zip con i file aggiunti, lo sposta in UPLOAD_FOLDER e lo
+    registra. Solleva DataPackageError (400) o FileExistsError (409)."""
+    out = os.path.join(folder, "package.zip")
+    report = datapackage.add_files(source, out, files, manifest_name)
+    sha256 = hashlib.sha256()
+    with open(out, "rb") as f:
+        while chunk := f.read(4 * 1024 * 1024):
+            sha256.update(chunk)
+    new_hash = sha256.hexdigest()
+    if _dp_get(new_hash):
+        raise FileExistsError("Esiste già un data package identico")
+    target = os.path.join(app.config.get("UPLOAD_FOLDER"), f"{new_hash}.zip")
+    shutil.move(out, target)
+    try:
+        _dp_register(filename, new_hash, report["size"], like)
+    except BaseException:
+        db.session.rollback()
+        os.remove(target)  # niente file orfani in UPLOAD_FOLDER
+        raise
+    report.update({"success": True, "new_filename": filename, "new_hash": new_hash})
+    return report
+
+
 class MilSimCompanionPlugin(Plugin):
     metadata = pathlib.Path(__file__).resolve().parent.name
     url_prefix = f"/api/plugins/{metadata.lower()}"
@@ -2653,6 +2733,89 @@ class MilSimCompanionPlugin(Plugin):
                     os.remove(new_path)
                 except OSError:
                     pass
+
+    @staticmethod
+    @blueprint.route("/datapackages/<file_hash>/files", methods=["POST"])
+    @roles_accepted("administrator")
+    def datapackage_add_files(file_hash: str):
+        """Aggiunge file da consultare (PDF, immagini, documenti) a un data
+        package: come la riparazione crea una NUOVA versione _vN accanto
+        all'originale, con name/uid del manifest nuovi e gli stessi flag."""
+        folder = None
+        try:
+            package = _dp_get(file_hash)
+            path = _dp_file(package) if package else None
+            if not path:
+                return jsonify({"success": False, "error": "Data package non trovato"}), 404
+            if _dp_is_server_config(package):
+                return jsonify(
+                    {"success": False, "error": "I data package di connessione al server non si modificano da qui"}
+                ), 400
+            folder = _dp_uploads_folder()
+            files = _dp_save_uploads(folder)
+            if not files:
+                return jsonify({"success": False, "error": "Nessun file ricevuto"}), 400
+            manifest = (datapackage.analyze(path).get("manifest") or {}).get("name")
+            filename, manifest_name = _dp_new_names(package, manifest)
+            report = _dp_build_and_register(path, files, folder, filename, manifest_name, package)
+            logger.info(
+                f"MilSim: aggiunti {len(files)} file a {package.filename} ({package.hash}) → {filename} ({report['new_hash']})"
+            )
+            if package.install_on_enrollment or package.install_on_connection:
+                report["warning"] = (
+                    "L'originale viene installato in automatico sugli EUD (enrollment/connessione) e la nuova "
+                    "versione ha gli stessi flag: finché l'originale esiste gli EUD li ricevono entrambi."
+                )
+            return jsonify(report)
+        except datapackage.DataPackageError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+        except FileExistsError as e:
+            return jsonify({"success": False, "error": str(e)}), 409
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(f"MilSim: aggiunta file al data package {file_hash} fallita: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+        finally:
+            if folder:
+                shutil.rmtree(folder, ignore_errors=True)
+
+    @staticmethod
+    @blueprint.route("/datapackages", methods=["POST"])
+    @roles_accepted("administrator")
+    def datapackage_create():
+        """Nuovo data package da zero con i file caricati (campo `name` e
+        `files` multiplo): per distribuire documenti da consultare su ATAK."""
+        folder = None
+        try:
+            name = (request.form.get("name") or "").strip()
+            if name.lower().endswith(".zip"):
+                name = name[:-4]
+            name = datapackage.safe_file_name(name) if name else ""
+            if not name or name == "file":
+                return jsonify({"success": False, "error": "Dai un nome al data package"}), 400
+            filename = f"{name}.zip"
+            if db.session.query(DataPackage).filter_by(filename=filename).first():
+                return jsonify({"success": False, "error": f"Esiste già un data package «{filename}»"}), 409
+            folder = _dp_uploads_folder()
+            files = _dp_save_uploads(folder)
+            if not files:
+                return jsonify({"success": False, "error": "Nessun file ricevuto"}), 400
+            report = _dp_build_and_register(None, files, folder, filename, name, None)
+            logger.info(f"MilSim: nuovo data package {filename} ({report['new_hash']}) con {len(files)} file")
+            return jsonify(report)
+        except datapackage.DataPackageError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+        except FileExistsError as e:
+            return jsonify({"success": False, "error": str(e)}), 409
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(f"MilSim: creazione data package fallita: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+        finally:
+            if folder:
+                shutil.rmtree(folder, ignore_errors=True)
 
     @staticmethod
     @blueprint.route("/datapackages/<file_hash>", methods=["DELETE"])

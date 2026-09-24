@@ -370,3 +370,79 @@ def test_size_limits_skipped_for_files_on_disk(monkeypatch, tmp_path, package):
     # la riparazione ricostruisce lo zip in memoria: i limiti restano
     with pytest.raises(dp.DataPackageError, match="troppo grande"):
         dp.repair(str(path), now=NOW)
+
+
+# ----------------------------------------------------------------------
+# File allegati
+# ----------------------------------------------------------------------
+
+
+def test_add_files_to_wintak_package(tmp_path):
+    pdf = tmp_path / "up1"
+    pdf.write_bytes(b"%PDF-1.4 regolamento")
+    img = tmp_path / "up2"
+    img.write_bytes(b"\x89PNG mappa")
+    out = tmp_path / "out.zip"
+    report = dp.add_files(FIXTURE, out, [("Regolamento Campo.pdf", pdf), (r"C:\foto\mappa.png", img)], "Campi_v2")
+
+    assert [a["name"] for a in report["added"]] == ["Regolamento Campo.pdf", "mappa.png"]
+    assert report["size"] == out.stat().st_size
+    after = dp.analyze(str(out), NOW)
+    # manifest: name/uid nuovi, voci vecchie più le due nuove, tutto coerente
+    assert after["manifest"]["name"] == "Campi_v2"
+    assert after["manifest"]["uid"] == report["new_uid"]
+    assert after["issues"] == []
+    assert after["cot_total"] == 7  # entità CoT intatte
+    with zipfile.ZipFile(FIXTURE) as src, zipfile.ZipFile(out) as new:
+        for info in src.infolist():
+            if not info.filename.lower().endswith("manifest.xml"):
+                assert new.read(info.filename) == src.read(info.filename)
+        entry = report["added"][0]["entry"]
+        assert entry.endswith("/Regolamento Campo.pdf")
+        assert new.read(entry) == b"%PDF-1.4 regolamento"
+
+
+def test_add_files_new_package(tmp_path):
+    doc = tmp_path / "up"
+    doc.write_bytes(b"testo")
+    out = tmp_path / "new.zip"
+    report = dp.add_files(None, out, [("note.txt", doc), ("note.txt", doc)], "Documenti")
+    after = dp.analyze(str(out), NOW)
+    assert after["manifest"]["name"] == "Documenti"
+    assert after["issues"] == [] and after["cot_total"] == 0
+    # stesso nome due volte: cartelle diverse, nessuna collisione
+    assert len({a["entry"] for a in report["added"]}) == 2
+    assert len(after["files"]) == 2
+
+
+def test_add_files_without_manifest(tmp_path):
+    src = tmp_path / "src.zip"
+    src.write_bytes(_zip({"vecchio.pdf": b"x"}))
+    doc = tmp_path / "up"
+    doc.write_bytes(b"y")
+    out = tmp_path / "out.zip"
+    dp.add_files(src, out, [("nuovo.pdf", doc)], "Pkg_v2")
+    after = dp.analyze(str(out), NOW)
+    assert after["issues"] == []  # manifest creato con dentro anche vecchio.pdf
+
+
+def test_safe_file_name():
+    assert dp.safe_file_name("../../etc/passwd") == "passwd"
+    assert dp.safe_file_name(r"C:\Users\a\Relazione finale.pdf") == "Relazione finale.pdf"
+    assert dp.safe_file_name("città <mappa>?.jpg") == "città _mappa_.jpg"
+    assert dp.safe_file_name("...") == "file"
+    long = dp.safe_file_name("a" * 300 + ".pdf")
+    assert long.endswith(".pdf") and len(long) <= 136
+
+
+def test_add_files_limits(monkeypatch, tmp_path):
+    doc = tmp_path / "up"
+    doc.write_bytes(b"12345")
+    with pytest.raises(dp.DataPackageError, match="nessun file"):
+        dp.add_files(None, tmp_path / "a.zip", [], "X")
+    monkeypatch.setattr(dp, "MAX_ADDED_FILE_BYTES", 4)
+    with pytest.raises(dp.DataPackageError, match="per file"):
+        dp.add_files(None, tmp_path / "a.zip", [("big.pdf", doc)], "X")
+    monkeypatch.setattr(dp, "MAX_ADDED_FILES", 1)
+    with pytest.raises(dp.DataPackageError, match="troppi file"):
+        dp.add_files(None, tmp_path / "a.zip", [("a", doc), ("b", doc)], "X")

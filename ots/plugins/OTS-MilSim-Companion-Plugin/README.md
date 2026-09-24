@@ -350,6 +350,22 @@ test con il pacchetto reale `tests/fixtures/TacticalScoutCodogno.zip`.
 Verificato solo il comportamento di **ATAK-CIV**; come iTAK e WinTAK trattino
 all'import le entità scadute non è stato provato.
 
+#### File da consultare (PDF, immagini, documenti)
+
+- **📎 Aggiungi file** su un pacchetto: crea una **nuova versione `_vN`** con
+  tutto il contenuto dell'originale (voci copiate identiche, a blocchi: va bene
+  anche per le mappe offline da GB) più i file scelti; name e uid del manifest
+  cambiano, così ATAK non riusa il pacchetto già importato. Stessi keywords,
+  tool e flag di installazione dell'originale, che resta sul server finché non
+  lo elimini.
+- **➕ Nuovo data package**: un pacchetto da zero con solo i file caricati.
+- Ogni file finisce in `<uid>/<nome>` ed è elencato nel manifest, come fa ATAK
+  (due file con lo stesso nome non si pestano). Nomi ripuliti (solo il
+  basename, niente separatori), massimo 50 file per volta e 500 MB per file.
+  Su ATAK i file si aprono dal Data Package tool con l'app del telefono.
+- Se nginx rifiuta l'upload (413) il limite è `client_max_body_size` del
+  server web, non del plugin.
+
 ### Meshtastic / TAK tracker (tab Meshtastic e Canali Meshtastic)
 
 Monitor operativo dei tag Meshtastic che arrivano al server e instradamento
@@ -538,6 +554,8 @@ restano invariate per compatibilità con i config esistenti.
 | `GET /datapackages/<hash>/download` | admin | Download dello zip dal browser |
 | `POST /datapackages/<hash>/repair/preview` | admin | Anteprima prima/dopo della riparazione `{"years", "mode": "expired\|all"}` |
 | `POST /datapackages/<hash>/repair` | admin | Crea la copia riparata `_vN` (l'originale resta) |
+| `POST /datapackages/<hash>/files` | admin | Multipart `files` (multiplo): nuova versione `_vN` con i file aggiunti |
+| `POST /datapackages` | admin | Multipart `name` + `files`: nuovo data package con i soli file caricati |
 | `DELETE /datapackages/<hash>` | admin | Elimina riga e file; 409 se usato da missioni o template |
 | `GET /groups` | admin | Gruppi ATAK di OTS con utenti ed EUD (sola lettura) |
 | `POST /templates/<id>/play` | admin | Prepara la missione (stato *pronta*) e pusha ai destinatari; body opzionale `{"team_a_id", "team_b_id", "observer_team_ids"}` (id della tabella groups di OTS) |
@@ -604,6 +622,9 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.17.0** — tab Data Package: **📎 Aggiungi file** (PDF, immagini,
+  documenti) a un pacchetto, in una nuova versione `_vN` accanto
+  all'originale, e **➕ Nuovo data package** da zero con i file caricati.
 - **3.16.1** — mappa offline HD: dentro OTS (eventlet/gevent) il pipe dei
   comandi GDAL è non bloccante e la lettura dell'avanzamento falliva con
   «[Errno 11] Resource temporarily unavailable»; ora si riprova dopo una pausa.
