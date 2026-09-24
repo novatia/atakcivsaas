@@ -645,6 +645,10 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.19.1** — mappa offline HD: il GeoPackage nel pacchetto porta il nome
+  unico del pacchetto. Con due pacchetti dello stesso ordine il file aveva lo
+  stesso nome di quello già installato e in uso su ATAK: l'import falliva e
+  ATAK riscaricava in loop (il download da 299 MB arrivava sempre intero).
 - **3.19.0** — mappa offline HD: sorgente di default il **COG** (originale
   senza perdita) invece del view-ready già JPEG, tile **PNG senza perdita** di
   default (JPEG 95/85 a scelta), pixel copiati identici (`near`) quando il
