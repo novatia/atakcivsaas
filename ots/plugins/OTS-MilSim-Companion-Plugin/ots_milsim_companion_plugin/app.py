@@ -2818,6 +2818,52 @@ class MilSimCompanionPlugin(Plugin):
                 shutil.rmtree(folder, ignore_errors=True)
 
     @staticmethod
+    @blueprint.route("/datapackages/<file_hash>", methods=["PATCH"])
+    @roles_accepted("administrator")
+    def datapackage_rename(file_hash: str):
+        """Rinomina un data package: cambia solo il nome sul server (riga DB),
+        non lo zip. L'hash resta lo stesso, quindi missioni e template che lo
+        usano continuano a funzionare; il nome nei contenuti delle missioni
+        viene allineato. Il name nel manifest dentro lo zip non cambia."""
+        try:
+            package = _dp_get(file_hash)
+            if not package:
+                return jsonify({"success": False, "error": "Data package non trovato"}), 404
+            if _dp_is_server_config(package):
+                return jsonify(
+                    {"success": False, "error": "I data package di connessione al server non si rinominano da qui"}
+                ), 400
+            name = ((request.json or {}).get("filename") or "").strip()
+            if name.lower().endswith(".zip"):
+                name = name[:-4].strip()
+            name = datapackage.safe_file_name(name) if name else ""
+            if not name or name == "file":
+                return jsonify({"success": False, "error": "Nome non valido"}), 400
+            # .zip sempre in fondo: /Marti/sync/content trova il file come <hash>.zip
+            filename = f"{name}.zip"
+            old = package.filename
+            if filename == old:
+                return jsonify({"success": True, "filename": filename, "old_filename": old, "missions_updated": 0})
+            clash = db.session.query(DataPackage).filter_by(filename=filename).first()
+            if clash:
+                return jsonify({"success": False, "error": f"Esiste già un data package «{filename}»"}), 409
+
+            package.filename = filename
+            contents = db.session.query(MissionContent).filter_by(hash=file_hash).all()
+            for content in contents:
+                content.filename = filename
+            db.session.commit()
+            logger.info(f"MilSim: data package {file_hash} rinominato da «{old}» a «{filename}»")
+            return jsonify(
+                {"success": True, "filename": filename, "old_filename": old, "missions_updated": len(contents)}
+            )
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(f"MilSim: rinomina del data package {file_hash} fallita: {e}")
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
     @blueprint.route("/datapackages/<file_hash>", methods=["DELETE"])
     @roles_accepted("administrator")
     def datapackage_delete(file_hash: str):

@@ -3002,6 +3002,8 @@ function drawDpList() {
           ${a && a.needs_repair && !p.server_config ? `<button class="btn small primary" onclick="openDpModal(${i})">🔧 Ripara</button>` : ""}
           ${p.on_disk && !p.server_config ? `<button class="btn small" onclick="openDpFilesModal(${i})"
               title="Crea una nuova versione _vN del pacchetto con in più PDF, immagini o altri file">📎 Aggiungi file</button>` : ""}
+          ${p.server_config ? "" : `<button class="btn small" onclick="renameDp(${i}, this)"
+              title="Cambia il nome con cui il pacchetto compare sul server e su ATAK">✏️ Rinomina</button>`}
           ${p.server_config ? "" : `<button class="btn small danger" onclick="deleteDp(${i}, this)">🗑 Elimina</button>`}
         </div>
       </div>
@@ -3232,6 +3234,24 @@ async function confirmDpFiles() {
     // 413 = il server web (nginx client_max_body_size) rifiuta l'upload prima del plugin
     toast(/413/.test(e.message) ? "File troppo grandi per il server web (limite di upload di nginx)" : e.message, false);
     drawDpFilesList();
+  }
+}
+
+// Cambia solo il nome sul server: zip e hash restano, missioni e template
+// che usano il pacchetto continuano a funzionare
+async function renameDp(i, btn) {
+  const p = DP_PACKAGES[i];
+  const current = p.filename.replace(/\.zip$/i, "");
+  const name = prompt(`Nuovo nome per "${p.filename}":\n(l'estensione .zip viene aggiunta da sola)`, current);
+  if (name === null || !name.trim() || name.trim() === current) return;
+  btn.disabled = true;
+  try {
+    const r = await api(`/datapackages/${encodeURIComponent(p.hash)}`, { method: "PATCH", body: { filename: name.trim() } });
+    toast(`Rinominato in ${r.filename}` + (r.missions_updated ? ` (aggiornato anche in ${r.missions_updated} contenuti di missione)` : ""));
+    renderDataPackages();
+  } catch (e) {
+    toast(e.message, false);
+    btn.disabled = false;
   }
 }
 
