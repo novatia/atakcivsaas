@@ -265,9 +265,10 @@ Ereditato dal fork OTS-SkyFi-Plugin (upstream brian7704, che non distribuisce la
     view-ready è la stessa immagine già compressa da SkyFi in JPEG (ordine
     26383Z2P, 3 km²: COG 1,2 GB LZW contro view-ready 97 MB JPEG q95, stessi
     15798×22130 pixel da 10,5 cm a terra). Il payload (bande grezze) non si usa.
-  - **Formato**: GeoPackage con tile PNG senza perdita (default), JPEG 95 o
-    JPEG 85; oppure **GeoTIFF COG senza perdita** (DEFLATE, overview interne,
-    niente tile), che ATAK apre come immagine nativa. Motivo: il GeoPackage PNG
+  - **Formato**: di default **GeoTIFF COG senza perdita** (DEFLATE, overview
+    interne, niente tile), che ATAK apre come immagine nativa e mostra al
+    dettaglio pieno (verificato su ATAK-CIV); in alternativa GeoPackage con
+    tile PNG senza perdita, JPEG 95 o JPEG 85. Motivo: il GeoPackage PNG
     dell'ordine 26383Z2P conteneva lo zoom 20 completo (3715 tile, 264 MB) ma
     ATAK-CIV lo mostrava a blocchi da ~0,9 m (zoom 17). Sullo stesso COG il
     GeoTIFF viene 455 MB in 21 s, pixel identici.
@@ -650,6 +651,8 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.20.1** — mappa offline HD: GeoTIFF COG formato di default (verificato su
+  ATAK-CIV: dettaglio pieno, circa un terzo del COG di SkyFi).
 - **3.20.0** — mappa offline HD: formato **GeoTIFF COG senza perdita** (niente
   tile, ATAK lo apre come immagine nativa), perché ATAK-CIV mostrava il
   GeoPackage PNG allo zoom 17 pur avendo lo zoom 20 completo.

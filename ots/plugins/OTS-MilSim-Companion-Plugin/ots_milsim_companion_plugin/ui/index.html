@@ -294,12 +294,12 @@
     <label>Immagine di partenza
       <select id="offline-source"></select>
     </label>
-    <label>Formato delle tile
+    <label>Formato
       <select id="offline-format">
-        <option value="png" selected>PNG senza perdita: pixel identici all'originale (pacchetto più grande)</option>
-        <option value="geotiff">GeoTIFF (COG) senza perdita: niente tile, ATAK lo apre come immagine nativa</option>
-        <option value="jpeg95">JPEG 95: quasi senza perdita, circa metà del PNG</option>
-        <option value="jpeg85">JPEG 85: compatto, perde un po' di dettaglio fine</option>
+        <option value="geotiff" selected>GeoTIFF (COG) senza perdita: ATAK lo mostra al dettaglio pieno (consigliato)</option>
+        <option value="png">GeoPackage PNG senza perdita (ATAK-CIV lo mostra meno dettagliato)</option>
+        <option value="jpeg95">GeoPackage JPEG 95: quasi senza perdita, circa metà del PNG</option>
+        <option value="jpeg85">GeoPackage JPEG 85: compatto, perde un po' di dettaglio fine</option>
       </select>
     </label>
     <label>Zoom massimo
@@ -2765,7 +2765,7 @@ function openOfflineModal(uid) {
   if (o.downloadCogUrl) sources.push(`<option value="cog">COG: originale senza perdita${o.cogSize ? " (" + fmtBytes(o.cogSize) + ")" : ""}</option>`);
   if (o.downloadViewReadyCogUrl) sources.push(`<option value="view-ready">View-ready: già compresso JPEG da SkyFi${o.viewReadyCogSize ? " (" + fmtBytes(o.viewReadyCogSize) + ")" : ""}</option>`);
   document.getElementById("offline-source").innerHTML = sources.join("");
-  document.getElementById("offline-format").value = "png";
+  document.getElementById("offline-format").value = "geotiff";
   document.getElementById("offline-zoom").value = "native";
   document.getElementById("offline-order").textContent =
     `Ordine ${o.orderCode}${o.geocodeLocation ? " — " + o.geocodeLocation : ""}${o.resolution ? " · " + o.resolution : ""}`;

@@ -56,12 +56,13 @@ TILE_FORMATS = {
     "jpeg95": ("AUTO", 95),
     "jpeg85": ("AUTO", 85),  # compatto; AUTO = PNG solo ai bordi trasparenti
 }
-# «geotiff»: niente tile, un GeoTIFF COG (DEFLATE, senza perdita, overview
-# interne) che ATAK apre come immagine nativa con GDAL. Il GeoPackage PNG
-# dell'ordine 26383Z2P aveva lo zoom 20 completo (3715 tile), ma ATAK-CIV lo
-# mostrava a blocchi da ~0,9 m, cioè allo zoom 17.
-FORMATS = (*TILE_FORMATS, "geotiff")
-DEFAULT_FORMAT = "png"
+# «geotiff» (default): niente tile, un GeoTIFF COG (DEFLATE, senza perdita,
+# overview interne) che ATAK apre come immagine nativa con GDAL. Il
+# GeoPackage PNG dell'ordine 26383Z2P aveva lo zoom 20 completo (3715 tile),
+# ma ATAK-CIV lo mostrava a blocchi da ~0,9 m, cioè allo zoom 17; il
+# GeoTIFF dello stesso COG si vede al dettaglio pieno (verificato in campo).
+FORMATS = ("geotiff", *TILE_FORMATS)
+DEFAULT_FORMAT = "geotiff"
 FORMAT_EXTENSIONS = {"geotiff": ".tif"}  # gli altri: .gpkg
 
 # Stretch dei raster non a 8 bit: media ± K deviazioni standard per banda
@@ -203,7 +204,7 @@ def warp_args(info: dict, resolution: float | None = None, resampling: str = "cu
     return args
 
 
-def translate_args(info: dict, tile_format: str = DEFAULT_FORMAT) -> list[str]:
+def translate_args(info: dict, tile_format: str = "png") -> list[str]:
     """gdal_translate dal VRT riproiettato al GeoPackage. Nel VRT le bande
     non-alfa del sorgente mantengono la loro numerazione e l'alfa creata da
     -dstalpha è l'ultima. `tile_format` è una chiave di TILE_FORMATS."""

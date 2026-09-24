@@ -234,7 +234,7 @@ def test_convert_end_to_end(tmp_path, kind):
         _geotiff(src, gdal.GDT_Byte, 4, alpha=True)
     gpkg = tmp_path / "map.gpkg"
     phases = []
-    result = om.convert(str(src), str(gpkg), str(tmp_path), on_step=lambda p, f: phases.append(p))
+    result = om.convert(str(src), str(gpkg), str(tmp_path), on_step=lambda p, f: phases.append(p), tile_format="png")
     assert result["native_zoom"] == result["zoom"] == 19
     assert {"analisi", "conversione", "livelli di zoom"} <= set(phases)
 
@@ -246,7 +246,7 @@ def test_convert_end_to_end(tmp_path, kind):
     ).fetchone()[0]
     assert top == 19 and pixel == pytest.approx(om.zoom_resolution(19))
     kinds = {bytes(d[:2]) for (d,) in db.execute(f"select tile_data from '{table}' where zoom_level=19")}
-    assert kinds == {b"\x89P"}  # default: PNG senza perdita
+    assert kinds == {b"\x89P"}  # PNG senza perdita
     db.close()
 
     ds = gdal.Open(str(gpkg))
@@ -273,7 +273,7 @@ def test_convert_jpeg_tiles(tmp_path):
 def test_convert_zoom_cap(tmp_path):
     src = tmp_path / "src.tif"
     _geotiff(src, gdal.GDT_Byte, 4, alpha=True)
-    result = om.convert(str(src), str(tmp_path / "map.gpkg"), str(tmp_path), max_zoom=17)
+    result = om.convert(str(src), str(tmp_path / "map.gpkg"), str(tmp_path), max_zoom=17, tile_format="png")
     assert result == {**result, "native_zoom": 19, "zoom": 17}
 
 
@@ -299,7 +299,7 @@ def test_convert_aligned_source_is_pixel_identical(tmp_path):
     ds = None
 
     gpkg = tmp_path / "map.gpkg"
-    result = om.convert(str(src), str(gpkg), str(tmp_path))
+    result = om.convert(str(src), str(gpkg), str(tmp_path), tile_format="png")
     assert result["aligned"] and result["resampling"] == "near" and result["zoom"] == 20
     assert result["ground_resolution"] == pytest.approx(0.1054, abs=1e-3)  # 10,5 cm a Codogno
 
