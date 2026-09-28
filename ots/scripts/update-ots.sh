@@ -81,6 +81,44 @@ installed_version() {
     "${PIP}" show opentakserver 2>/dev/null | awk '/^Version:/{print $2}' || true
 }
 
+# Il venv vede anche /usr/lib/python3/dist-packages (include-system-site-packages),
+# dove apt (python3-zope.interface 6.1, serve a certbot: non si toglie) mette
+# zope.interface-6.1-nspkg.pth. Quel .pth gira a ogni avvio di Python e registra
+# in sys.modules lo zope DI SISTEMA; zope.event del venv diventa introvabile e
+# OTS muore con «No module named 'zope.event'» (2026-09-29, dopo che pip ha
+# portato zope.interface 8.6 / zope.event 6.2, senza più __init__.py).
+# Il .pth usa sys.modules.setdefault: se zope c'è già, ci aggiunge solo la sua
+# cartella. I .pth del venv girano prima di quelli di sistema, quindi:
+#   - zope/__init__.py con extend_path nel venv (pacchetto regolare del venv),
+#   - 000-zope-venv-first.pth nel venv che lo importa per primo.
+# pip non tocca nessuno dei due: non sono nel RECORD di alcun pacchetto.
+fix_zope_namespace() {
+    local sp
+    sp="$("${PY}" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+    [[ -d "${sp}/zope" ]] || return 0
+    if [[ ! -f "${sp}/zope/__init__.py" ]]; then
+        warn "zope nel venv senza __init__.py: aggiungo extend_path (conflitto con lo zope di sistema)."
+        cat <<'EOF' | sudo -u "${OTS_USER}" tee "${sp}/zope/__init__.py" >/dev/null
+# Aggiunto da update-ots.sh: vedi fix_zope_namespace() nello script.
+__path__ = __import__("pkgutil").extend_path(__path__, __name__)
+EOF
+    fi
+    if [[ ! -f "${sp}/000-zope-venv-first.pth" ]]; then
+        warn "Aggiungo 000-zope-venv-first.pth: lo zope del venv va importato prima del .pth di sistema."
+        echo "import zope" | sudo -u "${OTS_USER}" tee "${sp}/000-zope-venv-first.pth" >/dev/null
+    fi
+}
+
+check_imports() {
+    fix_zope_namespace
+    local out
+    if ! out="$(sudo -u "${OTS_USER}" "${PY}" -c 'import zope.event, zope.interface, gevent, opentakserver.app' 2>&1)"; then
+        echo "${out}" | tail -n 5 >&2
+        die "Import di opentakserver fallito dopo l'aggiornamento (vedi sopra): unit lasciate ripartire dalla trap, ma il server non funzionerà finché l'errore non è risolto."
+    fi
+    log "Import di opentakserver: OK."
+}
+
 # Sentinella: la si ferma prima di toccare i servizi e la si riattiva all'uscita
 # (trap EXIT, quindi anche dopo un die) solo se era attiva prima. Se un giro è
 # in corso (oneshot) si aspetta che finisca invece di interromperlo a metà di
@@ -241,6 +279,10 @@ if [[ "${CURRENT}" != "${LATEST}" ]]; then
 
     NEW_VERSION="$(installed_version)"
     log "Installata versione: ${NEW_VERSION}"
+
+    # Import di base PRIMA di riavviare: un modulo rotto altrimenti si scopre
+    # solo dal ciclo di riavvii delle unit (Restart=always le fa sembrare attive).
+    check_imports
 
     log "Riavvio ${ALL_SERVICES} ..."
     for svc in ${ALL_SERVICES}; do
