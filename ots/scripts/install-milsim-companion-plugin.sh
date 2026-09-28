@@ -13,6 +13,11 @@
 #
 # Percorsi/nomi sovrascrivibili via variabili d'ambiente, es:
 #   OTS_USER=ots OTS_SERVICE=opentakserver ./install-milsim-companion-plugin.sh
+#
+# Dalla rimozione dei vecchi pacchetti fino alla fine la sentinella
+# (ots-health-check.timer) resta in pausa e viene riattivata all'uscita, anche
+# se lo script fallisce: non deve riavviare cot_parser mentre pip sostituisce
+# il plugin, che viene caricato anche in quel processo.
 
 set -euo pipefail
 
@@ -27,6 +32,12 @@ LEGACY_DISTROS=("OTS-EventCalendar-Plugin" "OTS-GameMode-Plugin" "OTS-SkyFi-Plug
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="${PLUGIN_DIR:-${SCRIPT_DIR}/../plugins/${PLUGIN_DISTRO}}"
 
+# Unit con PartOf=opentakserver.service (ots/systemd/): il restart del servizio
+# principale le riavvia con lui, qui si verifica solo che siano ripartite.
+OTS_EXTRA_SERVICES="${OTS_EXTRA_SERVICES:-opentakserver-cot-parser opentakserver-eud-handler}"
+WATCHDOG_TIMER="${WATCHDOG_TIMER:-ots-health-check.timer}"
+WATCHDOG_SERVICE="${WATCHDOG_TIMER%.timer}.service"
+
 PIP="${OTS_VENV}/bin/pip"
 
 # ------------------------- Utility -------------------------
@@ -34,6 +45,32 @@ log()  { echo -e "\e[1;32m[PLUGIN-INSTALL]\e[0m $*"; }
 warn() { echo -e "\e[1;33m[PLUGIN-INSTALL]\e[0m $*" >&2; }
 die()  { echo -e "\e[1;31m[PLUGIN-INSTALL]\e[0m $*" >&2; exit 1; }
 step() { echo -e "\n\e[1;36m==>\e[0m \e[1m$*\e[0m"; }
+
+WATCHDOG_WAS_ACTIVE=0
+cleanup() {
+    if (( WATCHDOG_WAS_ACTIVE )); then
+        if systemctl start "${WATCHDOG_TIMER}"; then
+            log "Sentinella ${WATCHDOG_TIMER} riattivata."
+        else
+            warn "Riattivazione di ${WATCHDOG_TIMER} FALLITA: systemctl start ${WATCHDOG_TIMER}"
+        fi
+    fi
+}
+trap cleanup EXIT
+
+# Se un giro della sentinella (oneshot) è in corso si aspetta che finisca
+# invece di interromperlo a metà di un riavvio.
+pause_watchdog() {
+    systemctl is-active --quiet "${WATCHDOG_TIMER}" 2>/dev/null || return 0
+    WATCHDOG_WAS_ACTIVE=1
+    systemctl stop "${WATCHDOG_TIMER}"
+    local waited=0
+    while systemctl is-active --quiet "${WATCHDOG_SERVICE}" 2>/dev/null && (( waited < 120 )); do
+        (( waited == 0 )) && log "Attendo la fine del giro in corso della sentinella ..."
+        sleep 2; waited=$((waited + 2))
+    done
+    log "Sentinella ${WATCHDOG_TIMER} in pausa fino alla fine dell'installazione."
+}
 
 installed_version() {
     # "|| true": alla prima installazione pip show fallisce e con set -e/pipefail
@@ -91,6 +128,8 @@ fi
 # ------------------------- Rimozione pacchetti precedenti -------------------------
 # Il plugin unifica OTS-EventCalendar-Plugin e OTS-GameMode-Plugin: se sono
 # ancora installati vanno tolti, altrimenti OTS caricherebbe rotte duplicate.
+pause_watchdog
+
 step "Rimozione plugin precedenti (se presenti)"
 for legacy in "${LEGACY_DISTROS[@]}"; do
     if [[ -n "$("${PIP}" show "${legacy}" 2>/dev/null || true)" ]]; then
@@ -175,6 +214,28 @@ if ! systemctl is-active --quiet "${OTS_SERVICE}"; then
     die "Installazione fallita. Per rimuovere il plugin: sudo -u ${OTS_USER} ${PIP} uninstall --yes ${PLUGIN_DISTRO}"
 fi
 log "Servizio attivo."
+
+for svc in ${OTS_EXTRA_SERVICES}; do
+    systemctl cat "${svc}" >/dev/null 2>&1 || continue
+    if ! systemctl is-active --quiet "${svc}"; then
+        # Unit installata senza PartOf (versione vecchia in /etc/systemd/system)
+        warn "${svc} non attivo dopo il riavvio: lo avvio."
+        systemctl restart "${svc}" || true
+        sleep 3
+    fi
+    if systemctl is-active --quiet "${svc}"; then
+        log "${svc}: attivo."
+    else
+        warn "${svc}: NON attivo. journalctl -u ${svc} -n 30"
+    fi
+done
+# cot_parser dal fork n3 è un supervisore: padre + almeno un figlio
+PARSER_PROCS="$(pgrep -fc 'bin/cot_parser' || true)"
+if (( ${PARSER_PROCS:-0} >= 2 )); then
+    log "cot_parser: ${PARSER_PROCS} processi (padre + figli)."
+else
+    warn "cot_parser: ${PARSER_PROCS:-0} processi, atteso padre + almeno un figlio. Log: ${OTS_DATA}/logs/cot_parser.log"
+fi
 
 # ------------------------- Verifica caricamento plugin -------------------------
 step "Verifica caricamento plugin"

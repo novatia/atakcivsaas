@@ -6,6 +6,14 @@
 #   ./update-ots.sh              # ferma opentakserver+cot-parser+eud-handler, backup, upgrade, riavvia, verifica
 #   ./update-ots.sh --check      # mostra solo versione/commit installato vs ultimo disponibile
 #   ./update-ots.sh --ui         # aggiorna anche la web UI servita da nginx
+#   ./update-ots.sh --no-backup  # salta il backup dei dati e la rotazione: i
+#                                # backup esistenti restano tutti intatti
+# I flag si combinano (es. --no-backup --ui).
+#
+# Durante l'aggiornamento la sentinella (ots-health-check.timer) viene fermata
+# e riattivata alla fine, anche se lo script fallisce: altrimenti potrebbe
+# riavviare un servizio mentre pip sta sostituendo il pacchetto, o mandare su
+# Telegram falsi allarmi per le unit ferme di proposito.
 #
 # Le tre unit girano sullo stesso venv (vedi ots/systemd/): vengono fermate
 # tutte PRIMA di backup+upgrade, non solo riavviate dopo — altrimenti
@@ -43,8 +51,24 @@ BACKUP_DIR="${BACKUP_DIR:-/root/ots-backups}"
 KEEP_BACKUPS="${KEEP_BACKUPS:-5}"
 UI_REPO="${UI_REPO:-brian7704/OpenTAKServer-UI}"
 
+WATCHDOG_TIMER="${WATCHDOG_TIMER:-ots-health-check.timer}"
+WATCHDOG_SERVICE="${WATCHDOG_TIMER%.timer}.service"
+
 PIP="${OTS_VENV}/bin/pip"
 PY="${OTS_VENV}/bin/python3"
+
+# ------------------------- Argomenti -------------------------
+MODE_CHECK=0
+MODE_UI=0
+NO_BACKUP=0
+for arg in "$@"; do
+    case "${arg}" in
+        --check)     MODE_CHECK=1 ;;
+        --ui)        MODE_UI=1 ;;
+        --no-backup) NO_BACKUP=1 ;;
+        *) echo "Argomento sconosciuto: ${arg} (validi: --check --ui --no-backup)" >&2; exit 2 ;;
+    esac
+done
 
 # ------------------------- Utility -------------------------
 log()  { echo -e "\e[1;32m[OTS-UPDATE]\e[0m $*"; }
@@ -55,6 +79,44 @@ installed_version() {
     # "|| true": se il pacchetto non è installato pip show fallisce e con
     # set -e/pipefail lo script uscirebbe in silenzio prima del messaggio di errore
     "${PIP}" show opentakserver 2>/dev/null | awk '/^Version:/{print $2}' || true
+}
+
+# Sentinella: la si ferma prima di toccare i servizi e la si riattiva all'uscita
+# (trap EXIT, quindi anche dopo un die) solo se era attiva prima. Se un giro è
+# in corso (oneshot) si aspetta che finisca invece di interromperlo a metà di
+# un riavvio.
+WATCHDOG_WAS_ACTIVE=0
+# 1 fra lo stop delle unit e il loro riavvio: se lo script muore lì in mezzo
+# (pip install fallito, rete giù, set -e) le si rialza, invece di lasciare il
+# server spento.
+SERVICES_STOPPED=0
+TMP=""
+cleanup() {
+    [[ -n "${TMP}" ]] && rm -rf "${TMP}"
+    if (( SERVICES_STOPPED )); then
+        warn "Uscita a metà aggiornamento: riavvio ${ALL_SERVICES} con quello che è installato ora."
+        for svc in ${ALL_SERVICES}; do systemctl start "${svc}" || warn "${svc} non riparte"; done
+    fi
+    if (( WATCHDOG_WAS_ACTIVE )); then
+        if systemctl start "${WATCHDOG_TIMER}"; then
+            log "Sentinella ${WATCHDOG_TIMER} riattivata."
+        else
+            warn "Riattivazione di ${WATCHDOG_TIMER} FALLITA: systemctl start ${WATCHDOG_TIMER}"
+        fi
+    fi
+}
+trap cleanup EXIT
+
+pause_watchdog() {
+    systemctl is-active --quiet "${WATCHDOG_TIMER}" 2>/dev/null || return 0
+    WATCHDOG_WAS_ACTIVE=1
+    systemctl stop "${WATCHDOG_TIMER}"
+    local waited=0
+    while systemctl is-active --quiet "${WATCHDOG_SERVICE}" 2>/dev/null && (( waited < 120 )); do
+        (( waited == 0 )) && log "Attendo la fine del giro in corso della sentinella ..."
+        sleep 2; waited=$((waited + 2))
+    done
+    log "Sentinella ${WATCHDOG_TIMER} in pausa fino alla fine dell'aggiornamento."
 }
 
 # Ultimo commit (short hash) del branch del fork da cui installiamo — non un
@@ -96,7 +158,7 @@ if [[ -n "${OTS_GIT_SOURCE}" ]]; then
     LATEST="$(latest_git_commit)"
     log "Versione installata: ${CURRENT}   Sorgente: ${OTS_GIT_SOURCE}   Ultimo commit: ${LATEST}"
 
-    if [[ "${1:-}" == "--check" ]]; then
+    if (( MODE_CHECK )); then
         log "Installazione da fork: esegui senza --check per reinstallare sempre l'ultimo commit del branch."
         exit 0
     fi
@@ -104,7 +166,7 @@ else
     LATEST="$(latest_version)"
     log "Versione installata: ${CURRENT}   Ultima su PyPI: ${LATEST}"
 
-    if [[ "${1:-}" == "--check" ]]; then
+    if (( MODE_CHECK )); then
         if [[ "${CURRENT}" == "${LATEST}" ]]; then
             log "Sei già all'ultima versione."
         else
@@ -115,7 +177,7 @@ else
 
     if [[ "${CURRENT}" == "${LATEST}" ]]; then
         log "Già all'ultima versione (${CURRENT}). Nessun aggiornamento backend necessario."
-        [[ "${1:-}" == "--ui" ]] || exit 0
+        (( MODE_UI )) || exit 0
     fi
 fi
 
@@ -125,37 +187,48 @@ STAMP="$(date +%F_%H%M%S)"
 BACKUP_FILE="${BACKUP_DIR}/ots-data-${CURRENT}-${STAMP}.tar.gz"
 
 # ------------------------- Upgrade backend -------------------------
+if [[ "${CURRENT}" != "${LATEST}" || ${MODE_UI} -eq 1 ]]; then
+    pause_watchdog
+fi
+
 if [[ "${CURRENT}" != "${LATEST}" ]]; then
     # Tutte e tre le unit girano sullo stesso venv: aggiornare i pacchetti
     # mentre sono ancora in esecuzione può farle leggere file a metà scritti
     # o lasciarle con moduli vecchi in memoria mentre gli altri processi hanno
     # già i nuovi — le fermiamo PRIMA del backup/upgrade, non solo dopo.
     log "Fermo ${ALL_SERVICES} prima dell'aggiornamento ..."
+    SERVICES_STOPPED=1
     for svc in ${ALL_SERVICES}; do
         systemctl stop "${svc}"
     done
 
-    log "Backup di ${OTS_DATA} in ${BACKUP_FILE} ..."
-    # Con i servizi fermi non c'è più scrittura concorrente sui log: l'unico
-    # motivo per cui tar potrebbe ancora vedere un file cambiare a metà lettura
-    # è un processo esterno (logrotate, ecc.), quindi teniamo comunque la
-    # tolleranza sull'exit code 1 ("file changed as we read it").
-    set +e
-    tar czf "${BACKUP_FILE}" --warning=no-file-changed \
-        -C "$(dirname "${OTS_DATA}")" "$(basename "${OTS_DATA}")"
-    TAR_RC=$?
-    set -e
-    if (( TAR_RC > 1 )); then
-        for svc in ${ALL_SERVICES}; do systemctl start "${svc}" || true; done
-        die "Backup fallito (tar exit ${TAR_RC}). Servizi rimessi su, nessun aggiornamento applicato."
-    fi
-    log "Backup completato ($(du -h "${BACKUP_FILE}" | cut -f1))."
+    if (( NO_BACKUP )); then
+        warn "--no-backup: nessun backup dei dati, i backup esistenti in ${BACKUP_DIR} restano tutti."
+        BACKUP_FILE=""
+    else
+        log "Backup di ${OTS_DATA} in ${BACKUP_FILE} ..."
+        # Con i servizi fermi non c'è più scrittura concorrente sui log: l'unico
+        # motivo per cui tar potrebbe ancora vedere un file cambiare a metà lettura
+        # è un processo esterno (logrotate, ecc.), quindi teniamo comunque la
+        # tolleranza sull'exit code 1 ("file changed as we read it").
+        set +e
+        tar czf "${BACKUP_FILE}" --warning=no-file-changed \
+            -C "$(dirname "${OTS_DATA}")" "$(basename "${OTS_DATA}")"
+        TAR_RC=$?
+        set -e
+        if (( TAR_RC > 1 )); then
+            for svc in ${ALL_SERVICES}; do systemctl start "${svc}" || true; done
+            SERVICES_STOPPED=0
+            die "Backup fallito (tar exit ${TAR_RC}). Servizi rimessi su, nessun aggiornamento applicato."
+        fi
+        log "Backup completato ($(du -h "${BACKUP_FILE}" | cut -f1))."
 
-    # Rotazione: tieni solo gli ultimi KEEP_BACKUPS
-    ls -1t "${BACKUP_DIR}"/ots-data-*.tar.gz 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)) | while read -r old; do
-        warn "Rimuovo backup vecchio: ${old}"
-        rm -f "${old}"
-    done
+        # Rotazione: tieni solo gli ultimi KEEP_BACKUPS
+        ls -1t "${BACKUP_DIR}"/ots-data-*.tar.gz 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)) | while read -r old; do
+            warn "Rimuovo backup vecchio: ${old}"
+            rm -f "${old}"
+        done
+    fi
 
     log "Aggiorno opentakserver come utente ${OTS_USER} ..."
     if [[ -n "${OTS_GIT_SOURCE}" ]]; then
@@ -171,8 +244,9 @@ if [[ "${CURRENT}" != "${LATEST}" ]]; then
 
     log "Riavvio ${ALL_SERVICES} ..."
     for svc in ${ALL_SERVICES}; do
-        systemctl start "${svc}"
+        systemctl start "${svc}" || true
     done
+    SERVICES_STOPPED=0
     sleep 5
 
     FAILED_SERVICES=""
@@ -187,7 +261,16 @@ if [[ "${CURRENT}" != "${LATEST}" ]]; then
     done
     if [[ -n "${FAILED_SERVICES}" ]]; then
         tail -n 30 "${OTS_DATA}/logs/opentakserver.log" 2>/dev/null || true
-        die "Aggiornamento fallito, servizi non partiti:${FAILED_SERVICES}. Backup disponibile: ${BACKUP_FILE}"
+        die "Aggiornamento fallito, servizi non partiti:${FAILED_SERVICES}.${BACKUP_FILE:+ Backup disponibile: ${BACKUP_FILE}}"
+    fi
+
+    # cot_parser dal fork n3 è un supervisore: padre + un figlio per
+    # OTS_COT_PARSER_PROCESSES. Solo il padre = il figlio muore in loop.
+    PARSER_PROCS="$(pgrep -fc 'bin/cot_parser' || true)"
+    if (( ${PARSER_PROCS:-0} >= 2 )); then
+        log "cot_parser: ${PARSER_PROCS} processi (padre + figli)."
+    else
+        warn "cot_parser: ${PARSER_PROCS:-0} processi, atteso padre + almeno un figlio. Log: ${OTS_DATA}/logs/cot_parser.log"
     fi
 
     # Verifica porte (8087 spesso volutamente disabilitata: solo avviso)
@@ -205,7 +288,7 @@ if [[ "${CURRENT}" != "${LATEST}" ]]; then
 fi
 
 # ------------------------- Upgrade UI (opzionale) -------------------------
-if [[ "${1:-}" == "--ui" ]]; then
+if (( MODE_UI )); then
     log "Aggiornamento web UI da ${UI_REPO} ..."
 
     # Trova la root della UI: override manuale via UI_ROOT, altrimenti cerca
@@ -235,7 +318,6 @@ for a in r.get("assets", []):
 
     log "Scarico UI ${UI_TAG} ..."
     TMP="$(mktemp -d)"
-    trap 'rm -rf "${TMP}"' EXIT
     curl -fsSL -o "${TMP}/ui.zip" "${UI_ZIP_URL}"
 
     UI_BACKUP="${BACKUP_DIR}/ots-ui-${STAMP}.tar.gz"
@@ -264,7 +346,7 @@ for a in r.get("assets", []):
 fi
 
 log "Fatto."
-if [[ -f "${BACKUP_FILE}" ]]; then
+if [[ -n "${BACKUP_FILE}" && -f "${BACKUP_FILE}" ]]; then
     log "In caso di problemi, ripristina i dati con:"
     log "  systemctl stop ${ALL_SERVICES} && tar xzf ${BACKUP_FILE} -C $(dirname "${OTS_DATA}") && systemctl start ${ALL_SERVICES}"
 fi
