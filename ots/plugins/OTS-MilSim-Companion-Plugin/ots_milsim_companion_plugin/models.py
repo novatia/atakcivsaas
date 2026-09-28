@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Float,
@@ -410,6 +411,9 @@ class MeshChannelMap(db.Model):
     group_name = db.Column(String(255), nullable=True)
     enabled = db.Column(Boolean, nullable=False, default=True)
     created_at = db.Column(DateTime, nullable=False, default=datetime.utcnow)
+    # PSK del canale in base64 (come la mostra l'app Meshtastic), per la chat.
+    # Vuota = si usa quella dello stesso canale in meshtastic_channels di OTS.
+    psk = db.Column(String(64), nullable=True)
 
     def serialize(self):
         return {
@@ -419,6 +423,56 @@ class MeshChannelMap(db.Model):
             "group_id": self.group_id,
             "group_name": self.group_name,
             "enabled": self.enabled,
+            # La chiave non esce mai verso il browser: si dice solo se c'è
+            "psk_set": bool(self.psk),
+        }
+
+
+class MeshChatMessage(db.Model):
+    """Messaggio di testo Meshtastic (TEXT_MESSAGE_APP) visto sul feed MQTT o
+    inviato dal pannello chat. Chiave logica: (from_node, packet_id) — lo stesso
+    pacchetto arriva una volta per ogni gateway che lo sente."""
+
+    __tablename__ = "msh_chat_messages"
+
+    id = db.Column(Integer, primary_key=True)
+    channel_name = db.Column(String(255), nullable=True, index=True)
+    packet_id = db.Column(BigInteger, nullable=True)
+    from_node = db.Column(String(16), nullable=True)
+    to_node = db.Column(String(16), nullable=True)
+    text = db.Column(Text, nullable=False)
+    # rx = dalla mesh, tx = inviato dal pannello, atak = GeoChat di ATAK girata
+    # da OTS verso la mesh
+    direction = db.Column(String(8), nullable=False)
+    author = db.Column(String(255), nullable=True)
+    rx_gateway = db.Column(String(32), nullable=True)
+    rssi = db.Column(Integer, nullable=True)
+    snr = db.Column(Float, nullable=True)
+    hop_count = db.Column(Integer, nullable=True)
+    heard_count = db.Column(Integer, nullable=False, default=0)
+    # Solo per i tx: sent = pubblicato sul broker, heard = rivisto da un gateway
+    status = db.Column(String(16), nullable=True)
+    created_at = db.Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    __table_args__ = (db.UniqueConstraint("from_node", "packet_id", name="uq_msh_chat_packet"),)
+
+    def serialize(self):
+        return {
+            "id": self.id,
+            "channel": self.channel_name,
+            "packet_id": self.packet_id,
+            "from_node": self.from_node,
+            "to_node": self.to_node,
+            "text": self.text,
+            "direction": self.direction,
+            "author": self.author,
+            "gateway": self.rx_gateway,
+            "rssi": self.rssi,
+            "snr": self.snr,
+            "hop_count": self.hop_count,
+            "heard_count": self.heard_count,
+            "status": self.status,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
         }
 
 
@@ -481,4 +535,5 @@ PLUGIN_TABLES = [
     SkyfiHiddenOrder.__table__,
     MeshChannelMap.__table__,
     MeshTag.__table__,
+    MeshChatMessage.__table__,
 ]

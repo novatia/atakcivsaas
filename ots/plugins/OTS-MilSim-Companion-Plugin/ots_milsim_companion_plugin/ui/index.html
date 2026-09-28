@@ -206,6 +206,25 @@
   .msh-console .l-error { color: #ff8c8c; }
   .msh-console .l-debug { color: #7d8794; }
   .msh-kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px 18px; }
+  /* ---- Chat Meshtastic ---- */
+  .chat-panel { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); margin: 14px 0; }
+  .chat-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .chat-head select { min-width: 160px; }
+  .chat-box { height: 380px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 12px; background: var(--bg); }
+  .chat-day { align-self: center; font-size: 11px; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 99px; padding: 2px 10px; margin: 6px 0; }
+  .chat-msg { max-width: min(75%, 560px); padding: 6px 10px 4px; border-radius: 12px 12px 12px 3px; background: var(--panel); border: 1px solid var(--border); align-self: flex-start; overflow-wrap: anywhere; }
+  .chat-msg.mine { align-self: flex-end; border-radius: 12px 12px 3px 12px; background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chat-msg.atak { border-color: var(--maybe); }
+  .chat-msg .who { font-size: 11.5px; font-weight: 600; color: var(--accent-2); margin-bottom: 2px; }
+  .chat-msg.mine .who { color: rgba(255,255,255,.85); }
+  .chat-msg .body { white-space: pre-wrap; }
+  .chat-msg .meta { font-size: 10.5px; opacity: .75; text-align: right; margin-top: 2px; }
+  .chat-empty { margin: auto; color: var(--muted); text-align: center; max-width: 420px; }
+  .chat-input { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); align-items: flex-end; }
+  .chat-input textarea { flex: 1; resize: none; min-height: 38px; max-height: 120px; font: inherit; }
+  .chat-input .count { font-size: 11px; color: var(--muted); min-width: 56px; text-align: right; }
+  .chat-input .count.over { color: var(--absent); font-weight: 600; }
+  .chat-warn { padding: 8px 12px; font-size: 12.5px; color: var(--maybe); border-bottom: 1px solid var(--border); }
   .msh-kv div { border-bottom: 1px solid var(--border); padding-bottom: 6px; min-width: 0; }
   .msh-kv .k { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
   .msh-kv .v { font-size: 14px; word-break: break-word; }
@@ -3530,6 +3549,7 @@ async function renderMeshtastic() {
   }
   mshPaintShell();
   mshPaint();
+  await chatInit();
   MSH.timer = setInterval(mshPoll, MSH_POLL_MS);
 }
 
@@ -3562,6 +3582,22 @@ function mshPaintShell() {
       <tbody id="msh-rows"></tbody>
     </table></div>
 
+    <div class="chat-panel">
+      <div class="chat-head">
+        <strong>💬 Chat mesh</strong>
+        <select id="chat-channel" onchange="chatSelect(this.value)"></select>
+        <span class="muted" id="chat-channel-info"></span>
+      </div>
+      <div class="chat-warn" id="chat-warn" style="display:none"></div>
+      <div class="chat-box" id="chat-box"><div class="chat-empty">Caricamento…</div></div>
+      <form class="chat-input" onsubmit="chatSend(event)">
+        <textarea id="chat-text" rows="1" placeholder="Scrivi un messaggio…" title="Invio per inviare, Maiusc+Invio per andare a capo"
+          oninput="chatCount()" onkeydown="chatKey(event)"></textarea>
+        <span class="count" id="chat-count"></span>
+        <button class="btn primary" id="chat-send" type="submit">Invia</button>
+      </form>
+    </div>
+
     <h3>Console eventi</h3>
     <div class="msh-bar">
       <input type="search" id="msh-lq" placeholder="Filtra per tag, canale, gruppo…" oninput="mshLogFilter('tag', this.value)">
@@ -3581,6 +3617,7 @@ function mshPaintShell() {
 }
 
 async function mshPoll() {
+  chatPoll();
   if (MSH.paused) return;
   try {
     const data = await api(`/meshtastic/state?since=${MSH.since}`);
@@ -3884,16 +3921,213 @@ async function mshForget(key) {
 
 /* ================= Canali Meshtastic → gruppi OTS ================= */
 
+/* ================= Chat Meshtastic =================
+   Stesso polling del monitor (ogni 2 s): si chiedono solo i messaggi con id
+   maggiore dell'ultimo visto. I propri messaggi (tx) stanno a destra, con lo
+   stato: ✓ pubblicato sul broker, ✓✓ rivisto da un gateway = è in aria.      */
+
+let CHAT = { channel: null, lastId: 0, messages: [], info: null, busy: false, lastDay: null };
+
+function chatStoredChannel() { try { return localStorage.getItem("milsim.chat.channel"); } catch (e) { return null; } }
+function chatStoreChannel(v) { try { localStorage.setItem("milsim.chat.channel", v); } catch (e) { /* storage bloccato */ } }
+
+async function chatInit() {
+  try { CHAT.info = await api("/meshtastic/chat/channels"); }
+  catch (e) { chatWarn("⚠️ " + esc(e.message)); return; }
+  const channels = CHAT.info.channels || [];
+  const select = document.getElementById("chat-channel");
+  if (!select) return;
+  if (!channels.length) {
+    select.innerHTML = `<option value="">— nessun canale —</option>`;
+    CHAT.channel = null;
+    chatShowEmpty("Nessun canale noto. Crea una mappatura (con la PSK) nella tab <b>Canali Meshtastic</b>, " +
+      "oppure aspetta che un gateway pubblichi qualcosa.");
+    chatWarn(CHAT.info.observer ? "" : "L'observer MQTT è spento: senza, la chat non riceve nulla. Si accende nella tab Canali Meshtastic → Sorgenti.");
+    const send = document.getElementById("chat-send");
+    if (send) send.disabled = true;
+    return;
+  }
+  const stored = CHAT.channel || chatStoredChannel();
+  const pick = channels.find(c => c.name === stored) || channels.find(c => c.can_send) || channels[0];
+  select.innerHTML = channels.map(c =>
+    `<option value="${esc(c.name)}" ${c.name === pick.name ? "selected" : ""}>${esc(c.name)}${c.can_send ? "" : " ⚠"}</option>`).join("");
+  await chatSelect(pick.name);
+}
+
+function chatWarn(html) {
+  const box = document.getElementById("chat-warn");
+  if (!box) return;
+  box.style.display = html ? "block" : "none";
+  box.innerHTML = html || "";
+}
+function chatShowEmpty(html) {
+  const box = document.getElementById("chat-box");
+  if (box) box.innerHTML = `<div class="chat-empty">${html}</div>`;
+}
+
+async function chatSelect(name) {
+  CHAT.channel = name;
+  CHAT.lastId = 0;
+  CHAT.messages = [];
+  CHAT.lastDay = null;
+  chatStoreChannel(name);
+  const c = (CHAT.info.channels || []).find(x => x.name === name) || {};
+  const source = { plugin: "PSK dalla tab Canali", ots: "PSK di OpenTAKServer" }[c.psk_source] || "nessuna PSK";
+  const stats = (c.decrypt_ok || c.decrypt_failed || c.encrypted_no_key)
+    ? ` · decifrati ${c.decrypt_ok}${c.decrypt_failed ? `, falliti ${c.decrypt_failed}` : ""}${c.encrypted_no_key ? `, senza chiave ${c.encrypted_no_key}` : ""}` : "";
+  document.getElementById("chat-channel-info").textContent =
+    `${source}${c.root ? " · topic " + c.root.split(".").join("/") : ""}${stats} · mittente ${CHAT.info.long_name || ""} (${CHAT.info.node_id || ""})`;
+  const warnings = [];
+  if (!CHAT.info.observer) warnings.push("L'observer MQTT è spento: i messaggi dalla mesh non arrivano (tab Canali Meshtastic → Sorgenti).");
+  if (c.problem) warnings.push(`Per scrivere su ${esc(name)}: ${esc(c.problem)}.`);
+  if (c.decrypt_failed) warnings.push(`${c.decrypt_failed} pacchetti non si decifrano con la PSK attuale: probabilmente è sbagliata.`);
+  chatWarn(warnings.join("<br>"));
+  const send = document.getElementById("chat-send");
+  if (send) { send.disabled = !c.can_send; send.title = c.can_send ? "" : (c.problem || ""); }
+  chatCount();
+  chatShowEmpty("Caricamento…");
+  await chatPoll(true);
+}
+
+async function chatPoll(force = false) {
+  if (!CHAT.channel || (CHAT.busy && !force) || !document.getElementById("chat-box")) return;
+  CHAT.busy = true;
+  const channel = CHAT.channel;
+  try {
+    const data = await api(`/meshtastic/chat?channel=${encodeURIComponent(channel)}&after_id=${CHAT.lastId}`);
+    if (channel !== CHAT.channel) return; // canale cambiato durante la richiesta
+    const fresh = data.messages || [];
+    if (fresh.length || !CHAT.messages.length) chatAppend(fresh);
+    else chatRefreshStatus();
+  } catch (e) { /* il monitor mostra già l'errore di rete */ }
+  finally { CHAT.busy = false; }
+}
+
+function chatSender(m) {
+  const hq = (CHAT.info && CHAT.info.long_name) || "HQ";
+  if (m.direction === "tx") return m.author ? `${m.author} (via ${hq})` : hq;
+  const name = m.sender_name || m.from_node || "?";
+  return m.direction === "atak" ? `${name} · da ATAK` : name;
+}
+function chatMeta(m) {
+  const time = new Date(m.created_at).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+  if (m.direction === "tx") {
+    const state = m.status === "heard" ? `✓✓ sentito dalla mesh${m.gateway ? " (" + esc(m.gateway) + ")" : ""}` : "✓ inviato";
+    return `${time} · ${state}`;
+  }
+  const radio = [m.rssi !== null && m.rssi !== undefined ? `RSSI ${m.rssi}` : null,
+                 m.snr !== null && m.snr !== undefined ? `SNR ${m.snr}` : null,
+                 m.hop_count ? `${m.hop_count} hop` : null,
+                 m.heard_count > 1 ? `${m.heard_count} gateway` : null].filter(Boolean).join(" · ");
+  return `${time}${radio ? " · " + esc(radio) : ""}`;
+}
+function chatBubble(m) {
+  const cls = m.direction === "tx" ? "mine" : (m.direction === "atak" ? "atak" : "");
+  return `<div class="chat-msg ${cls}" data-id="${m.id}">
+    <div class="who">${esc(chatSender(m))}</div>
+    <div class="body">${esc(m.text)}</div>
+    <div class="meta">${chatMeta(m)}</div></div>`;
+}
+
+function chatAppend(list) {
+  const box = document.getElementById("chat-box");
+  if (!box) return;
+  if (!CHAT.messages.length) {
+    if (!list.length) {
+      chatShowEmpty(`Nessun messaggio su <b>${esc(CHAT.channel)}</b>. I messaggi arrivano dal feed MQTT dei gateway; ` +
+        "quelli scritti qui partono dal nodo virtuale del server.");
+      return;
+    }
+    box.innerHTML = "";
+  }
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  let html = "";
+  for (const m of list) {
+    const day = new Date(m.created_at).toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" });
+    if (day !== CHAT.lastDay) { html += `<div class="chat-day">${esc(day)}</div>`; CHAT.lastDay = day; }
+    html += chatBubble(m);
+    CHAT.messages.push(m);
+    CHAT.lastId = Math.max(CHAT.lastId, m.id);
+  }
+  box.insertAdjacentHTML("beforeend", html);
+  if (nearBottom || list.some(m => m.direction === "tx")) box.scrollTop = box.scrollHeight;
+}
+
+/* I propri messaggi cambiano stato (✓ → ✓✓) senza id nuovi: ogni 5 giri si
+   rileggono le ultime righe del canale e si aggiorna solo la riga di stato */
+let chatStatusTick = 0;
+async function chatRefreshStatus() {
+  if (++chatStatusTick % 5) return;
+  if (!CHAT.messages.some(m => m.direction === "tx" && m.status !== "heard")) return;
+  try {
+    const data = await api(`/meshtastic/chat?channel=${encodeURIComponent(CHAT.channel)}`);
+    for (const m of data.messages || []) {
+      const el = document.querySelector(`.chat-msg[data-id="${m.id}"] .meta`);
+      if (el) el.innerHTML = chatMeta(m);
+      const known = CHAT.messages.find(x => x.id === m.id);
+      if (known) Object.assign(known, m);
+    }
+  } catch (e) { /* riprova al prossimo giro */ }
+}
+
+function chatBytes(text) { return new TextEncoder().encode(text).length; }
+function chatCount() {
+  const input = document.getElementById("chat-text");
+  const counter = document.getElementById("chat-count");
+  if (!input || !counter) return;
+  const max = (CHAT.info && CHAT.info.max_bytes) || 200;
+  const used = chatBytes(input.value.trim());
+  counter.textContent = `${used}/${max}`;
+  counter.classList.toggle("over", used > max);
+  // Il segnaposto lungo va a capo e gonfierebbe scrollHeight: vuoto = una riga
+  input.style.height = "auto";
+  if (input.value) input.style.height = Math.min(input.scrollHeight, 120) + "px";
+}
+function chatKey(event) {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    chatSend(event);
+  }
+}
+async function chatSend(event) {
+  event.preventDefault();
+  const input = document.getElementById("chat-text");
+  const button = document.getElementById("chat-send");
+  const text = input.value.trim();
+  if (!text || !CHAT.channel || button.disabled) return;
+  const max = (CHAT.info && CHAT.info.max_bytes) || 200;
+  if (chatBytes(text) > max) { toast(`Messaggio troppo lungo: massimo ${max} byte`, false); return; }
+  button.disabled = true;
+  try {
+    await api("/meshtastic/chat", { method: "POST", body: { channel: CHAT.channel, text } });
+    input.value = "";
+    chatCount();
+    await chatPoll(true);
+  } catch (e) { toast(e.message, false); }
+  finally { button.disabled = false; input.focus(); }
+}
+
 async function renderMeshChannels() {
   stopMeshPolling();
   const el = document.getElementById("content");
   el.innerHTML = "Caricamento mappature…";
-  let mappings, groups, cfg;
+  let mappings, groups, cfg, chatInfo;
   try {
-    [mappings, groups, cfg] = await Promise.all([
+    [mappings, groups, cfg, chatInfo] = await Promise.all([
       api("/meshtastic/mappings"), api("/groups"), api("/config"),
+      api("/meshtastic/chat/channels").catch(() => ({ channels: [] })),
     ]);
   } catch (e) { el.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`; return; }
+  const chatByName = {};
+  for (const c of chatInfo.channels || []) chatByName[c.name.toLowerCase()] = c;
+  const pskCell = (m) => {
+    const c = chatByName[(m.channel_name || "").toLowerCase()] || {};
+    const label = m.psk_set ? `<span class="pill ok">impostata qui</span>`
+      : (c.psk_source === "ots" ? `<span class="pill neutral">da OpenTAKServer</span>` : `<span class="muted">nessuna</span>`);
+    const failed = c.decrypt_failed ? ` <span class="msh-unknown" title="Pacchetti che non si decifrano con questa PSK">⚠ ${c.decrypt_failed} falliti</span>` : "";
+    return `${label}${failed}
+      <button class="btn small" onclick="mshSetPsk(${m.id}, ${m.psk_set})">🔑 ${m.psk_set ? "Cambia" : "Imposta"}</button>`;
+  };
   MSH.groups = groups;
 
   const groupOptions = (id) => groups
@@ -3914,14 +4148,15 @@ async function renderMeshChannels() {
 
     <h3>Mappature</h3>
     <div class="msh-wrap"><table class="msh-table">
-      <thead><tr><th>Canale</th><th>Indice</th><th>OTS Group</th><th>Abilitata</th><th></th></tr></thead>
+      <thead><tr><th>Canale</th><th>Indice</th><th>OTS Group</th><th>PSK (chat)</th><th>Abilitata</th><th></th></tr></thead>
       <tbody>${mappings.length ? mappings.map(m => `<tr>
         <td><strong>${esc(m.channel_name || "—")}</strong></td>
         <td class="num">${m.channel_index !== null && m.channel_index !== undefined ? m.channel_index : "—"}</td>
         <td><select onchange="mshMapUpdate(${m.id}, { group_id: parseInt(this.value, 10) })">${groupOptions(m.group_id)}</select></td>
+        <td>${pskCell(m)}</td>
         <td><input type="checkbox" ${m.enabled ? "checked" : ""} onchange="mshMapUpdate(${m.id}, { enabled: this.checked })"></td>
         <td><button class="btn danger small" onclick="mshMapDelete(${m.id})">🗑 Elimina</button></td>
-      </tr>`).join("") : `<tr><td colspan="5" class="muted">Nessuna mappatura: si applica sempre la politica di fallback.</td></tr>`}
+      </tr>`).join("") : `<tr><td colspan="6" class="muted">Nessuna mappatura: si applica sempre la politica di fallback.</td></tr>`}
       </tbody></table></div>
 
     <h3>Aggiungi mappatura</h3>
@@ -3929,10 +4164,30 @@ async function renderMeshChannels() {
       <label>Nome canale<input name="channel_name" placeholder="es. ALPHA"></label>
       <label>Indice canale (0-7)<input name="channel_index" type="number" min="0" max="7" placeholder="opzionale"></label>
       <label>OTS Group<select name="group_id" required><option value="">— scegli —</option>${groupOptions(null)}</select></label>
+      <label>PSK (opzionale, per la chat)<input name="psk" type="password" autocomplete="off" placeholder="base64, es. AQ=="></label>
       <button class="btn primary" type="submit">➕ Add Mapping</button>
     </form>
     <p class="muted">Serve almeno uno fra nome e indice. Dal feed MQTT arrivano entrambi; dal relay ATAK non arriva nessuno dei due
       (vedi <i>docs/meshtastic-architettura.md</i>): in quel caso si usa la dichiarazione manuale sul singolo tag, oppure il fallback.</p>
+
+    <p class="muted">La <b>PSK</b> serve alla chat del pannello Meshtastic per leggere e scrivere sul canale: è la chiave
+      in base64 che l'app Meshtastic mostra nelle impostazioni del canale (<code>AQ==</code> = chiave di default).
+      Se qui è vuota si usa quella dello stesso canale configurata nella pagina Meshtastic di OpenTAKServer.
+      La chiave non viene mai rimandata al browser.</p>
+
+    <h3>Chat: nodo virtuale del server</h3>
+    <form class="inline" onsubmit="mshSaveChat(event)">
+      <label>Node id<input name="OTS_MILSIM_MESH_CHAT_NODE_ID" value="${esc(cfg.OTS_MILSIM_MESH_CHAT_NODE_ID || "")}" placeholder="!4d494c53"></label>
+      <label>Nome<input name="OTS_MILSIM_MESH_CHAT_LONG_NAME" value="${esc(cfg.OTS_MILSIM_MESH_CHAT_LONG_NAME || "")}" maxlength="39"></label>
+      <label>Sigla (max 4)<input name="OTS_MILSIM_MESH_CHAT_SHORT_NAME" value="${esc(cfg.OTS_MILSIM_MESH_CHAT_SHORT_NAME || "")}" maxlength="4"></label>
+      <label>Topic radice MQTT<input name="OTS_MILSIM_MESH_CHAT_ROOT_TOPIC" value="${esc(cfg.OTS_MILSIM_MESH_CHAT_ROOT_TOPIC || "")}" placeholder="vuoto = imparato (es. msh/EU_868)"></label>
+      <label>Hop limit<input type="number" min="0" max="7" name="OTS_MILSIM_MESH_CHAT_HOP_LIMIT" value="${cfg.OTS_MILSIM_MESH_CHAT_HOP_LIMIT ?? 3}"></label>
+      <label>Conserva (giorni, 0 = sempre)<input type="number" min="0" name="OTS_MILSIM_MESH_CHAT_RETENTION_DAYS" value="${cfg.OTS_MILSIM_MESH_CHAT_RETENTION_DAYS ?? 180}"></label>
+      <button class="btn primary" type="submit">Salva</button>
+    </form>
+    <p class="muted">I messaggi scritti dal pannello partono da questo nodo, con il suo nome in NODEINFO: sulle radio compare come
+      «${esc(cfg.OTS_MILSIM_MESH_CHAT_LONG_NAME || "MilSim HQ")}». Il node id deve essere diverso da quello di ogni radio vera.
+      Per arrivare in aria serve un gateway con <b>downlink</b> abilitato sul canale.</p>
 
     <h3>Fallback quando il canale non e' determinabile</h3>
     <form class="inline" onsubmit="mshSaveFallback(event)">
@@ -3966,6 +4221,23 @@ async function renderMeshChannels() {
     <p class="muted">Le modifiche alle sorgenti richiedono il riavvio di OpenTAKServer per avere effetto.</p>`;
 }
 
+async function mshSetPsk(id, isSet) {
+  const value = prompt(
+    "PSK del canale in base64, come la mostra l'app Meshtastic (AQ== = chiave di default).\n" +
+    (isSet ? "Lascia vuoto e conferma per rimuoverla e usare quella di OpenTAKServer." : ""), "");
+  if (value === null) return;
+  try {
+    await api(`/meshtastic/mappings/${id}`, { method: "PUT", body: { psk: value.trim() } });
+    toast(value.trim() ? "PSK salvata" : "PSK rimossa");
+    renderMeshChannels();
+  } catch (e) { toast(e.message, false); }
+}
+const mshSaveChat = (e) => mshSaveConfig(e, {
+  OTS_MILSIM_MESH_CHAT_NODE_ID: "str", OTS_MILSIM_MESH_CHAT_LONG_NAME: "str",
+  OTS_MILSIM_MESH_CHAT_SHORT_NAME: "str", OTS_MILSIM_MESH_CHAT_ROOT_TOPIC: "str",
+  OTS_MILSIM_MESH_CHAT_HOP_LIMIT: "int", OTS_MILSIM_MESH_CHAT_RETENTION_DAYS: "int",
+});
+
 async function mshMapCreate(event) {
   event.preventDefault();
   const fd = new FormData(event.target);
@@ -3976,6 +4248,7 @@ async function mshMapCreate(event) {
         channel_name: fd.get("channel_name"),
         channel_index: fd.get("channel_index"),
         group_id: parseInt(fd.get("group_id"), 10),
+        psk: fd.get("psk") || "",
       },
     });
     toast("Mappatura creata");

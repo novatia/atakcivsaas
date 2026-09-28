@@ -1215,10 +1215,29 @@ class MqttObserver(_Consumer):
         self.messages += 1
         try:
             routing_key = method.routing_key or ""
+            # La chat guarda anche gli `outgoing`: sono le GeoChat di ATAK che
+            # OTS gira verso la mesh. Decifra con la PSK del canale e restituisce
+            # il payload, così il monitor legge anche i pacchetti cifrati.
+            decrypted = None
+            try:
+                from . import chat
+
+                with self.flask_app.app_context():
+                    decrypted = chat.handle_mqtt(routing_key, body, self.flask_app.config)
+            except BaseException as e:
+                logger.debug(f"MilSim chat: pacchetto non trattato: {e}")
             if routing_key.endswith("outgoing"):
                 return
             channel_name, node_from_topic = parse_mqtt_topic(routing_key)
             info = decode_service_envelope(body)
+            if info is not None and decrypted is not None and not info.get("portnum"):
+                try:
+                    from meshtastic import portnums_pb2
+
+                    info["portnum"] = portnums_pb2.PortNum.Name(decrypted.portnum)
+                    _decode_payload(decrypted, info)
+                except BaseException:
+                    pass
             node_id = (info or {}).get("node_id") or node_from_topic
             if not node_id:
                 return

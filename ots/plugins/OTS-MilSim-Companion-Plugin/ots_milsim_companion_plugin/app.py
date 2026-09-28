@@ -40,7 +40,7 @@ from opentakserver.models.MissionContentMission import MissionContentMission
 from opentakserver.models.user import User
 from opentakserver.plugins.Plugin import Plugin
 
-from . import cot, datapackage, engine, health, mesh, offline_map, skyfi, teams
+from . import chat, cot, datapackage, engine, health, mesh, offline_map, skyfi, teams
 from .default_config import DefaultConfig
 from .game_modes import GAME_MODES, MARKER_TYPES, ZONE_TYPES, serialize_registry, validate_template
 from .models import (
@@ -1060,6 +1060,14 @@ class MilSimCompanionPlugin(Plugin):
                             db.session.commit()
                         except BaseException:
                             db.session.rollback()
+
+                # 3.23: PSK dei canali per la chat Meshtastic
+                if inspector.has_table("msh_channel_map"):
+                    map_columns = {c["name"] for c in inspector.get_columns("msh_channel_map")}
+                    if "psk" not in map_columns:
+                        db.session.execute(text("ALTER TABLE msh_channel_map ADD COLUMN psk VARCHAR(64)"))
+                        db.session.commit()
+                        logger.info("MilSim: msh_channel_map migrata (aggiunta colonna psk)")
 
                 # 3.6 -> 3.7: flag "crea missione" sui template
                 if inspector.has_table("gm_templates"):
@@ -4627,17 +4635,25 @@ class MilSimCompanionPlugin(Plugin):
                 if same_name or same_index:
                     return jsonify({"success": False, "error": "Esiste già una mappatura per questo canale"}), 400
 
+            psk = (body.get("psk") or "").strip() or None
+            if psk:
+                chat.expand_psk(psk)
             row = MeshChannelMap(
                 channel_name=name,
                 channel_index=index,
                 group_id=group.id,
                 group_name=group.name,
                 enabled=bool(body.get("enabled", True)),
+                psk=psk,
             )
             db.session.add(row)
             db.session.commit()
             logger.info(f"MilSim mesh: mappatura {name or index} -> {group.name} creata")
+            chat.invalidate_keys()
             return jsonify({"success": True, "mapping": row.serialize()})
+        except chat.ChatError as e:
+            db.session.rollback()
+            return jsonify({"success": False, "error": str(e)}), 400
         except BaseException as e:
             db.session.rollback()
             logger.error(traceback.format_exc())
@@ -4661,9 +4677,18 @@ class MilSimCompanionPlugin(Plugin):
                 if not group:
                     return jsonify({"success": False, "error": "Gruppo inesistente"}), 400
                 row.group_id, row.group_name = group.id, group.name
+            if "psk" in body:
+                psk = (body.get("psk") or "").strip() or None
+                if psk:
+                    chat.expand_psk(psk)
+                row.psk = psk
             db.session.commit()
             mesh.invalidate_cache()
+            chat.invalidate_keys()
             return jsonify({"success": True, "mapping": row.serialize()})
+        except chat.ChatError as e:
+            db.session.rollback()
+            return jsonify({"success": False, "error": str(e)}), 400
         except BaseException as e:
             db.session.rollback()
             logger.error(traceback.format_exc())
@@ -4685,6 +4710,53 @@ class MilSimCompanionPlugin(Plugin):
             db.session.rollback()
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @blueprint.route("/meshtastic/chat/channels")
+    @roles_accepted("administrator")
+    def meshtastic_chat_channels():
+        """Canali proponibili nel pannello chat, con PSK (sorgente) e se si può scrivere."""
+        try:
+            return jsonify({
+                "channels": chat.channels(app.config),
+                "observer": bool(app.config.get("OTS_MILSIM_MESH_MQTT_OBSERVER")),
+                "node_id": app.config.get("OTS_MILSIM_MESH_CHAT_NODE_ID"),
+                "long_name": app.config.get("OTS_MILSIM_MESH_CHAT_LONG_NAME"),
+                "max_bytes": chat.MAX_TEXT_BYTES,
+            })
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @blueprint.route("/meshtastic/chat")
+    @roles_accepted("administrator")
+    def meshtastic_chat_messages():
+        """Messaggi del canale. Con `after_id` solo i nuovi (polling del pannello)."""
+        try:
+            channel = request.args.get("channel", "")
+            after_id = int(request.args.get("after_id") or 0)
+            return jsonify({"messages": chat.messages(channel, after_id=after_id)})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @blueprint.route("/meshtastic/chat", methods=["POST"])
+    @roles_accepted("administrator")
+    def meshtastic_chat_send():
+        try:
+            body = request.json or {}
+            message = chat.send_text(app.config, body.get("channel"), body.get("text"), current_user.username)
+            return jsonify({"success": True, "message": message})
+        except chat.ChatError as e:
+            return jsonify({"success": False, "error": str(e)}), 400
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": f"Invio fallito: {e}"}), 500
 
     @staticmethod
     @blueprint.route("/meshtastic/events/clear", methods=["POST"])

@@ -56,6 +56,19 @@ class DefaultConfig:
     OTS_MILSIM_MESH_FALLBACK_POLICY = "source_eud_group"
     OTS_MILSIM_MESH_DEFAULT_GROUP_ID = 0
 
+    # ---- Chat Meshtastic (pannello nella tab Meshtastic) ------------
+    # Nodo virtuale del server che firma i messaggi scritti dal pannello.
+    # 0x4d494c53 = «MILS». Deve essere diverso dal node id di ogni radio vera.
+    OTS_MILSIM_MESH_CHAT_NODE_ID = "!4d494c53"
+    OTS_MILSIM_MESH_CHAT_LONG_NAME = "MilSim HQ"
+    OTS_MILSIM_MESH_CHAT_SHORT_NAME = "HQ"
+    # Topic radice MQTT (es. «msh/EU_868»). Vuoto = imparato dal primo
+    # pacchetto che un gateway pubblica sul canale.
+    OTS_MILSIM_MESH_CHAT_ROOT_TOPIC = ""
+    OTS_MILSIM_MESH_CHAT_HOP_LIMIT = 3
+    # Oltre quanti giorni i messaggi vengono cancellati (0 = mai)
+    OTS_MILSIM_MESH_CHAT_RETENTION_DAYS = 180
+
     # ---- Data package (tab Data Package) ----------------------------
     # Durata, in anni, del nuovo stale scritto dalla riparazione. WinTAK dà
     # alle aree disegnate solo 7 giorni: poi ATAK le scarta all'import.
@@ -106,6 +119,25 @@ class DefaultConfig:
                     not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 50
                 ):
                     return {"success": False, "error": f"{key} should be an integer between 1 and 50 (years)"}
+                if key == "OTS_MILSIM_MESH_CHAT_NODE_ID":
+                    from .chat import ChatError, node_num
+
+                    try:
+                        node_num(str(value))
+                    except ChatError as e:
+                        return {"success": False, "error": str(e)}
+                if key in ("OTS_MILSIM_MESH_CHAT_LONG_NAME", "OTS_MILSIM_MESH_CHAT_SHORT_NAME", "OTS_MILSIM_MESH_CHAT_ROOT_TOPIC") and not isinstance(value, str):
+                    return {"success": False, "error": f"{key} should be a string"}
+                if key == "OTS_MILSIM_MESH_CHAT_SHORT_NAME" and not 1 <= len(value) <= 4:
+                    return {"success": False, "error": "La sigla del nodo va da 1 a 4 caratteri"}
+                if key == "OTS_MILSIM_MESH_CHAT_HOP_LIMIT" and (
+                    not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 7
+                ):
+                    return {"success": False, "error": f"{key} should be an integer between 0 and 7"}
+                if key == "OTS_MILSIM_MESH_CHAT_RETENTION_DAYS" and (
+                    not isinstance(value, int) or isinstance(value, bool) or value < 0
+                ):
+                    return {"success": False, "error": f"{key} should be a non-negative integer (days, 0 = never)"}
                 if key == "OTS_MILSIM_MESH_DEFAULT_GROUP_ID" and (not isinstance(value, int) or value < 0):
                     return {"success": False, "error": f"{key} should be a non-negative integer (0 = non impostato)"}
 

@@ -473,6 +473,40 @@ da un telefono di ALPHA sarà quindi visto da BRAVO *e* da ALPHA; chi non sta in
 nessuno dei due non lo vede. Per evitare la doppia consegna, quando il gruppo
 mappato coincide con quello dell'EUD sorgente il plugin non ripubblica.
 
+### Chat Meshtastic (pannello nella tab Meshtastic)
+
+Chat dei canali Meshtastic in stile messaggistica: si sceglie il canale, si
+leggono i messaggi di testo della mesh e si scrive. Codice in
+[`ots_milsim_companion_plugin/chat.py`](ots_milsim_companion_plugin/chat.py).
+
+- **Ricezione.** L'observer MQTT (`OTS_MILSIM_MESH_MQTT_OBSERVER`, deve essere
+  acceso) passa ogni pacchetto dei gateway alla chat. I pacchetti sono quasi
+  sempre cifrati: si decifrano con la **PSK del canale** (AES-CTR del firmware,
+  nonce = id pacchetto + mittente, come fa OpenTAKServer). I `TEXT_MESSAGE_APP`
+  finiscono in `msh_chat_messages`; lo stesso pacchetto sentito da più gateway
+  resta un solo messaggio (chiave mittente + id). Gli altri payload decifrati
+  tornano al Live Monitor, che così vede posizione e nome anche dei pacchetti
+  cifrati. Le GeoChat di ATAK che OTS gira sulla mesh compaiono con «da ATAK».
+- **Invio.** Il messaggio parte dal **nodo virtuale** del server
+  (`OTS_MILSIM_MESH_CHAT_NODE_ID`, default `!4d494c53` «MilSim HQ»), cifrato con
+  la PSK e pubblicato su `amq.topic` con la stessa routing key dei gateway
+  (`<topic radice>.2.e.<canale>.<!nodo>`). Arriva in aria tramite un gateway con
+  **downlink abilitato** sul canale; OTS, se il canale è fra i suoi, lo gira
+  anche agli ATAK come GeoChat. Ogni 3 ore si invia anche il NODEINFO del nodo
+  virtuale, così le radio mostrano il nome invece di un id. Chi ha scritto resta
+  nello storico del pannello. Limite: 200 byte (le lettere accentate ne valgono 2).
+- **Stato dei propri messaggi.** ✓ = pubblicato sul broker; ✓✓ = un gateway
+  l'ha rivisto passare in radio (quindi è davvero in aria).
+- **PSK.** Nella tab **Canali Meshtastic**, colonna «PSK (chat)» della mappatura
+  (base64 come nell'app Meshtastic, `AQ==` = chiave di default). Se è vuota si
+  usa quella dello stesso canale in `meshtastic_channels` di OpenTAKServer. La
+  chiave non torna mai al browser. Il pannello conta i pacchetti che **non** si
+  decifrano: se crescono, la PSK è sbagliata.
+- **Topic radice.** Si impara dal primo pacchetto che un gateway pubblica sul
+  canale (es. `msh/EU_868`); finché non ne arriva uno non si può scrivere, a meno
+  di impostare `OTS_MILSIM_MESH_CHAT_ROOT_TOPIC`.
+- Storico cancellato oltre `OTS_MILSIM_MESH_CHAT_RETENTION_DAYS` (180, 0 = mai).
+
 ### Stato servizi (tab Manutenzione)
 
 Il quadro dei servizi da cui dipende tutto il resto, senza aprire una sessione SSH.
@@ -571,6 +605,12 @@ restano invariate per compatibilità con i config esistenti.
 | `OTS_MILSIM_MESH_GPS_STALE_SECONDS` | `120` | Oltre questa età la posizione è «stale» |
 | `OTS_MILSIM_MESH_FALLBACK_POLICY` | `source_eud_group` | Canale non determinabile: `source_eud_group`, `default_group`, `meshtastic_group`, `ignore` |
 | `OTS_MILSIM_MESH_DEFAULT_GROUP_ID` | `0` | Gruppo per la politica `default_group` (id `groups` di OTS) |
+| `OTS_MILSIM_MESH_CHAT_NODE_ID` | `!4d494c53` | Nodo virtuale che firma i messaggi della chat (diverso da ogni radio vera) |
+| `OTS_MILSIM_MESH_CHAT_LONG_NAME` | `MilSim HQ` | Nome del nodo virtuale (NODEINFO) |
+| `OTS_MILSIM_MESH_CHAT_SHORT_NAME` | `HQ` | Sigla del nodo virtuale (1-4 caratteri) |
+| `OTS_MILSIM_MESH_CHAT_ROOT_TOPIC` | `""` | Topic radice MQTT, es. `msh/EU_868` (vuoto = imparato dai gateway) |
+| `OTS_MILSIM_MESH_CHAT_HOP_LIMIT` | `3` | Hop limit dei messaggi inviati (0-7) |
+| `OTS_MILSIM_MESH_CHAT_RETENTION_DAYS` | `180` | Giorni di storico chat (0 = mai cancellare) |
 | `OTS_MILSIM_DP_FIX_STALE_YEARS` | `5` | Anni di validità scritti dalla riparazione dei data package (1–50) |
 
 ## API (prefisso `/api/plugins/ots_milsim_companion_plugin`)
@@ -634,6 +674,9 @@ restano invariate per compatibilità con i config esistenti.
 | `DELETE /meshtastic/tags/<key>` | admin | Dimentica il tag (elenco conosciuti + dichiarazioni manuali) |
 | `GET/POST /meshtastic/mappings` · `PUT/DELETE /meshtastic/mappings/<id>` | admin | Mappature canale → gruppo TAK |
 | `POST /meshtastic/events/clear` | admin | Svuota la console eventi |
+| `GET /meshtastic/chat/channels` | admin | Canali della chat: sorgente PSK, topic, se si può scrivere, pacchetti decifrati/falliti |
+| `GET /meshtastic/chat?channel=&after_id=` | admin | Messaggi del canale (con `after_id` solo i nuovi) |
+| `POST /meshtastic/chat` | admin | Invia `{channel, text}` dal nodo virtuale |
 
 I badge caricati vengono salvati in
 `~/ots/plugins/ots_milsim_companion_plugin/badges/` (inclusi nel backup di `update-ots.sh`).
@@ -669,6 +712,12 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.23.0** — **chat Meshtastic** nella tab Meshtastic: scelta del canale,
+  messaggi della mesh decifrati con la PSK del canale, invio dal nodo virtuale
+  «MilSim HQ» con stato ✓/✓✓, storico su `msh_chat_messages`. PSK per canale
+  nella tab Canali Meshtastic (fallback su quella di OpenTAKServer) e impostazioni
+  del nodo virtuale. Il Live Monitor ora legge anche i pacchetti cifrati dei
+  canali con PSK (posizione, nome, batteria).
 - **3.22.2** — **sicurezza**: 82 rotte su 94 avevano `@roles_accepted` /
   `@auth_required` SOPRA `@blueprint.route`, quindi Flask registrava la funzione
   senza controllo e rispondevano a chiunque senza login (compresi `/config` con la
