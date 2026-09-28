@@ -171,6 +171,42 @@ latest_git_commit() {
     git ls-remote "${url}" "refs/heads/${branch}" 2>/dev/null | cut -c1-7 || echo "?"
 }
 
+# Base del branch del fork: deve essere un tag di RELEASE upstream (X.Y.Z) con
+# sopra solo i nostri commit. Il 2026-09-29 il branch installato stava sul
+# master upstream non rilasciato (versione 0.0.0.postNNNN, nessun tag): una
+# migrazione che richiede PostGIS ha fermato il server. Il controllo gira PRIMA
+# di fermare qualsiasi servizio. Stampa «tag commit_sopra»; vuoto = nessun tag.
+MAX_FORK_COMMITS="${MAX_FORK_COMMITS:-30}"
+fork_base() {
+    local url="${OTS_GIT_SOURCE#git+}"
+    url="${url%@*}"
+    local branch="${OTS_GIT_SOURCE##*@}"
+    local dir desc=""
+    dir="$(mktemp -d)"
+    # Solo storia e tag, niente file: bastano per git describe
+    if git clone --quiet --filter=blob:none --no-checkout --branch "${branch}" "${url}" "${dir}" 2>/dev/null; then
+        desc="$(git -C "${dir}" describe --tags --long --match '[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || true)"
+    fi
+    rm -rf "${dir}"
+    # 1.7.13-7-gb6d2143 -> «1.7.13 7»
+    if [[ "${desc}" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)-g[0-9a-f]+$ ]]; then
+        echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
+    fi
+}
+
+check_fork_base() {
+    local base tag ahead
+    base="$(fork_base || true)"
+    if [[ -z "${base}" ]]; then
+        die "Il branch ${OTS_GIT_SOURCE##*@} non parte da un tag di release (X.Y.Z) o il tag non è sul fork: pip lo installerebbe come 0.0.0. Crea il branch da un tag upstream e pubblica il tag sul fork (git push origin refs/tags/<tag>). Per forzare: ALLOW_UNRELEASED_BASE=1 $0"
+    fi
+    read -r tag ahead <<< "${base}"
+    if (( ahead > MAX_FORK_COMMITS )); then
+        die "Il branch ${OTS_GIT_SOURCE##*@} ha ${ahead} commit sopra la release ${tag} (massimo ${MAX_FORK_COMMITS}): probabilmente contiene il master upstream non rilasciato, con migrazioni DB non verificate. Crea il branch dal tag ${tag} e riporta solo i nostri commit (cherry-pick). Per forzare: ALLOW_UNRELEASED_BASE=1 $0"
+    fi
+    log "Base del fork: release ${tag} + ${ahead} commit nostri."
+}
+
 latest_version() {
     curl -fsSL https://pypi.org/pypi/OpenTAKServer/json 2>/dev/null \
         | "${PY}" -c 'import sys,json; print(json.load(sys.stdin)["info"]["version"])' 2>/dev/null \
@@ -199,6 +235,11 @@ if [[ -n "${OTS_GIT_SOURCE}" ]]; then
     # LATEST è solo informativo: l'aggiornamento viene sempre eseguito.
     LATEST="$(latest_git_commit)"
     log "Versione installata: ${CURRENT}   Sorgente: ${OTS_GIT_SOURCE}   Ultimo commit: ${LATEST}"
+    if [[ "${ALLOW_UNRELEASED_BASE:-0}" == "1" ]]; then
+        warn "ALLOW_UNRELEASED_BASE=1: salto il controllo della base del fork."
+    else
+        check_fork_base
+    fi
 
     if (( MODE_CHECK )); then
         log "Installazione da fork: esegui senza --check per reinstallare sempre l'ultimo commit del branch."
