@@ -72,14 +72,20 @@ fi
 if [[ "${1:-}" == "--pull" ]]; then
     step "Aggiornamento repo (git pull)"
     # Il clone sul server è solo di deploy: scarta eventuali modifiche locali
-    # (es. chmod, edit al volo) che bloccherebbero la pull
-    BRANCH="$(git -C "${SCRIPT_DIR}" rev-parse --abbrev-ref HEAD)"
-    if ! git -C "${SCRIPT_DIR}" diff --quiet; then
+    # (es. chmod, edit al volo) che bloccherebbero la pull.
+    # git gira come il proprietario del clone, non come root: lanciato da root
+    # lasciava in .git/objects file di root e la successiva `git pull` fatta
+    # da ots falliva con «insufficient permission for adding an object»
+    # (2026-09-28).
+    REPO_OWNER="$(stat -c %U "$(git -C "${SCRIPT_DIR}" rev-parse --git-dir)")"
+    repo_git() { sudo -u "${REPO_OWNER}" git -C "${SCRIPT_DIR}" "$@"; }
+    BRANCH="$(repo_git rev-parse --abbrev-ref HEAD)"
+    if ! repo_git diff --quiet; then
         warn "Modifiche locali nel repo: le scarto (git reset --hard)."
     fi
-    git -C "${SCRIPT_DIR}" fetch origin
-    git -C "${SCRIPT_DIR}" reset --hard "origin/${BRANCH}"
-    log "Repo a: $(git -C "${SCRIPT_DIR}" log -1 --format='%h %s')"
+    repo_git fetch origin
+    repo_git reset --hard "origin/${BRANCH}"
+    log "Repo a: $(repo_git log -1 --format='%h %s')"
 fi
 
 # ------------------------- Rimozione pacchetti precedenti -------------------------
