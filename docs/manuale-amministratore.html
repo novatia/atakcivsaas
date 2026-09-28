@@ -204,7 +204,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MA-TAK-001 · Rev 21 · 2026-09-29</span><span>Server: n3test002</span></div>
+    <div class="doc-meta"><span>MA-TAK-001 · Rev 22 · 2026-09-29</span><span>Server: n3test002</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Amministratore<br>Tactical Scout Codogno</h1>
@@ -357,9 +357,18 @@ cd /home/ots/atakcivsaas &amp;&amp; git pull &amp;&amp; cd ots/scripts
       <li><strong>mette in pausa la sentinella</strong> (<code>ots-health-check.timer</code>), dopo aver aspettato la fine di un giro in corso, e la riattiva all'uscita anche se lo script fallisce, ma solo se era attiva prima. Senza pausa la sentinella potrebbe riavviare un servizio mentre pip sta sostituendo il pacchetto, o mandare falsi allarmi per le unit ferme di proposito;</li>
       <li><strong>ferma tutte e tre le unit</strong> (<code>opentakserver</code>, <code>opentakserver-cot-parser</code>, <code>opentakserver-eud-handler</code>) <em>prima</em> di backup e upgrade: girano sullo stesso venv e non devono leggere un pacchetto sostituito a metà;</li>
       <li>se si interrompe fra lo stop e il riavvio (per esempio con un <code>pip install</code> fallito), <strong>rialza le unit</strong> con quello che è installato invece di lasciare il server spento;</li>
+      <li>dopo il <code>pip install</code> e <em>prima</em> di riavviare, <strong>verifica che OpenTAKServer si importi</strong> (<code>zope.event</code>, <code>zope.interface</code>, <code>gevent</code>, <code>opentakserver.app</code>). Se l'import fallisce si ferma e mostra l'errore: senza questo controllo un modulo rotto si scoprirebbe solo dal ciclo di riavvii, con le unit che sembrano attive grazie a <code>Restart=always</code>. Prima del controllo ripara da solo il conflitto <code>zope</code> descritto qui sotto;</li>
       <li>alla fine controlla che <code>cot_parser</code> abbia <strong>il padre e almeno un figlio</strong>. Col fork il padre è un supervisore che rilancia i figli; se c'è solo il padre, il figlio muore in loop: guardare <code>/home/ots/ots/logs/cot_parser.log</code>.</li>
     </ul>
-    <div class="warn"><span class="tag">Attenzione</span><p>Non modificare mai i file in <code>site-packages/</code>: il prossimo upgrade li sovrascrive. Le correzioni al backend vanno nel fork (una issue e un commit sul branch <code>n3</code>), le personalizzazioni nel repo (plugin o config).</p></div>
+    <div class="warn"><span class="tag">Caso reale (2026-09-29): «No module named 'zope.event'»</span><p>Dopo un aggiornamento OpenTAKServer moriva all'avvio con <code>ModuleNotFoundError: No module named 'zope.event'</code>. Il venv vede anche i pacchetti di sistema in <code>/usr/lib/python3/dist-packages</code>. Lì il pacchetto apt <code>python3-zope.interface</code> 6.1 installa <code>zope.interface-6.1-nspkg.pth</code>, che a ogni avvio di Python registra come <code>zope</code> quello di sistema. Finché nel venv c'erano versioni con <code>__init__.py</code> non succedeva niente. Il guasto è comparso quando pip ha aggiornato nel venv <code>zope.interface</code> alla 8.6 e <code>zope.event</code> alla 6.2, che non hanno più <code>__init__.py</code>: Python cercava <code>zope.event</code> solo nello <code>zope</code> di sistema, dove non c'è. <strong>Non rimuovere</strong> <code>python3-zope.interface</code> con apt: probabilmente serve a certbot.</p>
+      <p>Il rimedio sta tutto nel venv: un <code>zope/__init__.py</code> con <code>pkgutil.extend_path</code>, che unisce i due <code>zope</code>, più un file <code>000-zope-venv-first.pth</code> con <code>import zope</code>, che fa importare quello del venv prima del <code>.pth</code> di sistema. <code>update-ots.sh</code> li crea da solo (<code>fix_zope_namespace</code>). Se il server è già fermo con questo errore, basta rilanciare <code>update-ots.sh</code>. A mano, come root:</p>
+      <pre>SP=$(sudo -u ots /home/ots/.opentakserver_venv/bin/python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+[ -f "$SP/zope/__init__.py" ] || echo '__path__ = __import__("pkgutil").extend_path(__path__, __name__)' | sudo -u ots tee "$SP/zope/__init__.py"
+[ -f "$SP/000-zope-venv-first.pth" ] || echo 'import zope' | sudo -u ots tee "$SP/000-zope-venv-first.pth"
+sudo -u ots /home/ots/.opentakserver_venv/bin/python3 -c 'import zope.event, zope.interface, gevent, opentakserver.app' &amp;&amp; echo OK
+sudo systemctl restart opentakserver opentakserver-cot-parser opentakserver-eud-handler</pre></div>
+    <div class="note"><span class="tag">Versione del fork</span><p>Sul fork <code>novatia/OpenTAKServer</code> è pubblicato il tag <code>1.7.13</code>. Senza tag il pacchetto installato da git risultava in versione <code>0.0.0</code>, e l'installazione del plugin MilSim Companion, che richiede <code>opentakserver&gt;=1.7.0</code>, avrebbe riscaricato da PyPI l'OpenTAKServer originale, senza i nostri fix. Se <code>update-ots.sh --check</code> mostra <code>0.0.0</code>, controllare che il tag esista: <code>git ls-remote --tags https://github.com/novatia/OpenTAKServer.git</code>.</p></div>
+    <div class="warn"><span class="tag">Attenzione</span><p>Non modificare mai i file in <code>site-packages/</code>: il prossimo upgrade li sovrascrive. L'unica eccezione sono i due file del rimedio <code>zope</code> qui sopra, che lo script ricrea a ogni aggiornamento se mancano. Le correzioni al backend vanno nel fork (una issue e un commit sul branch <code>n3</code>), le personalizzazioni nel repo (plugin o config).</p></div>
     <h3>Installare o aggiornare le unit dedicate</h3>
     <p>Le unit di <code>cot_parser</code> ed <code>eud_handler</code> vivono nel repo, in <code>ots/systemd/</code>. Prima installazione, o aggiornamento dopo una modifica (qui l'esempio per l'eud-handler; per il cot-parser cambia solo il nome del file):</p>
     <pre>cd /home/ots/atakcivsaas &amp;&amp; sudo git pull
@@ -663,6 +672,11 @@ meshtastic --host localhost --ch-index 0 --ch-set uplink_enabled true</pre>
         <td>La sentinella lo riavvia da sola; a mano: <code>py-spy dump</code> e poi restart (v. «Sentinella dei servizi», sez. 7)</td>
       </tr>
       <tr>
+        <td>Dopo un aggiornamento OTS non parte; nel log o nel journal <code>No module named 'zope.event'</code></td>
+        <td>Conflitto fra lo <code>zope</code> del venv e quello di sistema (apt <code>python3-zope.interface</code>)</td>
+        <td>Rilancia <code>update-ots.sh</code>, che lo ripara, oppure applica il rimedio a mano (v. «Aggiornamento», sez. 7). Non rimuovere il pacchetto apt</td>
+      </tr>
+      <tr>
         <td>Un solo dispositivo non compare, gli altri sì</td>
         <td>GPS o reporting del telefono</td>
         <td>Checklist di sez. 3 + test del marker</td>
@@ -778,8 +792,8 @@ rm /tmp/eud.pem   <span class="c"># pulizia: contiene la chiave privata</span></
   </section>
 
   <footer>
-    <span>MA-TAK-001 · Rev 21</span>
-    <span>Aggiornato il 2026-09-29: sez. 7, backend dal fork novatia/OpenTAKServer@n3, update-ots.sh con --no-backup e sentinella in pausa durante l'aggiornamento, retention a 0 sul fork; sez. 8 riscritta per il solo MilSim Companion (install-milsim-companion-plugin.sh, tab Manutenzione 3.22.0)</span>
+    <span>MA-TAK-001 · Rev 22</span>
+    <span>Aggiornato il 2026-09-29: sez. 7, conflitto zope venv/sistema («No module named zope.event») riparato da update-ots.sh con verifica degli import, tag 1.7.13 del fork; backend dal fork novatia/OpenTAKServer@n3, update-ots.sh con --no-backup e sentinella in pausa durante l'aggiornamento, retention a 0 sul fork; sez. 8 riscritta per il solo MilSim Companion (install-milsim-companion-plugin.sh, tab Manutenzione 3.22.0)</span>
   </footer>
 </div>
 
