@@ -3,9 +3,13 @@
 # update-ots.sh — Aggiorna OpenTAKServer (backend pip + opzionalmente la web UI)
 #
 # Uso (da root sul server):
-#   ./update-ots.sh              # backup + upgrade backend + restart + verifica
+#   ./update-ots.sh              # ferma opentakserver+cot-parser+eud-handler, backup, upgrade, riavvia, verifica
 #   ./update-ots.sh --check      # mostra solo versione/commit installato vs ultimo disponibile
 #   ./update-ots.sh --ui         # aggiorna anche la web UI servita da nginx
+#
+# Le tre unit girano sullo stesso venv (vedi ots/systemd/): vengono fermate
+# tutte PRIMA di backup+upgrade, non solo riavviate dopo — altrimenti
+# rischiano di leggere pacchetti a metà sostituiti mentre sono ancora attive.
 #
 # Percorsi/nomi sovrascrivibili via variabili d'ambiente, es:
 #   OTS_USER=ots OTS_SERVICE=opentakserver ./update-ots.sh
@@ -31,6 +35,10 @@ OTS_USER="${OTS_USER:-ots}"
 OTS_VENV="${OTS_VENV:-/home/${OTS_USER}/.opentakserver_venv}"
 OTS_DATA="${OTS_DATA:-/home/${OTS_USER}/ots}"
 OTS_SERVICE="${OTS_SERVICE:-opentakserver}"
+# Unit dedicate introdotte perché il processo principale non le spawna da solo
+# (vedi ots/systemd/): girano nello stesso venv, quindi vanno fermate PRIMA di
+# aggiornare i pacchetti (non solo riavviate dopo) e rialzate con lui.
+OTS_EXTRA_SERVICES="${OTS_EXTRA_SERVICES:-opentakserver-cot-parser opentakserver-eud-handler}"
 BACKUP_DIR="${BACKUP_DIR:-/root/ots-backups}"
 KEEP_BACKUPS="${KEEP_BACKUPS:-5}"
 UI_REPO="${UI_REPO:-brian7704/OpenTAKServer-UI}"
@@ -70,6 +78,11 @@ latest_version() {
 [[ -x "${PIP}" ]] || die "Venv non trovato: ${OTS_VENV}"
 [[ -d "${OTS_DATA}" ]] || die "Directory dati non trovata: ${OTS_DATA}"
 systemctl cat "${OTS_SERVICE}" >/dev/null 2>&1 || die "Servizio systemd '${OTS_SERVICE}' non trovato."
+for svc in ${OTS_EXTRA_SERVICES}; do
+    systemctl cat "${svc}" >/dev/null 2>&1 || die "Servizio systemd '${svc}' non trovato (OTS_EXTRA_SERVICES)."
+done
+
+ALL_SERVICES="${OTS_SERVICE} ${OTS_EXTRA_SERVICES}"
 
 CURRENT="$(installed_version)"
 [[ -n "${CURRENT}" ]] || die "opentakserver non risulta installato in ${OTS_VENV}"
@@ -113,16 +126,28 @@ BACKUP_FILE="${BACKUP_DIR}/ots-data-${CURRENT}-${STAMP}.tar.gz"
 
 # ------------------------- Upgrade backend -------------------------
 if [[ "${CURRENT}" != "${LATEST}" ]]; then
+    # Tutte e tre le unit girano sullo stesso venv: aggiornare i pacchetti
+    # mentre sono ancora in esecuzione può farle leggere file a metà scritti
+    # o lasciarle con moduli vecchi in memoria mentre gli altri processi hanno
+    # già i nuovi — le fermiamo PRIMA del backup/upgrade, non solo dopo.
+    log "Fermo ${ALL_SERVICES} prima dell'aggiornamento ..."
+    for svc in ${ALL_SERVICES}; do
+        systemctl stop "${svc}"
+    done
+
     log "Backup di ${OTS_DATA} in ${BACKUP_FILE} ..."
-    # I log vengono scritti mentre tar li legge: exit code 1 ("file changed as
-    # we read it") è accettabile, solo >1 è un errore reale.
+    # Con i servizi fermi non c'è più scrittura concorrente sui log: l'unico
+    # motivo per cui tar potrebbe ancora vedere un file cambiare a metà lettura
+    # è un processo esterno (logrotate, ecc.), quindi teniamo comunque la
+    # tolleranza sull'exit code 1 ("file changed as we read it").
     set +e
     tar czf "${BACKUP_FILE}" --warning=no-file-changed \
         -C "$(dirname "${OTS_DATA}")" "$(basename "${OTS_DATA}")"
     TAR_RC=$?
     set -e
     if (( TAR_RC > 1 )); then
-        die "Backup fallito (tar exit ${TAR_RC})."
+        for svc in ${ALL_SERVICES}; do systemctl start "${svc}" || true; done
+        die "Backup fallito (tar exit ${TAR_RC}). Servizi rimessi su, nessun aggiornamento applicato."
     fi
     log "Backup completato ($(du -h "${BACKUP_FILE}" | cut -f1))."
 
@@ -144,17 +169,26 @@ if [[ "${CURRENT}" != "${LATEST}" ]]; then
     NEW_VERSION="$(installed_version)"
     log "Installata versione: ${NEW_VERSION}"
 
-    log "Riavvio ${OTS_SERVICE} ..."
-    systemctl restart "${OTS_SERVICE}"
+    log "Riavvio ${ALL_SERVICES} ..."
+    for svc in ${ALL_SERVICES}; do
+        systemctl start "${svc}"
+    done
     sleep 5
 
-    if ! systemctl is-active --quiet "${OTS_SERVICE}"; then
-        warn "Il servizio NON è attivo dopo il riavvio. Ultime righe di log:"
-        journalctl -u "${OTS_SERVICE}" --no-pager -n 30 || true
+    FAILED_SERVICES=""
+    for svc in ${ALL_SERVICES}; do
+        if systemctl is-active --quiet "${svc}"; then
+            log "${svc}: attivo."
+        else
+            warn "${svc}: NON attivo dopo l'avvio. Ultime righe di log:"
+            journalctl -u "${svc}" --no-pager -n 30 || true
+            FAILED_SERVICES="${FAILED_SERVICES} ${svc}"
+        fi
+    done
+    if [[ -n "${FAILED_SERVICES}" ]]; then
         tail -n 30 "${OTS_DATA}/logs/opentakserver.log" 2>/dev/null || true
-        die "Aggiornamento fallito. Backup disponibile: ${BACKUP_FILE}"
+        die "Aggiornamento fallito, servizi non partiti:${FAILED_SERVICES}. Backup disponibile: ${BACKUP_FILE}"
     fi
-    log "Servizio attivo."
 
     # Verifica porte (8087 spesso volutamente disabilitata: solo avviso)
     sleep 3
@@ -232,5 +266,5 @@ fi
 log "Fatto."
 if [[ -f "${BACKUP_FILE}" ]]; then
     log "In caso di problemi, ripristina i dati con:"
-    log "  systemctl stop ${OTS_SERVICE} && tar xzf ${BACKUP_FILE} -C $(dirname "${OTS_DATA}") && systemctl start ${OTS_SERVICE}"
+    log "  systemctl stop ${ALL_SERVICES} && tar xzf ${BACKUP_FILE} -C $(dirname "${OTS_DATA}") && systemctl start ${ALL_SERVICES}"
 fi
