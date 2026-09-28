@@ -23,9 +23,13 @@
 #   OTS_USER=ots OTS_SERVICE=opentakserver ./update-ots.sh
 #
 # Sorgente del backend: di default installiamo dal NOSTRO fork
-# (github.com/novatia/OpenTAKServer, branch n3), non da PyPI — PyPI è il
-# pacchetto upstream vanilla. Il branch n3 = upstream + i nostri fix, un commit
-# per issue del fork (github.com/novatia/OpenTAKServer/issues):
+# (github.com/novatia/OpenTAKServer, branch n3-1.7.13), non da PyPI — PyPI è il
+# pacchetto upstream vanilla. n3-1.7.13 = release upstream 1.7.13 + i nostri fix,
+# un commit per issue del fork (github.com/novatia/OpenTAKServer/issues).
+# NON il branch n3: quello sta sopra il master upstream non rilasciato, la cui
+# migrazione 640de7aafac2 richiede PostGIS (type "geography" does not exist,
+# server giù il 2026-09-29). Si passa a una base più nuova solo dopo una release
+# upstream e con PostGIS installato. Fix inclusi:
 #   - create_channel() Meshtastic con campi LoRa opzionali
 #   - #1 binding RabbitMQ di tutti gli EUD sciolti alla disconnessione di uno
 #   - #2 close_connection() che si interrompeva lasciando socket/AMQP aperti
@@ -34,7 +38,7 @@
 #   - #5 creator_uid dei data package sempre NULL
 #   - #6 delete_old_data con retention 0 = cancella tutto → ora non cancella
 # Per tornare a PyPI upstream (perdendo i fix): OTS_GIT_SOURCE="" ./update-ots.sh
-OTS_GIT_SOURCE="${OTS_GIT_SOURCE:-git+https://github.com/novatia/OpenTAKServer.git@n3}"
+OTS_GIT_SOURCE="${OTS_GIT_SOURCE:-git+https://github.com/novatia/OpenTAKServer.git@n3-1.7.13}"
 
 set -euo pipefail
 
