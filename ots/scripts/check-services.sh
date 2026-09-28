@@ -24,8 +24,10 @@
 # il parser (riavviarlo non scollega gli EUD, che stanno su eud_handler).
 #
 # Il 2026-09-28 l'errore opposto: 12 «EUD collegati» che erano connessioni
-# morte da tre giorni. Il controllo 3 ora le chiude e il 4 conta solo quelle
-# che ricevono dati.
+# morte da tre giorni. Il controllo 3 ora le chiude (o, col fork n3 che le
+# chiude da solo, si limita a contarle) e il 4 conta solo quelle che ricevono
+# dati. Dal fork n3 anche il parser non esce più con 0 (issue #4): il suo padre
+# rilancia i figli, e i riavvii qui restano per il caso «vivo ma appeso».
 #
 # Uso:   check-services.sh          controlla, ripara e notifica (per il timer)
 #        check-services.sh --test   invia un messaggio di prova su Telegram
@@ -196,12 +198,25 @@ count_8089() {  # stampa «vive morte»
         END { print live + 0, dead + 0 }'
 }
 
+# Dal fork novatia/OpenTAKServer branch n3 (issue #3) e' eud_handler stesso a
+# chiudere chi tace da OTS_EUD_IDLE_TIMEOUT secondi, con keepalive TCP: la
+# chiave in defaultconfig.py dice se il fix e' installato. In quel caso qui si
+# conta soltanto, e una connessione morta rimasta e' il segno che il fix non
+# sta funzionando (va nel journal, non la si chiude a mano).
+OTS_VENV=${OTS_VENV:-/home/ots/.opentakserver_venv}
+SERVER_CLOSES_IDLE=0
+for f in "$OTS_VENV"/lib/python3*/site-packages/opentakserver/defaultconfig.py; do
+    grep -q OTS_EUD_IDLE_TIMEOUT "$f" 2>/dev/null && SERVER_CLOSES_IDLE=1
+done
+
 read -r EUD_LIVE EUD_DEAD <<EOF
 $(count_8089)
 EOF
 DEAD_CLEANUP=""
 if [ "$EUD_DEAD" -gt 0 ]; then
-    if [ "$DRY" -eq 1 ]; then
+    if [ "$SERVER_CLOSES_IDLE" -eq 1 ]; then
+        DEAD_CLEANUP="$EUD_DEAD connessioni sulla 8089 silenti da oltre $EUD_IDLE_MINUTES minuti nonostante il timeout di eud_handler (OTS_EUD_IDLE_TIMEOUT): controllare config.yml e il log di eud_handler"
+    elif [ "$DRY" -eq 1 ]; then
         DEAD_CLEANUP="$EUD_DEAD connessioni morte (dry-run, non chiuse)"
     else
         # Una per una con ss -K: le connessioni vive restano dove sono

@@ -11,12 +11,18 @@
 #   OTS_USER=ots OTS_SERVICE=opentakserver ./update-ots.sh
 #
 # Sorgente del backend: di default installiamo dal NOSTRO fork
-# (github.com/novatia/OpenTAKServer, branch fix/meshtastic-channel-none-fields),
-# non da PyPI — PyPI è il pacchetto upstream vanilla e non contiene la fix al
-# bug di create_channel() (vedi commit su quel branch). Per tornare a PyPI
-# upstream (perdendo la fix, es. se un giorno viene accettata e rilasciata a
-# monte): OTS_GIT_SOURCE="" ./update-ots.sh
-OTS_GIT_SOURCE="${OTS_GIT_SOURCE:-git+https://github.com/novatia/OpenTAKServer.git@fix/meshtastic-channel-none-fields}"
+# (github.com/novatia/OpenTAKServer, branch n3), non da PyPI — PyPI è il
+# pacchetto upstream vanilla. Il branch n3 = upstream + i nostri fix, un commit
+# per issue del fork (github.com/novatia/OpenTAKServer/issues):
+#   - create_channel() Meshtastic con campi LoRa opzionali
+#   - #1 binding RabbitMQ di tutti gli EUD sciolti alla disconnessione di uno
+#   - #2 close_connection() che si interrompeva lasciando socket/AMQP aperti
+#   - #3 timeout di inattività (OTS_EUD_IDLE_TIMEOUT, default 900 s) + keepalive
+#   - #4 cot_parser supervisore: rilancia i figli invece di uscire con 0
+#   - #5 creator_uid dei data package sempre NULL
+#   - #6 delete_old_data con retention 0 = cancella tutto → ora non cancella
+# Per tornare a PyPI upstream (perdendo i fix): OTS_GIT_SOURCE="" ./update-ots.sh
+OTS_GIT_SOURCE="${OTS_GIT_SOURCE:-git+https://github.com/novatia/OpenTAKServer.git@n3}"
 
 set -euo pipefail
 
