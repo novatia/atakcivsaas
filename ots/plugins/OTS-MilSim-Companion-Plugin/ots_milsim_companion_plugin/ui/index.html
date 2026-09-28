@@ -1392,13 +1392,15 @@ const HEALTH_LABELS = {
   cot_parser: "Smistamento CoT (cot_parser)",
   cot_flow: "Scrittura CoT a database",
   euds: "EUD collegati",
+  server: "Server OpenTAKServer",
+  retention: "Retention dati (delete_old_data)",
   plugin_plugin: "Plugin MilSim",
   plugin_rabbitmq: "Connessione RabbitMQ del plugin",
   plugin_firehose: "Osservatore firehose",
   plugin_mqtt: "Osservatore MQTT",
   plugin_meshtastic_native: "Meshtastic nativo di OTS",
 };
-const HEALTH_ORDER = ["cot_parser", "cot_flow", "euds", "rabbitmq",
+const HEALTH_ORDER = ["cot_parser", "cot_flow", "euds", "rabbitmq", "server", "retention",
                       "plugin_plugin", "plugin_firehose", "plugin_mqtt", "plugin_meshtastic_native"];
 
 async function renderHealth() {
@@ -1446,7 +1448,11 @@ async function renderHealth() {
     <div class="msh-wrap"><table class="msh-table"><tbody>${rows}</tbody></table></div>
     <h3>Dispositivi</h3>
     <p class="muted" style="margin-top:0">«Collegato» qui significa che la coda RabbitMQ di quell'EUD ha un
-      consumer attivo: è il fatto, non l'ultima posizione ricevuta.</p>
+      consumer attivo: è il fatto, non l'ultima posizione ricevuta. ${data.idle_timeout
+        ? `Il server chiude le connessioni che tacciono da ${Math.round(data.idle_timeout / 60)} minuti,
+           quindi un telefono sparito smette presto di risultare collegato.`
+        : `Attenzione: questo server non chiude le connessioni morte, quindi un telefono sparito senza
+           scollegarsi può risultare collegato per giorni.`}</p>
     <div class="msh-wrap"><table class="msh-table"><tbody>${euds || `<tr><td class="muted">Nessun EUD registrato.</td></tr>`}</tbody></table></div>
     <p class="muted">Il plugin gira come utente <code>ots</code> e non può usare <code>systemctl</code>:
       lo stato viene dedotto da RabbitMQ, che è un segnale più forte — una unit «attiva» con il processo

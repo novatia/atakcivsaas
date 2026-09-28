@@ -15,7 +15,10 @@
 #     sta smistando i CoT, che è il guasto vero; una unit «active» con il
 #     processo morto darebbe comunque zero qui.
 #   * la stessa domanda sulla coda di un EUD dice se quel dispositivo è
-#     davvero collegato, senza bisogno di `ss` da root.
+#     davvero collegato, senza bisogno di `ss` da root. Vale pienamente dal
+#     fork n3 di OTS: prima un telefono sparito senza chiudere il socket
+#     teneva il consumer vivo per giorni (issue #3 del fork) e risultava
+#     collegato. Il controllo `server` dice se il fork è installato.
 #
 # Le funzioni di valutazione sono pure e testabili a parte: la raccolta dei
 # dati sta in `probe_*`, il giudizio in `evaluate`.
@@ -74,6 +77,80 @@ def evaluate_cot_flow(age_seconds, eud_count) -> dict:
             "detail": f"{eud_count} EUD collegati ma l'ultimo CoT è di {pretty}: smistamento fermo",
         }
     return {"state": OK, "detail": f"ultimo CoT {pretty}"}
+
+
+# Chiave introdotta dal fork novatia/OpenTAKServer (branch n3, issue #3): se
+# c'è, il server installato ha i fix #1–#6 del fork. È il modo più semplice di
+# saperlo da dentro il processo web: il pacchetto installato da git non ha un
+# numero di versione affidabile.
+FORK_MARKER = "OTS_EUD_IDLE_TIMEOUT"
+RETENTION_KEYS = {
+    "OTS_DELETE_OLD_DATA_SECONDS": 1,
+    "OTS_DELETE_OLD_DATA_MINUTES": 60,
+    "OTS_DELETE_OLD_DATA_HOURS": 3600,
+    "OTS_DELETE_OLD_DATA_DAYS": 86400,
+    "OTS_DELETE_OLD_DATA_WEEKS": 7 * 86400,
+}
+# Sotto questa retention i replay delle giocate spariscono in fretta
+RETENTION_WARN_DAYS = 30
+
+
+def server_has_fixes(config) -> bool:
+    return FORK_MARKER in config
+
+
+def evaluate_server(config) -> dict:
+    """Il server installato è il fork con i fix? Senza, alcuni giudizi di
+    questa pagina (EUD «collegati», retention a 0) valgono meno o sono
+    pericolosi."""
+    if not server_has_fixes(config):
+        return {
+            "state": WARN,
+            "detail": (
+                "OpenTAKServer upstream senza i fix del fork novatia/OpenTAKServer (n3): "
+                "connessioni morte mai chiuse, cot_parser che può fermarsi in silenzio. "
+                "Sul server: ots/scripts/update-ots.sh"
+            ),
+        }
+    idle = config.get(FORK_MARKER) or 0
+    if idle <= 0:
+        return {
+            "state": WARN,
+            "detail": (
+                f"fork n3, ma {FORK_MARKER}: 0 in config.yml: le connessioni morte non vengono "
+                "chiuse e restano «collegate»"
+            ),
+        }
+    return {
+        "state": OK,
+        "detail": f"fork n3: connessioni mute chiuse dopo {idle // 60} min, cot_parser supervisionato",
+    }
+
+
+def evaluate_retention(config) -> dict:
+    """Il job delete_old_data di OTS. Sull'upstream una retention totale a 0
+    cancella l'intero database a ogni esecuzione; dal fork n3 (issue #6) vuol
+    dire «conserva tutto»."""
+    total = sum((config.get(key) or 0) * factor for key, factor in RETENTION_KEYS.items())
+    if total <= 0:
+        if server_has_fixes(config):
+            return {"state": OK, "detail": "retention 0: il job non cancella nulla, si conserva tutto"}
+        return {
+            "state": ERROR,
+            "detail": (
+                "tutte le chiavi OTS_DELETE_OLD_DATA_* a 0: su questo OpenTAKServer il job "
+                "delete_old_data cancella l'INTERO database a ogni esecuzione. "
+                "Mettere in pausa il job dalla pagina Jobs o aggiornare al fork n3"
+            ),
+        }
+    days = total / 86400
+    pretty = f"{days:.0f} giorni" if days >= 1 else f"{total / 3600:.0f} ore"
+    if days < RETENTION_WARN_DAYS:
+        return {
+            "state": WARN,
+            "detail": f"dati conservati {pretty}: tracce e replay delle giocate più vecchie spariscono",
+        }
+    return {"state": OK, "detail": f"dati conservati {pretty}"}
 
 
 def evaluate_euds(euds) -> dict:
@@ -215,6 +292,8 @@ def report(config, db, mesh_module) -> dict:
         ),
         "cot_flow": evaluate_cot_flow(cot_age, connected_count),
         "euds": evaluate_euds(eud_rows),
+        "server": evaluate_server(config),
+        "retention": evaluate_retention(config),
     }
 
     # I consumer del plugin (firehose, MQTT) li sa già il modulo mesh
@@ -230,5 +309,6 @@ def report(config, db, mesh_module) -> dict:
         "checks": checks,
         "euds": eud_rows,
         "connected": connected_count,
+        "idle_timeout": config.get(FORK_MARKER) or 0,
         "took_ms": int((time.time() - started) * 1000),
     }

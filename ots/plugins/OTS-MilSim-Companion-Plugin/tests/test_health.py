@@ -103,3 +103,52 @@ def test_eud_non_verificabili_vengono_contati_a_parte():
 
 def test_nessun_eud_registrato_e_sconosciuto():
     assert health.evaluate_euds([])["state"] == health.UNKNOWN
+
+
+# ----------------------------------------------------------------------
+# Server installato e retention (fork novatia/OpenTAKServer, branch n3)
+# ----------------------------------------------------------------------
+
+FORK = {"OTS_EUD_IDLE_TIMEOUT": 900}
+
+
+def test_server_upstream_senza_fix_e_un_avviso():
+    result = health.evaluate_server({})
+    assert result["state"] == health.WARN
+    assert "update-ots.sh" in result["detail"]
+
+
+def test_server_col_fork_e_ok():
+    result = health.evaluate_server(FORK)
+    assert result["state"] == health.OK
+    assert "15 min" in result["detail"]
+
+
+def test_fork_con_timeout_disattivato_e_un_avviso():
+    assert health.evaluate_server({"OTS_EUD_IDLE_TIMEOUT": 0})["state"] == health.WARN
+
+
+def test_retention_zero_su_upstream_e_un_errore():
+    """Upstream: tutto a 0 = cancella l'intero database a ogni run."""
+    config = {"OTS_DELETE_OLD_DATA_WEEKS": 0, "OTS_DELETE_OLD_DATA_DAYS": 0}
+    result = health.evaluate_retention(config)
+    assert result["state"] == health.ERROR
+    assert "INTERO database" in result["detail"]
+
+
+def test_retention_zero_sul_fork_vuol_dire_conserva_tutto():
+    config = dict(FORK, OTS_DELETE_OLD_DATA_WEEKS=0)
+    assert health.evaluate_retention(config)["state"] == health.OK
+
+
+def test_retention_breve_e_un_avviso():
+    """Il default upstream (1 settimana) fa sparire i replay delle giocate."""
+    result = health.evaluate_retention(dict(FORK, OTS_DELETE_OLD_DATA_WEEKS=1))
+    assert result["state"] == health.WARN
+    assert "7 giorni" in result["detail"]
+
+
+def test_retention_lunga_e_ok():
+    result = health.evaluate_retention(dict(FORK, OTS_DELETE_OLD_DATA_DAYS=1825, OTS_DELETE_OLD_DATA_WEEKS=0))
+    assert result["state"] == health.OK
+    assert "1825 giorni" in result["detail"]

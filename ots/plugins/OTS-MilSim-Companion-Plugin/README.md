@@ -487,7 +487,11 @@ Il plugin gira come utente `ots` dentro il processo web: **non può usare
   processo figlio morto darebbe comunque zero qui.
 - la stessa domanda sulla coda di un EUD dice se quel dispositivo è **davvero
   collegato**, senza `ss` da root. «Collegato» qui è un fatto, non una deduzione
-  dall'ultima posizione ricevuta.
+  dall'ultima posizione ricevuta — a patto che il server chiuda le connessioni
+  morte, cosa che fa solo il fork `n3` (`OTS_EUD_IDLE_TIMEOUT`, default 900 s).
+- il controllo **Server OpenTAKServer** dice se è installato il fork con i fix
+  (lo riconosce dalla chiave `OTS_EUD_IDLE_TIMEOUT` nella configurazione) e il
+  controllo **Retention dati** giudica le chiavi `OTS_DELETE_OLD_DATA_*`.
 
 Cosa mostra: smistamento CoT, scrittura a database (età dell'ultimo CoT),
 EUD collegati, RabbitMQ, e gli osservatori del plugin (firehose e MQTT).
@@ -665,6 +669,13 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.22.0** — tab Manutenzione allineata al server OTS del fork
+  `novatia/OpenTAKServer` (branch `n3`, issue #1–#6 del fork): nuovi controlli
+  **Server OpenTAKServer** (fork installato? timeout di inattività attivo?) e
+  **Retention dati** (`delete_old_data`: a 0 è un ERRORE sull'upstream, che
+  cancella tutto, e «conserva tutto» sul fork; sotto 30 giorni avviso perché i
+  replay spariscono). Il «collegato» degli EUD è di nuovo un fatto: il server
+  chiude da solo le connessioni mute.
 - **3.21.0** — mappa offline HD: prodotto **Stato della vegetazione** (NDVI
   dalla banda infrarossa del COG, scala relativa o assoluta) come GeoTIFF in un
   data package, con la legenda PNG nel pacchetto. `gdaldem` fra i comandi
