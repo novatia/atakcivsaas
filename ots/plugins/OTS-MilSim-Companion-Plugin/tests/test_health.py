@@ -106,7 +106,7 @@ def test_nessun_eud_registrato_e_sconosciuto():
 
 
 # ----------------------------------------------------------------------
-# Server installato e retention (fork novatia/OpenTAKServer, branch n3)
+# Server installato e retention (fork novatia/OpenTAKServer)
 # ----------------------------------------------------------------------
 
 FORK = {"OTS_EUD_IDLE_TIMEOUT": 900}

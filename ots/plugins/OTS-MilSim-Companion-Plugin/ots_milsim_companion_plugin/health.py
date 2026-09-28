@@ -16,7 +16,7 @@
 #     processo morto darebbe comunque zero qui.
 #   * la stessa domanda sulla coda di un EUD dice se quel dispositivo è
 #     davvero collegato, senza bisogno di `ss` da root. Vale pienamente dal
-#     fork n3 di OTS: prima un telefono sparito senza chiudere il socket
+#     fork di OTS: prima un telefono sparito senza chiudere il socket
 #     teneva il consumer vivo per giorni (issue #3 del fork) e risultava
 #     collegato. Il controllo `server` dice se il fork è installato.
 #
@@ -79,7 +79,7 @@ def evaluate_cot_flow(age_seconds, eud_count) -> dict:
     return {"state": OK, "detail": f"ultimo CoT {pretty}"}
 
 
-# Chiave introdotta dal fork novatia/OpenTAKServer (branch n3, issue #3): se
+# Chiave introdotta dal fork novatia/OpenTAKServer (branch n3-<release>, oggi n3-1.7.13; issue #3): se
 # c'è, il server installato ha i fix #1–#6 del fork. È il modo più semplice di
 # saperlo da dentro il processo web: il pacchetto installato da git non ha un
 # numero di versione affidabile.
@@ -107,7 +107,7 @@ def evaluate_server(config) -> dict:
         return {
             "state": WARN,
             "detail": (
-                "OpenTAKServer upstream senza i fix del fork novatia/OpenTAKServer (n3): "
+                "OpenTAKServer upstream senza i fix del fork novatia/OpenTAKServer: "
                 "connessioni morte mai chiuse, cot_parser che può fermarsi in silenzio. "
                 "Sul server: ots/scripts/update-ots.sh"
             ),
@@ -117,19 +117,19 @@ def evaluate_server(config) -> dict:
         return {
             "state": WARN,
             "detail": (
-                f"fork n3, ma {FORK_MARKER}: 0 in config.yml: le connessioni morte non vengono "
+                f"fork con i fix, ma {FORK_MARKER}: 0 in config.yml: le connessioni morte non vengono "
                 "chiuse e restano «collegate»"
             ),
         }
     return {
         "state": OK,
-        "detail": f"fork n3: connessioni mute chiuse dopo {idle // 60} min, cot_parser supervisionato",
+        "detail": f"fork con i fix: connessioni mute chiuse dopo {idle // 60} min, cot_parser supervisionato",
     }
 
 
 def evaluate_retention(config) -> dict:
     """Il job delete_old_data di OTS. Sull'upstream una retention totale a 0
-    cancella l'intero database a ogni esecuzione; dal fork n3 (issue #6) vuol
+    cancella l'intero database a ogni esecuzione; dal fork (issue #6) vuol
     dire «conserva tutto»."""
     total = sum((config.get(key) or 0) * factor for key, factor in RETENTION_KEYS.items())
     if total <= 0:
@@ -140,7 +140,7 @@ def evaluate_retention(config) -> dict:
             "detail": (
                 "tutte le chiavi OTS_DELETE_OLD_DATA_* a 0: su questo OpenTAKServer il job "
                 "delete_old_data cancella l'INTERO database a ogni esecuzione. "
-                "Mettere in pausa il job dalla pagina Jobs o aggiornare al fork n3"
+                "Mettere in pausa il job dalla pagina Jobs o aggiornare al fork con ots/scripts/update-ots.sh"
             ),
         }
     days = total / 86400

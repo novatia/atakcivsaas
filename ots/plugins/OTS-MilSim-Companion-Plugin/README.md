@@ -488,7 +488,7 @@ Il plugin gira come utente `ots` dentro il processo web: **non può usare
 - la stessa domanda sulla coda di un EUD dice se quel dispositivo è **davvero
   collegato**, senza `ss` da root. «Collegato» qui è un fatto, non una deduzione
   dall'ultima posizione ricevuta — a patto che il server chiuda le connessioni
-  morte, cosa che fa solo il fork `n3` (`OTS_EUD_IDLE_TIMEOUT`, default 900 s).
+  morte, cosa che fa solo il fork `novatia/OpenTAKServer` (`OTS_EUD_IDLE_TIMEOUT`, default 900 s).
 - il controllo **Server OpenTAKServer** dice se è installato il fork con i fix
   (lo riconosce dalla chiave `OTS_EUD_IDLE_TIMEOUT` nella configurazione) e il
   controllo **Retention dati** giudica le chiavi `OTS_DELETE_OLD_DATA_*`.
@@ -669,6 +669,9 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.22.1** — testi della tab Manutenzione e del README: non citano più il
+  branch `n3` (sul master upstream non rilasciato, ritirato) ma il fork in
+  generale; in produzione il backend viene da `n3-1.7.13`.
 - **3.22.0** — tab Manutenzione allineata al server OTS del fork
   `novatia/OpenTAKServer` (branch `n3`, issue #1–#6 del fork): nuovi controlli
   **Server OpenTAKServer** (fork installato? timeout di inattività attivo?) e
