@@ -112,7 +112,7 @@ EOF
 check_imports() {
     fix_zope_namespace
     local out
-    if ! out="$(sudo -u "${OTS_USER}" "${PY}" -c 'import zope.event, zope.interface, gevent, opentakserver.app' 2>&1)"; then
+    if ! out="$(sudo -u "${OTS_USER}" "${PY}" -c 'import opentakserver.app' 2>&1)"; then
         echo "${out}" | tail -n 5 >&2
         die "Import di opentakserver fallito dopo l'aggiornamento (vedi sopra): unit lasciate ripartire dalla trap, ma il server non funzionerà finché l'errore non è risolto."
     fi
