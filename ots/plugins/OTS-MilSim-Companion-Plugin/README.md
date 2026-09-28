@@ -669,6 +669,11 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.22.2** — **sicurezza**: 82 rotte su 94 avevano `@roles_accepted` /
+  `@auth_required` SOPRA `@blueprint.route`, quindi Flask registrava la funzione
+  senza controllo e rispondevano a chiunque senza login (compresi `/config` con la
+  chiave SkyFi, le partite, i giocatori, i canali Meshtastic). Decoratori spostati
+  sotto la route; `tests/test_route_auth.py` fallisce se l'ordine torna sbagliato.
 - **3.22.1** — testi della tab Manutenzione e del README: non citano più il
   branch `n3` (sul master upstream non rilasciato, ritirato) ma il fork in
   generale; in produzione il backend viene da `n3-1.7.13`.

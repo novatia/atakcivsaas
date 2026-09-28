@@ -1183,8 +1183,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/")
+    @roles_accepted("administrator")
     def plugin_info():
         try:
             distribution = None
@@ -1231,8 +1231,8 @@ class MilSimCompanionPlugin(Plugin):
             return "", 404
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/config")
+    @roles_accepted("administrator")
     def config():
         config = {}
         for key in dir(DefaultConfig):
@@ -1241,8 +1241,8 @@ class MilSimCompanionPlugin(Plugin):
         return jsonify(config)
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/config", methods=["POST"])
+    @roles_accepted("administrator")
     def update_config():
         try:
             result = DefaultConfig.update_config(request.json)
@@ -1260,8 +1260,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @auth_required()
     @blueprint.route("/me")
+    @auth_required()
     def me():
         try:
             ranks = db.session.query(Rank).order_by(Rank.min_score).all()
@@ -1286,8 +1286,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @auth_required()
     @blueprint.route("/fields")
+    @auth_required()
     def get_fields():
         try:
             fields = db.session.query(GameField).order_by(GameField.name).all()
@@ -1297,8 +1297,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/fields", methods=["POST"])
+    @roles_accepted("administrator")
     def create_field():
         try:
             data = request.json
@@ -1322,8 +1322,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/fields/<int:field_id>", methods=["PUT"])
+    @roles_accepted("administrator")
     def update_field(field_id):
         try:
             field = db.session.get(GameField, field_id)
@@ -1342,8 +1342,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/fields/<int:field_id>", methods=["DELETE"])
+    @roles_accepted("administrator")
     def delete_field(field_id):
         try:
             field = db.session.get(GameField, field_id)
@@ -1384,8 +1384,8 @@ class MilSimCompanionPlugin(Plugin):
     # L'elenco completo del calendario è riservato agli admin: gli operatori
     # accedono al singolo evento tramite il link condiviso (GET /events/<id>)
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/events")
+    @roles_accepted("administrator")
     def get_events():
         try:
             query = db.session.query(CalendarEvent)
@@ -1418,8 +1418,8 @@ class MilSimCompanionPlugin(Plugin):
 
     # Dettaglio di un singolo evento (per la vista dedicata del link condiviso)
     @staticmethod
-    @auth_required()
     @blueprint.route("/events/<int:event_id>")
+    @auth_required()
     def get_event(event_id):
         try:
             event = db.session.get(CalendarEvent, event_id)
@@ -1447,8 +1447,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/events", methods=["POST"])
+    @roles_accepted("administrator")
     def create_event():
         try:
             data = request.json
@@ -1481,8 +1481,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/events/<int:event_id>", methods=["PUT"])
+    @roles_accepted("administrator")
     def update_event(event_id):
         try:
             event = db.session.get(CalendarEvent, event_id)
@@ -1514,8 +1514,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/events/<int:event_id>", methods=["DELETE"])
+    @roles_accepted("administrator")
     def delete_event(event_id):
         try:
             event = db.session.get(CalendarEvent, event_id)
@@ -1541,8 +1541,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @auth_required()
     @blueprint.route("/events/<int:event_id>/rsvp", methods=["POST"])
+    @auth_required()
     def rsvp(event_id):
         try:
             status = (request.json or {}).get("status")
@@ -1590,8 +1590,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @auth_required()
     @blueprint.route("/events/<int:event_id>/guests", methods=["POST"])
+    @auth_required()
     def add_guest(event_id):
         try:
             event = db.session.get(CalendarEvent, event_id)
@@ -1631,8 +1631,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     @staticmethod
-    @auth_required()
     @blueprint.route("/guests/<int:guest_id>", methods=["DELETE"])
+    @auth_required()
     def delete_guest(guest_id):
         try:
             guest = db.session.get(EventGuest, guest_id)
@@ -1651,8 +1651,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/guests/<int:guest_id>/confirm", methods=["POST"])
+    @roles_accepted("administrator")
     def confirm_guest(guest_id):
         try:
             guest = db.session.get(EventGuest, guest_id)
@@ -1675,8 +1675,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/events/<int:event_id>/attendance")
+    @roles_accepted("administrator")
     def event_attendance(event_id):
         try:
             event = db.session.get(CalendarEvent, event_id)
@@ -1714,8 +1714,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/events/<int:event_id>/attendance", methods=["POST"])
+    @roles_accepted("administrator")
     def confirm_attendance(event_id):
         try:
             data = request.json or {}
@@ -1741,8 +1741,8 @@ class MilSimCompanionPlugin(Plugin):
 
     # Segna tutta la squadra (giocatori attivi) come presente sull'evento
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/events/<int:event_id>/attendance/all", methods=["POST"])
+    @roles_accepted("administrator")
     def confirm_all_attendance(event_id):
         try:
             confirmed = bool((request.json or {}).get("confirmed", True))
@@ -1771,8 +1771,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/events/<int:event_id>/replay")
+    @roles_accepted("administrator")
     def event_replay(event_id):
         """Tracce GPS registrate nelle tabelle points/euds di OTS nella finestra dell'evento.
 
@@ -1814,8 +1814,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/import/csv", methods=["POST"])
+    @roles_accepted("administrator")
     def import_csv():
         """CSV con intestazione: title,description,field,start,end (separatore , o ;).
 
@@ -1858,8 +1858,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/import/ics", methods=["POST"])
+    @roles_accepted("administrator")
     def import_ics():
         """Importa da un URL iCal (es. l'indirizzo ICS di un Google Calendar) o da un file .ics.
 
@@ -1935,8 +1935,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @auth_required()
     @blueprint.route("/ranks")
+    @auth_required()
     def get_ranks():
         try:
             ranks = db.session.query(Rank).order_by(Rank.min_score).all()
@@ -1946,8 +1946,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/ranks", methods=["POST"])
+    @roles_accepted("administrator")
     def create_rank():
         try:
             data = request.json
@@ -1963,8 +1963,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/ranks/<int:rank_id>", methods=["PUT"])
+    @roles_accepted("administrator")
     def update_rank(rank_id):
         try:
             rank = db.session.get(Rank, rank_id)
@@ -1983,8 +1983,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/ranks/<int:rank_id>", methods=["DELETE"])
+    @roles_accepted("administrator")
     def delete_rank(rank_id):
         try:
             rank = db.session.get(Rank, rank_id)
@@ -2005,8 +2005,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/ranks/<int:rank_id>/badge", methods=["POST"])
+    @roles_accepted("administrator")
     def upload_badge(rank_id):
         try:
             rank = db.session.get(Rank, rank_id)
@@ -2045,8 +2045,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     @staticmethod
-    @auth_required()
     @blueprint.route("/badges/<file_name>")
+    @auth_required()
     def serve_badge(file_name):
         try:
             folder = _badges_folder()
@@ -2062,8 +2062,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/maintenance/stats")
+    @roles_accepted("administrator")
     def maintenance_stats():
         try:
             from opentakserver.models.Alert import Alert
@@ -2082,8 +2082,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/maintenance/health")
+    @roles_accepted("administrator")
     def maintenance_health():
         """Stato dei servizi critici, senza dover aprire una sessione SSH.
 
@@ -2100,8 +2100,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/maintenance/clear", methods=["POST"])
+    @roles_accepted("administrator")
     def maintenance_clear():
         """Svuota la tabella alerts o casevac di OpenTAKServer.
 
@@ -2147,8 +2147,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/players")
+    @roles_accepted("administrator")
     def get_players():
         try:
             players = (
@@ -2168,8 +2168,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/players", methods=["POST"])
+    @roles_accepted("administrator")
     def create_player():
         try:
             data = request.json or {}
@@ -2195,8 +2195,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/players/<int:player_id>", methods=["PUT"])
+    @roles_accepted("administrator")
     def update_player(player_id):
         try:
             player = db.session.get(Player, player_id)
@@ -2236,8 +2236,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/players/<int:player_id>", methods=["DELETE"])
+    @roles_accepted("administrator")
     def delete_player(player_id):
         try:
             player = db.session.get(Player, player_id)
@@ -2263,8 +2263,8 @@ class MilSimCompanionPlugin(Plugin):
 
     # Import giocatori da CSV (export Excel)
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/players/import/csv", methods=["POST"])
+    @roles_accepted("administrator")
     def import_players_csv():
         """CSV con intestazione: nome,cognome,callsign (o first_name,last_name,callsign).
 
@@ -2351,8 +2351,8 @@ class MilSimCompanionPlugin(Plugin):
 
     # Account OTS disponibili per l'associazione a un giocatore
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/ots-users")
+    @roles_accepted("administrator")
     def ots_users():
         try:
             linked = {p.user_id: p.id for p in db.session.query(Player).all() if p.user_id}
@@ -2377,8 +2377,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @auth_required()
     @blueprint.route("/leaderboard")
+    @auth_required()
     def leaderboard():
         try:
             ranks = db.session.query(Rank).order_by(Rank.min_score).all()
@@ -2409,8 +2409,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/players/<int:player_id>/rank", methods=["POST"])
+    @roles_accepted("administrator")
     def set_player_rank(player_id):
         """Assegna manualmente un grado a un giocatore (rank_id null = torna al calcolo per punteggio)."""
         try:
@@ -2431,8 +2431,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/players/<int:player_id>/score", methods=["POST"])
+    @roles_accepted("administrator")
     def set_player_score(player_id):
         """Corregge manualmente il punteggio di un giocatore."""
         try:
@@ -2457,8 +2457,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/modes", methods=["GET"])
+    @roles_accepted("administrator")
     def get_modes():
         return jsonify(serialize_registry())
 
@@ -2467,8 +2467,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/templates", methods=["GET"])
+    @roles_accepted("administrator")
     def get_templates():
         try:
             templates = db.session.query(GameTemplate).order_by(GameTemplate.title).all()
@@ -2487,8 +2487,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/templates", methods=["POST"])
+    @roles_accepted("administrator")
     def create_template():
         try:
             payload, error = _template_payload(request.json or {})
@@ -2506,8 +2506,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/templates/<int:template_id>", methods=["PUT"])
+    @roles_accepted("administrator")
     def update_template(template_id: int):
         try:
             template = db.session.get(GameTemplate, template_id)
@@ -2527,8 +2527,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/templates/<int:template_id>", methods=["DELETE"])
+    @roles_accepted("administrator")
     def delete_template(template_id: int):
         try:
             template = db.session.get(GameTemplate, template_id)
@@ -2549,8 +2549,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/templates/<int:template_id>/duplicate", methods=["POST"])
+    @roles_accepted("administrator")
     def duplicate_template(template_id: int):
         try:
             template = db.session.get(GameTemplate, template_id)
@@ -2584,8 +2584,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/datapackages", methods=["GET"])
+    @roles_accepted("administrator")
     def get_datapackages():
         try:
             packages = db.session.query(DataPackage).order_by(DataPackage.filename).all()
@@ -2984,8 +2984,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/templates/<int:template_id>/play", methods=["POST"])
+    @roles_accepted("administrator")
     def play_template(template_id: int):
         try:
             template = db.session.get(GameTemplate, template_id)
@@ -3143,8 +3143,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/matches", methods=["GET"])
+    @roles_accepted("administrator")
     def get_matches():
         try:
             matches = db.session.query(GameMatch).order_by(GameMatch.created_at.desc()).limit(100).all()
@@ -3171,8 +3171,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/groups", methods=["GET"])
+    @roles_accepted("administrator")
     def get_groups():
         """Gruppi TAK definiti sul server (tabella `groups` di OTS, gestiti
         dalla pagina Groups della web UI / API di OTS), con gli EUD dei loro
@@ -3326,8 +3326,8 @@ class MilSimCompanionPlugin(Plugin):
         }
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/groups/<int:group_id>/members", methods=["POST"])
+    @roles_accepted("administrator")
     def add_group_member(group_id: int):
         """Mette un utente (e quindi tutti i suoi EUD) nel gruppo.
 
@@ -3374,8 +3374,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/groups/<int:group_id>/members/<int:user_id>", methods=["DELETE"])
+    @roles_accepted("administrator")
     def remove_group_member(group_id: int, user_id: int):
         """Toglie l'utente (e i suoi EUD) dal gruppo, sbindando le code.
 
@@ -3425,8 +3425,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/matches/<int:match_id>/start", methods=["POST"])
+    @roles_accepted("administrator")
     def start_match(match_id: int):
         """Luce verde: fissa inizio/fine, ripubblica i marker con lo stale vero
         (stessi UID) e annuncia la partenza; da qui il match engine tiene il
@@ -3475,8 +3475,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/matches/<int:match_id>/invite", methods=["POST"])
+    @roles_accepted("administrator")
     def invite_mission(match_id: int):
         """🎯 Assegna missione: manda l'invito alla missione Data Sync della
         partita agli EUD dei team coinvolti (t-x-m-i con token, come gli
@@ -3530,8 +3530,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/matches/<int:match_id>/event", methods=["POST"])
+    @roles_accepted("administrator")
     def match_event(match_id: int):
         """Evento di partita per l'arbitro della modalità (es. Bomb Defusal:
         bomb_planted / bomb_defused / bomb_exploded). Oggi lo preme il Game
@@ -3576,8 +3576,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/matches/<int:match_id>/republish", methods=["POST"])
+    @roles_accepted("administrator")
     def republish_match(match_id: int):
         """Ripubblica marker e aree con gli stessi UID: per gli EUD entrati a
         partita in corso (il broadcast iniziale raggiunge solo i connessi)."""
@@ -3601,8 +3601,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/matches/<int:match_id>/end", methods=["POST"])
+    @roles_accepted("administrator")
     def end_match(match_id: int):
         """Chiusura manuale dal GM: annulla una partita pronta o termina una
         partita in corso (il fine-tempo automatico lo gestisce il match engine)."""
@@ -3634,8 +3634,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/matches/<int:match_id>", methods=["DELETE"])
+    @roles_accepted("administrator")
     def delete_match(match_id: int):
         """Elimina una sessione dallo storico. Solo per partite terminate:
         quelle pronte/in corso vanno prima chiuse (Annulla/Termina), che si
@@ -3676,8 +3676,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/matches/<int:match_id>/replay")
+    @roles_accepted("administrator")
     def match_replay(match_id: int):
         """Replay della partita: stesse tracce GPS del replay evento, ma la
         finestra è esattamente started_at → ended_at tenuti dal server (già in
@@ -3715,8 +3715,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/orders", methods=["GET"])
+    @roles_accepted("administrator")
     def get_orders():
         try:
             params = {
@@ -3767,8 +3767,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": f"Failed to get orders: {str(e)}"}), 400
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/orders/<uid>", methods=["GET"])
+    @roles_accepted("administrator")
     def get_order(uid: str):
         try:
             r = requests.get(f"{skyfi.BASE_URL}/orders/{uid}", headers=skyfi.headers(), timeout=30)
@@ -3780,8 +3780,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 400
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/orders/<uid>/hide", methods=["POST", "DELETE"])
+    @roles_accepted("administrator")
     def hide_order(uid: str):
         """POST nasconde l'ordine dalla lista (rimozione logica), DELETE lo ripristina."""
         try:
@@ -3808,8 +3808,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/orders/<uid>/image")
+    @roles_accepted("administrator")
     def get_preview_image(uid: str):
         """Thumbnail JPEG dell'ordine dalla cache su disco.
 
@@ -3836,8 +3836,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/orders/<uid>/download/<deliverable_type>", methods=["GET"])
+    @roles_accepted("administrator")
     def download_deliverable(uid: str, deliverable_type: str):
         """Scarica un deliverable (image/payload/cog/view-ready) facendo da proxy
         verso l'URL firmato di SkyFi, così l'API key non arriva mai al browser."""
@@ -3877,8 +3877,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/orders/<uid>/data_package", methods=["POST", "GET"])
+    @roles_accepted("administrator")
     def create_skyfi_data_package(uid: str):
         try:
             order = skyfi.get_order(uid)
@@ -4089,8 +4089,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/pcn/status", methods=["GET"])
+    @roles_accepted("administrator")
     def pcn_status():
         """Verifica se il WMS del PCN (le mappe IGM/ortofoto dei data package
         del gruppo) sta servendo davvero le tile: quando è giù, su ATAK/WinTAK
@@ -4117,8 +4117,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/missions", methods=["GET"])
+    @roles_accepted("administrator")
     def get_missions():
         try:
             missions = db.session.execute(db.session.query(Mission)).scalars().all()
@@ -4146,8 +4146,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/missions/<mission_name>/contents", methods=["GET"])
+    @roles_accepted("administrator")
     def get_mission_contents(mission_name: str):
         """Elenca i contenuti (dataset) condivisi su una missione Data Sync,
         qualunque sia la fonte (questo plugin, ATAK, web UI): la web UI di OTS
@@ -4191,8 +4191,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/missions/<mission_name>/contents/<file_hash>/download", methods=["GET"])
+    @roles_accepted("administrator")
     def download_mission_content(mission_name: str, file_hash: str):
         """Scarica dal browser un contenuto missione, cercando il file negli
         stessi posti di /Marti/sync/content (che però è raggiungibile solo
@@ -4216,8 +4216,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/missions/<mission_name>/contents/<file_hash>/preview", methods=["GET"])
+    @roles_accepted("administrator")
     def preview_mission_content(mission_name: str, file_hash: str):
         """Serve inline (non come download) un contenuto immagine, per le
         anteprime nella tabella del tab Missioni."""
@@ -4248,8 +4248,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/missions/<mission_name>/contents/<file_hash>", methods=["DELETE"])
+    @roles_accepted("administrator")
     def remove_mission_content(mission_name: str, file_hash: str):
         """Rimuove un contenuto dalla missione replicando il flusso di
         DELETE /Marti/api/missions/<name>/contents: si cancella solo il link
@@ -4304,8 +4304,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/orders/<uid>/mission", methods=["POST"])
+    @roles_accepted("administrator")
     def assign_to_mission(uid: str):
         """Scarica un deliverable da SkyFi e lo aggiunge come contenuto di una
         missione Data Sync, replicando il flusso di /Marti/sync/upload +
@@ -4437,8 +4437,8 @@ class MilSimCompanionPlugin(Plugin):
     # ------------------------------------------------------------------
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/meshtastic/state")
+    @roles_accepted("administrator")
     def meshtastic_state():
         """Snapshot completo del monitor + delta del log eventi.
 
@@ -4499,8 +4499,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/meshtastic/tags/<path:tag_key>")
+    @roles_accepted("administrator")
     def meshtastic_tag(tag_key: str):
         """Dettaglio del tag: anagrafica, traccia di instradamento e pacchetti
         recenti (CoT già sanificato: mai PSK, token o credenziali)."""
@@ -4524,8 +4524,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/meshtastic/tags/<path:tag_key>", methods=["POST"])
+    @roles_accepted("administrator")
     def meshtastic_tag_update(tag_key: str):
         """Dichiarazione manuale dell'amministratore per un tag.
 
@@ -4570,8 +4570,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/meshtastic/tags/<path:tag_key>", methods=["DELETE"])
+    @roles_accepted("administrator")
     def meshtastic_tag_forget(tag_key: str):
         """Dimentica il tag: sparisce da KNOWN TAGS e perde le dichiarazioni
         manuali. Se trasmette di nuovo ricompare da zero."""
@@ -4590,8 +4590,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/meshtastic/mappings")
+    @roles_accepted("administrator")
     def meshtastic_mappings():
         try:
             return jsonify([r.serialize() for r in mesh.load_mappings()])
@@ -4600,8 +4600,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/meshtastic/mappings", methods=["POST"])
+    @roles_accepted("administrator")
     def meshtastic_mapping_create():
         """Nuova mappatura canale -> gruppo. Il gruppo deve esistere davvero
         nella tabella `groups` di OTS: niente nomi liberi."""
@@ -4644,8 +4644,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/meshtastic/mappings/<int:mapping_id>", methods=["PUT"])
+    @roles_accepted("administrator")
     def meshtastic_mapping_update(mapping_id: int):
         try:
             from opentakserver.models.Group import Group
@@ -4670,8 +4670,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/meshtastic/mappings/<int:mapping_id>", methods=["DELETE"])
+    @roles_accepted("administrator")
     def meshtastic_mapping_delete(mapping_id: int):
         try:
             row = db.session.get(MeshChannelMap, mapping_id)
@@ -4687,8 +4687,8 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
-    @roles_accepted("administrator")
     @blueprint.route("/meshtastic/events/clear", methods=["POST"])
+    @roles_accepted("administrator")
     def meshtastic_clear_events():
         try:
             mesh.REGISTRY.clear_events()
