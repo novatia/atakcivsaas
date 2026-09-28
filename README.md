@@ -132,8 +132,9 @@ Tre strati, tutti nel repo:
    quindi sopravvive agli upgrade di OTS.
 3. **Sentinella `check-services.sh`** ogni 5 minuti: verifica che rabbitmq, opentakserver,
    cot-parser ed eud-handler siano attivi, che il **processo** `cot_parser` esista davvero
-   (l'unit può risultare verde con il processo morto) e che — se ci sono EUD collegati
-   sulla 8089 — la tabella `cot` stia crescendo. Riavvia ciò che trova giù e avvisa su
+   (l'unit può risultare verde con il processo morto), chiude le connessioni morte sulla
+   8089 (mute da oltre 15 minuti) e controlla che — se ci sono EUD attivi — la tabella
+   `cot` stia crescendo. Riavvia ciò che trova giù e avvisa su
    Telegram, notificando **solo ai cambi di stato** per non mandare 288 messaggi al giorno.
    ```bash
    cp ots/systemd/ots-health-check.{service,timer} /etc/systemd/system/

@@ -20,8 +20,12 @@
 # connessione a RabbitMQ ma il processo è rimasto VIVO e fermo (on_message
 # inghiotte ogni eccezione con `except BaseException`). Unit verde, processo
 # presente, zero CoT per 7 ore finché non è stato riavviato a mano. Per questo
-# il controllo 3 non si limita ad avvisare: se lo smistamento è fermo riavvia
+# il controllo 4 non si limita ad avvisare: se lo smistamento è fermo riavvia
 # il parser (riavviarlo non scollega gli EUD, che stanno su eud_handler).
+#
+# Il 2026-09-28 l'errore opposto: 12 «EUD collegati» che erano connessioni
+# morte da tre giorni. Il controllo 3 ora le chiude e il 4 conta solo quelle
+# che ricevono dati.
 #
 # Uso:   check-services.sh          controlla, ripara e notifica (per il timer)
 #        check-services.sh --test   invia un messaggio di prova su Telegram
@@ -32,6 +36,7 @@
 #   TELEGRAM_CHAT_ID=<chat id>
 #   OTS_DB_NAME=opentakserver     (opzionale)
 #   COT_STALE_MINUTES=10          (opzionale)
+#   EUD_IDLE_MINUTES=15           (opzionale: oltre, una connessione 8089 è morta)
 #
 # Va eseguito come root (systemctl restart).
 
@@ -60,6 +65,9 @@ COT_STALE_MINUTES=${COT_STALE_MINUTES:-10}
 # fermo»: se il riavvio non basta (il guasto è altrove, es. eud_handler) non
 # lo si martella ogni 5 minuti.
 PARSER_RESTART_COOLDOWN_MINUTES=${PARSER_RESTART_COOLDOWN_MINUTES:-30}
+# Una connessione sulla 8089 che non riceve un byte da più di così è morta:
+# ATAK manda la propria posizione ogni pochi secondi e un ping ogni minuto.
+EUD_IDLE_MINUTES=${EUD_IDLE_MINUTES:-15}
 HOST=$(hostname -s 2>/dev/null || hostname)
 
 notify() {
@@ -87,7 +95,16 @@ if [ "$(id -u)" -ne 0 ] && [ "$DRY" -eq 0 ]; then
 fi
 
 PROBLEMS=""
-add_problem() { PROBLEMS="${PROBLEMS}${PROBLEMS:+; }$1"; }
+PROBLEM_KEYS=""
+# $1 = testo per il messaggio; $2 (opzionale) = chiave che identifica il
+# guasto per il confronto di stato. Serve quando lo stesso guasto si descrive
+# in modi diversi da un giro all'altro («parser riavviato» / «il riavvio non è
+# bastato»): senza chiave ogni cambio di frase sembrava un guasto nuovo e
+# partivano 4 messaggi l'ora per tre giorni (2026-09-25 → 28).
+add_problem() {
+    PROBLEMS="${PROBLEMS}${PROBLEMS:+; }$1"
+    PROBLEM_KEYS="${PROBLEM_KEYS}${PROBLEM_KEYS:+; }${2:-$1}"
+}
 
 # Fotografia del parser appeso, PRIMA di riavviarlo: il riavvio cancella
 # l'unica prova di dove si era fermato. Stack Python di ogni processo (se c'è
@@ -155,12 +172,70 @@ if systemctl is-enabled --quiet opentakserver-cot-parser 2>/dev/null; then
     fi
 fi
 
-# --- 3) I CoT arrivano davvero al database? -----------------------------
-# Il controllo più vicino alla realtà: EUD collegati sulla 8089 ma tabella
-# `cot` ferma = lo smistamento è rotto anche se tutte le unit sono verdi.
-# Senza EUD collegati la tabella è ferma per forza: niente allarme.
-EUD_CONNECTIONS=$(ss -Htn state established '( sport = :8089 )' 2>/dev/null | wc -l)
-COT_CHECK="saltato (nessun EUD collegato: la tabella è ferma per forza)"
+# --- 3) Connessioni morte sulla 8089 ------------------------------------
+# Un telefono che perde la rete o chiude ATAK senza chiudere il socket lascia
+# la connessione ESTABLISHED per sempre: eud_handler non ha un timeout di
+# inattività, non scrive nulla verso chi tace, e senza keepalive il kernel non
+# se ne accorge. Il 2026-09-28 c'erano 12 connessioni «collegate» che non
+# ricevevano un byte da 75-84 ore: la sentinella le contava come EUD online,
+# gridava «smistamento fermo» e riavviava il parser ogni 30 minuti per niente.
+#
+# Stampa «peer lastrcv_ms» per ogni connessione (lastrcv -1 = non leggibile,
+# trattata come viva per prudenza).
+list_8089() {
+    ss -Htni state established '( sport = :8089 )' 2>/dev/null | awk '
+        { for (i = 1; i <= NF; i++) {
+            if ($i ~ /:8089$/ && i < NF) { if (peer != "") print peer, -1; peer = $(i + 1); i++ }
+            else if ($i ~ /^lastrcv:/ && peer != "") { split($i, a, ":"); print peer, a[2]; peer = "" }
+        } }
+        END { if (peer != "") print peer, -1 }'
+}
+count_8089() {  # stampa «vive morte»
+    list_8089 | awk -v max=$((EUD_IDLE_MINUTES * 60000)) '
+        { if ($2 >= 0 && $2 > max) dead++; else live++ }
+        END { print live + 0, dead + 0 }'
+}
+
+read -r EUD_LIVE EUD_DEAD <<EOF
+$(count_8089)
+EOF
+DEAD_CLEANUP=""
+if [ "$EUD_DEAD" -gt 0 ]; then
+    if [ "$DRY" -eq 1 ]; then
+        DEAD_CLEANUP="$EUD_DEAD connessioni morte (dry-run, non chiuse)"
+    else
+        # Una per una con ss -K: le connessioni vive restano dove sono
+        list_8089 | while read -r peer rcv; do
+            [ "$rcv" -ge 0 ] 2>/dev/null && [ "$rcv" -gt $((EUD_IDLE_MINUTES * 60000)) ] || continue
+            addr=${peer%:*}; port=${peer##*:}
+            ss -K state established "( sport = :8089 and dst $addr and dport = :$port )" >/dev/null 2>&1
+        done
+        read -r EUD_LIVE STILL_DEAD <<EOF
+$(count_8089)
+EOF
+        if [ "$STILL_DEAD" -gt 0 ] && [ "$EUD_LIVE" -eq 0 ]; then
+            # ss -K non ha effetto se il kernel non ha CONFIG_INET_DIAG_DESTROY.
+            # Con nessuna connessione viva riavviare eud_handler non scollega
+            # nessuno, quindi è la via di riserva sicura.
+            systemctl restart opentakserver-eud-handler 2>/dev/null
+            DEAD_CLEANUP="$EUD_DEAD connessioni morte sulla 8089 (ss -K senza effetto): eud_handler riavviato, nessun EUD attivo"
+        elif [ "$STILL_DEAD" -gt 0 ]; then
+            DEAD_CLEANUP="$STILL_DEAD connessioni morte sulla 8089 non chiudibili con ss -K; lasciate aperte per non scollegare i $EUD_LIVE EUD attivi"
+        else
+            DEAD_CLEANUP="chiuse $EUD_DEAD connessioni morte sulla 8089 (silenti da oltre $EUD_IDLE_MINUTES minuti)"
+        fi
+    fi
+    # Non è un guasto: va nel journal e nel riepilogo, non su Telegram.
+    logger -t ots-health "$DEAD_CLEANUP" 2>/dev/null || true
+fi
+
+# --- 4) I CoT arrivano davvero al database? -----------------------------
+# Il controllo più vicino alla realtà: EUD ATTIVI sulla 8089 (connessioni che
+# hanno ricevuto dati negli ultimi EUD_IDLE_MINUTES) ma tabella `cot` ferma =
+# lo smistamento è rotto anche se tutte le unit sono verdi. Senza EUD attivi
+# la tabella è ferma per forza: niente allarme.
+EUD_CONNECTIONS=$EUD_LIVE
+COT_CHECK="saltato (nessun EUD attivo: la tabella è ferma per forza)"
 
 if [ "${EUD_CONNECTIONS:-0}" -gt 0 ]; then
     if ! command -v psql >/dev/null 2>&1; then
@@ -180,7 +255,7 @@ if [ "${EUD_CONNECTIONS:-0}" -gt 0 ]; then
             # ha appena ripulito tutto, oppure che non e' mai arrivato un CoT.
             COT_CHECK="tabella cot vuota"
             if [ "${EUD_CONNECTIONS:-0}" -gt 0 ]; then
-                add_problem "$EUD_CONNECTIONS EUD collegati ma la tabella cot e' vuota: nessun CoT e' mai stato scritto"
+                add_problem "$EUD_CONNECTIONS EUD attivi ma la tabella cot e' vuota: nessun CoT e' mai stato scritto"
             fi
         elif [ -z "$COT_AGE" ] || ! [ "$COT_AGE" -ge 0 ] 2>/dev/null; then
             # Un controllo che non riesce a girare va DETTO, non taciuto: è il
@@ -193,25 +268,25 @@ if [ "${EUD_CONNECTIONS:-0}" -gt 0 ]; then
             add_problem "$COT_CHECK"
         elif [ "$COT_AGE" -gt $((COT_STALE_MINUTES * 60)) ]; then
             COT_CHECK="ultimo CoT $((COT_AGE / 60)) minuti fa"
-            STALE_MSG="$EUD_CONNECTIONS EUD collegati ma nessun CoT scritto da $((COT_AGE / 60)) minuti: smistamento fermo"
+            STALE_MSG="$EUD_CONNECTIONS EUD attivi (ricevono dati) ma nessun CoT scritto da $((COT_AGE / 60)) minuti: smistamento fermo"
             LAST_RESTART=0
             [ -f "$PARSER_RESTART_FILE" ] && LAST_RESTART=$(cat "$PARSER_RESTART_FILE" 2>/dev/null)
             case "$LAST_RESTART" in ''|*[!0-9]*) LAST_RESTART=0 ;; esac
             SINCE_RESTART=$(( $(date +%s) - LAST_RESTART ))
             if [ "$DRY" -eq 1 ]; then
-                add_problem "$STALE_MSG (dry-run, parser non riavviato)"
+                add_problem "$STALE_MSG (dry-run, parser non riavviato)" "cot-stale"
             elif ! systemctl is-enabled --quiet opentakserver-cot-parser 2>/dev/null; then
-                add_problem "$STALE_MSG"
+                add_problem "$STALE_MSG" "cot-stale"
             elif [ "$SINCE_RESTART" -lt $((PARSER_RESTART_COOLDOWN_MINUTES * 60)) ]; then
-                add_problem "$STALE_MSG; il riavvio del parser di $((SINCE_RESTART / 60)) minuti fa non è bastato"
+                add_problem "$STALE_MSG; il riavvio del parser di $((SINCE_RESTART / 60)) minuti fa non è bastato" "cot-stale"
             else
                 mkdir -p "$(dirname "$PARSER_RESTART_FILE")" 2>/dev/null
                 date +%s > "$PARSER_RESTART_FILE"
                 SNAPSHOT=$(snapshot_stalled_parser)
                 if systemctl restart opentakserver-cot-parser 2>/dev/null; then
-                    add_problem "$STALE_MSG; cot_parser riavviato (diagnosi in ${SNAPSHOT:-?})"
+                    add_problem "$STALE_MSG; cot_parser riavviato, riprovo ogni $PARSER_RESTART_COOLDOWN_MINUTES minuti senza altri avvisi (diagnosi in ${SNAPSHOT:-?})" "cot-stale"
                 else
-                    add_problem "$STALE_MSG; riavvio di cot_parser FALLITO"
+                    add_problem "$STALE_MSG; riavvio di cot_parser FALLITO" "cot-stale-restart-failed"
                 fi
             fi
         else
@@ -220,16 +295,17 @@ if [ "${EUD_CONNECTIONS:-0}" -gt 0 ]; then
     fi
 fi
 
-# --- 4) Notifica solo sui cambi di stato --------------------------------
+# --- 5) Notifica solo sui cambi di stato --------------------------------
 # Il timer gira ogni 5 minuti: senza questo, un guasto persistente
 # manderebbe 288 messaggi al giorno e si smetterebbe di leggerli.
 # Lo stato si confronta SENZA i numeri: «da 14 minuti» e «da 19 minuti» sono
 # lo stesso guasto. Confrontando il testo intero (com'era fino al 2026-09-24)
 # ogni giro sembrava un guasto nuovo e partiva un messaggio ogni 5 minuti.
+# Si confrontano le CHIAVI (v. add_problem), non le frasi.
 mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null
 PREVIOUS=""
 [ -f "$STATE_FILE" ] && PREVIOUS=$(cat "$STATE_FILE" 2>/dev/null)
-STATE_KEY=$(printf '%s' "$PROBLEMS" | sed 's/[0-9][0-9]*/N/g')
+STATE_KEY=$(printf '%s' "$PROBLEM_KEYS" | sed 's/[0-9][0-9]*/N/g')
 
 if [ -n "$PROBLEMS" ]; then
     if [ "$STATE_KEY" != "$PREVIOUS" ]; then
@@ -246,4 +322,4 @@ fi
 # Si dichiara SEMPRE cosa è stato controllato davvero: «tutto a posto» senza
 # dire quali controlli hanno girato è la stessa bugia per omissione che si
 # vuole evitare.
-echo "[$HOST ots] tutto a posto · unit: $(echo $UNITS | wc -w) verificate · EUD collegati: $EUD_CONNECTIONS · CoT: $COT_CHECK"
+echo "[$HOST ots] tutto a posto · unit: $(echo $UNITS | wc -w) verificate · EUD attivi sulla 8089: $EUD_LIVE${DEAD_CLEANUP:+ ($DEAD_CLEANUP)} · CoT: $COT_CHECK"
