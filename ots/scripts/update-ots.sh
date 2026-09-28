@@ -4,11 +4,19 @@
 #
 # Uso (da root sul server):
 #   ./update-ots.sh              # backup + upgrade backend + restart + verifica
-#   ./update-ots.sh --check      # mostra solo versione installata vs ultima su PyPI
+#   ./update-ots.sh --check      # mostra solo versione/commit installato vs ultimo disponibile
 #   ./update-ots.sh --ui         # aggiorna anche la web UI servita da nginx
 #
 # Percorsi/nomi sovrascrivibili via variabili d'ambiente, es:
 #   OTS_USER=ots OTS_SERVICE=opentakserver ./update-ots.sh
+#
+# Sorgente del backend: di default installiamo dal NOSTRO fork
+# (github.com/novatia/OpenTAKServer, branch fix/meshtastic-channel-none-fields),
+# non da PyPI — PyPI è il pacchetto upstream vanilla e non contiene la fix al
+# bug di create_channel() (vedi commit su quel branch). Per tornare a PyPI
+# upstream (perdendo la fix, es. se un giorno viene accettata e rilasciata a
+# monte): OTS_GIT_SOURCE="" ./update-ots.sh
+OTS_GIT_SOURCE="${OTS_GIT_SOURCE:-git+https://github.com/novatia/OpenTAKServer.git@fix/meshtastic-channel-none-fields}"
 
 set -euo pipefail
 
@@ -35,6 +43,16 @@ installed_version() {
     "${PIP}" show opentakserver 2>/dev/null | awk '/^Version:/{print $2}' || true
 }
 
+# Ultimo commit (short hash) del branch del fork da cui installiamo — non un
+# numero di versione: un fork installato via git non ne ha uno affidabile da
+# confrontare (pyproject.toml può restare invariato tra un commit e l'altro).
+latest_git_commit() {
+    local url="${OTS_GIT_SOURCE#git+}"
+    url="${url%@*}"
+    local branch="${OTS_GIT_SOURCE##*@}"
+    git ls-remote "${url}" "refs/heads/${branch}" 2>/dev/null | cut -c1-7 || echo "?"
+}
+
 latest_version() {
     curl -fsSL https://pypi.org/pypi/OpenTAKServer/json 2>/dev/null \
         | "${PY}" -c 'import sys,json; print(json.load(sys.stdin)["info"]["version"])' 2>/dev/null \
@@ -49,22 +67,37 @@ systemctl cat "${OTS_SERVICE}" >/dev/null 2>&1 || die "Servizio systemd '${OTS_S
 
 CURRENT="$(installed_version)"
 [[ -n "${CURRENT}" ]] || die "opentakserver non risulta installato in ${OTS_VENV}"
-LATEST="$(latest_version)"
 
-log "Versione installata: ${CURRENT}   Ultima su PyPI: ${LATEST}"
+if [[ -n "${OTS_GIT_SOURCE}" ]]; then
+    # Da fork: niente numero di versione da PyPI da confrontare, guardiamo
+    # invece l'hash del commit in cima al branch. A differenza di PyPI non
+    # possiamo sapere in anticipo se coincide con quello già installato (pip
+    # non registra da quale commit git proviene un pacchetto), quindi qui
+    # LATEST è solo informativo: l'aggiornamento viene sempre eseguito.
+    LATEST="$(latest_git_commit)"
+    log "Versione installata: ${CURRENT}   Sorgente: ${OTS_GIT_SOURCE}   Ultimo commit: ${LATEST}"
 
-if [[ "${1:-}" == "--check" ]]; then
-    if [[ "${CURRENT}" == "${LATEST}" ]]; then
-        log "Sei già all'ultima versione."
-    else
-        log "Aggiornamento disponibile: ${CURRENT} -> ${LATEST}. Esegui senza --check per applicarlo."
+    if [[ "${1:-}" == "--check" ]]; then
+        log "Installazione da fork: esegui senza --check per reinstallare sempre l'ultimo commit del branch."
+        exit 0
     fi
-    exit 0
-fi
+else
+    LATEST="$(latest_version)"
+    log "Versione installata: ${CURRENT}   Ultima su PyPI: ${LATEST}"
 
-if [[ "${CURRENT}" == "${LATEST}" ]]; then
-    log "Già all'ultima versione (${CURRENT}). Nessun aggiornamento backend necessario."
-    [[ "${1:-}" == "--ui" ]] || exit 0
+    if [[ "${1:-}" == "--check" ]]; then
+        if [[ "${CURRENT}" == "${LATEST}" ]]; then
+            log "Sei già all'ultima versione."
+        else
+            log "Aggiornamento disponibile: ${CURRENT} -> ${LATEST}. Esegui senza --check per applicarlo."
+        fi
+        exit 0
+    fi
+
+    if [[ "${CURRENT}" == "${LATEST}" ]]; then
+        log "Già all'ultima versione (${CURRENT}). Nessun aggiornamento backend necessario."
+        [[ "${1:-}" == "--ui" ]] || exit 0
+    fi
 fi
 
 # ------------------------- Backup -------------------------
@@ -94,7 +127,13 @@ if [[ "${CURRENT}" != "${LATEST}" ]]; then
     done
 
     log "Aggiorno opentakserver come utente ${OTS_USER} ..."
-    sudo -u "${OTS_USER}" "${PIP}" install --upgrade opentakserver
+    if [[ -n "${OTS_GIT_SOURCE}" ]]; then
+        # --force-reinstall: senza, pip può considerare l'installazione già
+        # soddisfatta e non ripescare un nuovo commit sullo stesso branch.
+        sudo -u "${OTS_USER}" "${PIP}" install --upgrade --force-reinstall "${OTS_GIT_SOURCE}"
+    else
+        sudo -u "${OTS_USER}" "${PIP}" install --upgrade opentakserver
+    fi
 
     NEW_VERSION="$(installed_version)"
     log "Installata versione: ${NEW_VERSION}"
