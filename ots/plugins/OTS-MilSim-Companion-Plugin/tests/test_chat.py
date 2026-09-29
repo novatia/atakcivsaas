@@ -145,3 +145,38 @@ def test_nodeinfo_del_nodo_virtuale():
     user = mesh_pb2.User()
     user.ParseFromString(data.payload)
     assert (user.id, user.long_name, user.short_name) == ("!4d494c53", "MilSim HQ", "HQ")
+
+
+# ----------------------------------------------------------------------
+# Topic radice per pubblicare
+# ----------------------------------------------------------------------
+
+@pytest.fixture
+def roots(monkeypatch):
+    monkeypatch.setattr(chat, "ROOTS", {})
+    monkeypatch.setattr(chat, "_roots_loaded", True)  # niente DB nei test
+    return chat.ROOTS
+
+
+def test_topic_configurato_vince_e_accetta_gli_slash(roots):
+    roots["alpha"] = "msh.US"
+    assert chat.channel_root({"OTS_MILSIM_MESH_CHAT_ROOT_TOPIC": "msh/EU_868/"}, "ALPHA") == "msh.EU_868"
+
+
+def test_topic_imparato_per_canale(roots):
+    roots["alpha"] = "msh.EU_868"
+    assert chat.channel_root({}, "Alpha") == "msh.EU_868"
+
+
+def test_canale_mai_visto_usa_la_radice_comune_dei_gateway(roots):
+    roots.update({"alpha": "msh.EU_868", "bravo": "msh.EU_868"})
+    assert chat.channel_root({}, "CHARLIE") == "msh.EU_868"
+
+
+def test_radici_diverse_non_si_indovina(roots):
+    roots.update({"alpha": "msh.EU_868", "bravo": "msh.US"})
+    assert chat.channel_root({}, "CHARLIE") is None
+
+
+def test_senza_niente_il_topic_resta_ignoto(roots):
+    assert chat.channel_root({}, "ALPHA") is None

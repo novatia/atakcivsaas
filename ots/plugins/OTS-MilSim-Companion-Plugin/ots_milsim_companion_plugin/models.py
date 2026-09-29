@@ -428,6 +428,18 @@ class MeshChannelMap(db.Model):
         }
 
 
+class MeshChatRoot(db.Model):
+    """Topic radice MQTT imparato per canale (es. «msh.EU_868»): serve alla chat
+    per pubblicare con la stessa routing key dei gateway anche dopo un riavvio."""
+
+    __tablename__ = "msh_chat_roots"
+
+    channel_key = db.Column(String(255), primary_key=True)  # nome del canale in minuscolo
+    channel_name = db.Column(String(255), nullable=True)
+    root = db.Column(String(255), nullable=False)
+    learned_at = db.Column(DateTime, nullable=True)
+
+
 class MeshChatMessage(db.Model):
     """Messaggio di testo Meshtastic (TEXT_MESSAGE_APP) visto sul feed MQTT o
     inviato dal pannello chat. Chiave logica: (from_node, packet_id) — lo stesso
@@ -536,4 +548,5 @@ PLUGIN_TABLES = [
     MeshChannelMap.__table__,
     MeshTag.__table__,
     MeshChatMessage.__table__,
+    MeshChatRoot.__table__,
 ]

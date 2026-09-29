@@ -503,8 +503,9 @@ leggono i messaggi di testo della mesh e si scrive. Codice in
   chiave non torna mai al browser. Il pannello conta i pacchetti che **non** si
   decifrano: se crescono, la PSK è sbagliata.
 - **Topic radice.** Si impara dal primo pacchetto che un gateway pubblica sul
-  canale (es. `msh/EU_868`); finché non ne arriva uno non si può scrivere, a meno
-  di impostare `OTS_MILSIM_MESH_CHAT_ROOT_TOPIC`.
+  canale (es. `msh/EU_868`) e si salva su DB; un canale mai visto usa la radice
+  comune degli altri. Se non è mai arrivato niente, si imposta a mano
+  (`OTS_MILSIM_MESH_CHAT_ROOT_TOPIC`, tab Canali Meshtastic).
 - Storico cancellato oltre `OTS_MILSIM_MESH_CHAT_RETENTION_DAYS` (180, 0 = mai).
 
 ### Stato servizi (tab Manutenzione)
@@ -712,6 +713,10 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.23.1** — chat: il topic radice MQTT imparato dai gateway si salva su DB
+  (`msh_chat_roots`) e sopravvive ai riavvii; un canale mai visto usa la radice
+  comune degli altri canali. Prima, dopo ogni riavvio l'invio restava bloccato
+  («topic MQTT non ancora visto») finché un gateway non trasmetteva.
 - **3.23.0** — **chat Meshtastic** nella tab Meshtastic: scelta del canale,
   messaggi della mesh decifrati con la PSK del canale, invio dal nodo virtuale
   «MilSim HQ» con stato ✓/✓✓, storico su `msh_chat_messages`. PSK per canale

@@ -244,10 +244,56 @@ def _stat(channel: str, field: str) -> None:
 
 
 def learn_root(routing_key: str, channel: str | None) -> None:
+    """Ricorda il topic radice del canale, anche su DB: in memoria soltanto si
+    perdeva a ogni riavvio di OTS e l'invio restava bloccato finché un gateway
+    non trasmetteva di nuovo (successo alla prima prova, 2026-09-29)."""
     root = topic_root(routing_key)
-    if root and channel and not routing_key.endswith("outgoing"):
-        ROOTS[channel.lower()] = root
-        SEEN_NAMES[channel.lower()] = channel
+    if not (root and channel and not routing_key.endswith("outgoing")):
+        return
+    key = channel.lower()
+    SEEN_NAMES[key] = channel
+    if ROOTS.get(key) == root:
+        return
+    ROOTS[key] = root
+    try:
+        from opentakserver.extensions import db
+
+        from .models import MeshChatRoot
+
+        row = db.session.get(MeshChatRoot, key)
+        if row:
+            row.root, row.channel_name, row.learned_at = root, channel, datetime.utcnow()
+        else:
+            db.session.add(MeshChatRoot(channel_key=key, channel_name=channel, root=root, learned_at=datetime.utcnow()))
+        db.session.commit()
+    except BaseException as e:
+        logger.debug(f"MilSim chat: topic di {channel} non salvato: {e}")
+        try:
+            db.session.rollback()
+        except BaseException:
+            pass
+
+
+_roots_loaded = False
+
+
+def load_roots() -> None:
+    """Ricarica una volta i topic radice imparati prima dell'ultimo riavvio."""
+    global _roots_loaded
+    if _roots_loaded:
+        return
+    _roots_loaded = True
+    try:
+        from opentakserver.extensions import db
+
+        from .models import MeshChatRoot
+
+        for row in db.session.query(MeshChatRoot).all():
+            ROOTS.setdefault(row.channel_key, row.root)
+            SEEN_NAMES.setdefault(row.channel_key, row.channel_name or row.channel_key)
+    except BaseException as e:
+        _roots_loaded = False
+        logger.debug(f"MilSim chat: topic salvati non ricaricati: {e}")
 
 
 # ----------------------------------------------------------------------
@@ -436,10 +482,18 @@ def _publish(config, routing_key: str, body: bytes) -> None:
 
 
 def channel_root(config, channel: str) -> str | None:
+    """Topic radice per pubblicare sul canale: quello configurato, altrimenti
+    quello imparato; se il canale non è mai stato visto ma tutti i canali noti
+    usano la stessa radice (caso normale: stessi gateway), si usa quella."""
     configured = (config.get("OTS_MILSIM_MESH_CHAT_ROOT_TOPIC") or "").strip().strip("/")
     if configured:
         return configured.replace("/", ".")
-    return ROOTS.get((channel or "").lower())
+    load_roots()
+    known = ROOTS.get((channel or "").lower())
+    if known:
+        return known
+    others = set(ROOTS.values())
+    return others.pop() if len(others) == 1 else None
 
 
 def send_text(config, channel: str, text: str, author: str | None) -> dict:
@@ -514,6 +568,7 @@ def channels(config) -> list[dict]:
             add(row.name)
     except BaseException:
         db.session.rollback()
+    load_roots()
     for name in list(SEEN_NAMES.values()):
         add(name)
     last = dict(
@@ -535,7 +590,8 @@ def channels(config) -> list[dict]:
             except ChatError as e:
                 problem = str(e)
         if not problem and not channel_root(config, name):
-            problem = "topic MQTT non ancora visto"
+            problem = ("topic MQTT del canale non ancora visto: imposta il «Topic radice MQTT» nella tab "
+                       "Canali Meshtastic (es. msh/EU_868) oppure aspetta un pacchetto da un gateway")
         stats = STATS.get(name.lower(), {})
         last_at = next((v for k, v in last.items() if (k or "").lower() == name.lower()), None)
         result.append({
