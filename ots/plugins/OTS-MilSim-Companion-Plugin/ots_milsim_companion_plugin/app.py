@@ -2212,9 +2212,17 @@ class MilSimCompanionPlugin(Plugin):
                 return jsonify({"success": False, "error": "Giocatore non trovato"}), 404
 
             data = request.json or {}
-            for attr in ("first_name", "last_name", "callsign", "notes", "active"):
+            for attr in ("first_name", "last_name"):
                 if attr in data:
-                    setattr(player, attr, data[attr])
+                    setattr(player, attr, (data[attr] or "").strip())
+            for attr in ("callsign", "notes"):
+                if attr in data:
+                    setattr(player, attr, (data[attr] or "").strip() or None)
+            if "active" in data:
+                player.active = bool(data["active"])
+            if not (player.first_name or player.last_name or player.callsign):
+                db.session.rollback()
+                return jsonify({"success": False, "error": "Indica almeno nome/cognome o callsign"}), 400
 
             # Associazione account OTS <-> giocatore (user_id null = scollega)
             if "user_id" in data:

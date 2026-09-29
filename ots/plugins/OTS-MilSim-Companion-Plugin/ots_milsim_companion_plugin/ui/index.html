@@ -147,8 +147,8 @@
   .kw { display: inline-block; background: var(--tab); border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px; font-size: 11px; color: var(--muted); margin-right: 4px; }
   .pcn-status { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px;
     margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
-  #modal-backdrop, #play-backdrop, #tpl-preview-backdrop, #dp-backdrop, #dpf-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
-  #modal-backdrop.hidden, #play-backdrop.hidden, #tpl-preview-backdrop.hidden, #dp-backdrop.hidden, #dpf-backdrop.hidden { display: none; }
+  #modal-backdrop, #play-backdrop, #player-backdrop, #tpl-preview-backdrop, #dp-backdrop, #dpf-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
+  #modal-backdrop.hidden, #play-backdrop.hidden, #player-backdrop.hidden, #tpl-preview-backdrop.hidden, #dp-backdrop.hidden, #dpf-backdrop.hidden { display: none; }
   .dpf-list { font-size: 12.5px; max-height: 200px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
   .dpf-list:empty { display: none; }
   #offline-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
@@ -426,6 +426,24 @@
       <button class="btn" onclick="closeDpFilesModal()">Annulla</button>
       <button class="btn primary" id="dpf-confirm-btn" disabled onclick="confirmDpFiles()">📎 Crea</button>
     </div>
+  </div>
+</div>
+<div id="player-backdrop" class="hidden" onclick="closePlayerModal()">
+  <div class="modal" style="width:min(480px, 94vw)" onclick="event.stopPropagation()">
+    <h2>✏️ Modifica giocatore</h2>
+    <form id="player-edit-form" style="display:flex; flex-direction:column; gap:12px">
+      <label>Nome <input name="first_name"></label>
+      <label>Cognome <input name="last_name"></label>
+      <label>Callsign <input name="callsign"></label>
+      <label>Account OTS <select name="user_id" id="player-edit-account"></select></label>
+      <label>Note <textarea name="notes" rows="3"></textarea></label>
+      <label style="flex-direction:row; align-items:center; gap:8px; color:var(--text)">
+        <input type="checkbox" name="active"> Attivo</label>
+      <div class="modal-actions">
+        <button class="btn" type="button" onclick="closePlayerModal()">Annulla</button>
+        <button class="btn primary" type="submit">💾 Salva</button>
+      </div>
+    </form>
   </div>
 </div>
 <div id="tpl-preview-backdrop" class="hidden" onclick="closeTplPreview()">
@@ -1088,17 +1106,27 @@ async function editScore(playerId, current) {
 async function renderAttendance() {
   const el = document.getElementById("content");
   const events = await api("/events");
+  // Solo gli eventi di oggi e futuri (quelli passati restano raggiungibili con la spunta):
+  // un evento conta come "di oggi" finché non è finito o se inizia oggi.
+  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+  const isCurrent = ev => new Date(ev.end_time || ev.start_time) >= startOfToday || new Date(ev.start_time) >= startOfToday;
+  const upcoming = events.filter(isCurrent);
+  const past = events.filter(ev => !isCurrent(ev)).reverse();   // dal più recente
+  const showPast = window._attShowPast || !upcoming.length;
+  const optionsOf = list => list.map(ev => `<option value="${ev.id}">${fmtDT(ev.start_time)} — ${esc(ev.title)}</option>`).join("");
   el.innerHTML = `<h2>Conferma presenze sul campo</h2>
     <form class="inline"><label>Evento
-      <select id="att-event">${events.map(ev => `<option value="${ev.id}">${fmtDT(ev.start_time)} — ${esc(ev.title)}</option>`).join("")}</select>
-    </label></form><div id="att-list"></div>`;
+      <select id="att-event">${upcoming.length ? optionsOf(upcoming) : ""}
+        ${showPast && past.length ? `<optgroup label="Eventi passati">${optionsOf(past)}</optgroup>` : ""}</select>
+    </label>
+    <label style="flex-direction:row; align-items:center; gap:6px">
+      <input type="checkbox" id="att-show-past" ${showPast ? "checked" : ""} ${upcoming.length ? "" : "disabled"}> Mostra eventi passati</label>
+    </form><div id="att-list"></div>`;
+  document.getElementById("att-show-past").onchange = (e) => { window._attShowPast = e.target.checked; renderAttendance(); };
   const select = document.getElementById("att-event");
   if (!events.length) { document.getElementById("att-list").innerHTML = "<p class='muted'>Nessun evento.</p>"; return; }
-  // preseleziona l'evento più vicino a oggi
-  const now = Date.now();
-  let best = 0, bestDelta = Infinity;
-  events.forEach((ev, i) => { const d = Math.abs(new Date(ev.start_time) - now); if (d < bestDelta) { bestDelta = d; best = i; } });
-  select.selectedIndex = best;
+  // Preseleziona l'evento in corso/di oggi, altrimenti il prossimo; senza eventi futuri il più recente
+  select.selectedIndex = 0;
   select.onchange = loadAttendance;
   await loadAttendance();
 
@@ -1158,6 +1186,7 @@ async function renderPlayers() {
   const el = document.getElementById("content");
   el.innerHTML = "<h2>Anagrafica giocatori</h2><div id='pl'>Caricamento…</div>";
   const [players, users] = await Promise.all([api("/players"), api("/ots-users")]);
+  window._players = players; window._otsUsers = users;
 
   const accountSelect = (p) => {
     const options = users.map(u => {
@@ -1193,13 +1222,15 @@ async function renderPlayers() {
       <button class="btn primary" type="submit">Importa giocatori</button>
     </form>
     <div id="players-import-result"></div>
-    <table><thead><tr><th>Nome</th><th>Cognome</th><th>Callsign</th><th>Account OTS</th><th></th></tr></thead><tbody>
+    <table><thead><tr><th>Nome</th><th>Cognome</th><th>Callsign</th><th>Account OTS</th><th>Note</th><th></th></tr></thead><tbody>
     ${active.map(p => `<tr>
-      <td><input value="${esc(p.first_name)}" onchange="updatePlayer(${p.id}, {first_name: this.value})"></td>
-      <td><input value="${esc(p.last_name)}" onchange="updatePlayer(${p.id}, {last_name: this.value})"></td>
-      <td><input value="${esc(p.callsign || "")}" onchange="updatePlayer(${p.id}, {callsign: this.value})"></td>
+      <td>${esc(p.first_name)}</td>
+      <td>${esc(p.last_name)}</td>
+      <td>${esc(p.callsign || "")}</td>
       <td>${accountSelect(p)}</td>
-      <td>
+      <td class="muted">${esc(p.notes || "")}</td>
+      <td style="white-space:nowrap">
+        <button class="btn small primary" onclick="editPlayer(${p.id})">✏️ Modifica</button>
         <button class="btn small" onclick="updatePlayer(${p.id}, {active: false}, true)">Disattiva</button>
         <button class="btn small danger" onclick="delPlayer(${p.id})">Elimina</button>
       </td>
@@ -1215,6 +1246,7 @@ async function renderPlayers() {
         <td class="muted">${esc(p.display_name)}</td>
         <td class="muted">${esc(p.username || "—")}</td>
         <td>
+          <button class="btn small" onclick="editPlayer(${p.id})">✏️ Modifica</button>
           <button class="btn small primary" onclick="updatePlayer(${p.id}, {active: true}, true)">↩ Ripristina</button>
           <button class="btn small danger" onclick="delPlayer(${p.id})">Elimina</button>
         </td>
@@ -1249,6 +1281,42 @@ async function updatePlayer(id, body, reload) {
     if (reload) renderPlayers();
   } catch (err) { toast(err.message, false); renderPlayers(); }
 }
+function editPlayer(id) {
+  const p = (window._players || []).find(x => x.id === id);
+  if (!p) return;
+  const form = document.getElementById("player-edit-form");
+  form.first_name.value = p.first_name || "";
+  form.last_name.value = p.last_name || "";
+  form.callsign.value = p.callsign || "";
+  form.notes.value = p.notes || "";
+  form.active.checked = !!p.active;
+  document.getElementById("player-edit-account").innerHTML =
+    `<option value="">— nessun account —</option>` + (window._otsUsers || []).map(u => {
+      const takenByOther = u.linked_player_id && u.linked_player_id !== p.id;
+      return `<option value="${u.id}" ${p.user_id === u.id ? "selected" : ""} ${takenByOther ? "disabled" : ""}>
+        ${esc(u.username)}${takenByOther ? " (già associato)" : ""}${u.active ? "" : " (disattivo)"}</option>`;
+    }).join("");
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const body = {
+      first_name: form.first_name.value.trim(),
+      last_name: form.last_name.value.trim(),
+      callsign: form.callsign.value.trim(),
+      notes: form.notes.value.trim(),
+      active: form.active.checked,
+      user_id: form.user_id.value ? parseInt(form.user_id.value, 10) : null,
+    };
+    try {
+      await api(`/players/${id}`, { method: "PUT", body });
+      toast("Giocatore aggiornato");
+      closePlayerModal();
+      renderPlayers();
+    } catch (err) { toast(err.message, false); }
+  };
+  document.getElementById("player-backdrop").classList.remove("hidden");
+  form.first_name.focus();
+}
+function closePlayerModal() { document.getElementById("player-backdrop").classList.add("hidden"); }
 async function linkPlayer(id, userId) {
   try {
     await api(`/players/${id}`, { method: "PUT", body: { user_id: userId ? parseInt(userId, 10) : null } });

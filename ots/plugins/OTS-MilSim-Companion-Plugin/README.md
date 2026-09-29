@@ -713,6 +713,11 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.24.0** — tab Giocatori: bottone **✏️ Modifica** (anche sui disattivati) che apre una
+  finestra con nome, cognome, callsign, account OTS, note e stato attivo; il backend normalizza i
+  campi e rifiuta un giocatore senza nome/cognome né callsign. Tab Presenze: il menu mostra solo
+  gli eventi di oggi e futuri e preseleziona quello in corso/di oggi o il prossimo; gli eventi
+  passati si vedono con la spunta «Mostra eventi passati».
 - **3.23.1** — chat: il topic radice MQTT imparato dai gateway si salva su DB
   (`msh_chat_roots`) e sopravvive ai riavvii; un canale mai visto usa la radice
   comune degli altri canali. Prima, dopo ogni riavvio l'invio restava bloccato
