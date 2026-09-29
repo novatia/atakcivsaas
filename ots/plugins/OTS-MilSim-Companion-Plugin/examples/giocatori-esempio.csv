@@ -1,4 +1,4 @@
-nome;cognome;callsign
-Mario;Rossi;Viper
-Luca;Bianchi;Ghost
-Andrea;Verdi;Falco
+nome;cognome;callsign;tessera
+Mario;Rossi;Viper;T-001
+Luca;Bianchi;Ghost;T-002
+Andrea;Verdi;Falco;T-003

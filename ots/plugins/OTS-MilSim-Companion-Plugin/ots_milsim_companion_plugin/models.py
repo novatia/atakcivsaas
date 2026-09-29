@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -69,6 +70,9 @@ class Player(db.Model):
     first_name = db.Column(String(255), nullable=False, default="")
     last_name = db.Column(String(255), nullable=False, default="")
     callsign = db.Column(String(255), nullable=True)
+    # Numero di tessera dell'associazione: univoco se valorizzato (controllo nell'API,
+    # non a DB, perché la colonna nasce con ALTER TABLE sulle installazioni esistenti)
+    membership_number = db.Column(String(64), nullable=True)
     user_id = db.Column(Integer, ForeignKey("user.id"), nullable=True, unique=True)
     active = db.Column(Boolean, nullable=False, default=True)
     notes = db.Column(Text, nullable=True)
@@ -76,6 +80,7 @@ class Player(db.Model):
 
     attendances = relationship("EventAttendance", back_populates="player", cascade="all, delete-orphan")
     score_row = relationship("PlayerScore", back_populates="player", uselist=False, cascade="all, delete-orphan")
+    membership_payments = relationship("MembershipPayment", back_populates="player", cascade="all, delete-orphan")
 
     def display_name(self):
         full = f"{self.first_name} {self.last_name}".strip()
@@ -96,6 +101,7 @@ class Player(db.Model):
             "first_name": self.first_name,
             "last_name": self.last_name,
             "callsign": self.callsign,
+            "membership_number": self.membership_number,
             "user_id": self.user_id,
             "active": self.active,
             "notes": self.notes,
@@ -116,6 +122,9 @@ class CalendarEvent(db.Model):
     end_time = db.Column(DateTime, nullable=False)
     source = db.Column(String(32), nullable=False, default="manual")  # manual | csv | ics
     external_uid = db.Column(String(512), nullable=True, unique=True)  # UID iCal per deduplicare gli import
+    # Evento a pagamento: quota di partecipazione in euro (fee valorizzata solo se paid)
+    paid = db.Column(Boolean, nullable=False, default=False)
+    fee = db.Column(Float, nullable=True)
     created_at = db.Column(DateTime, nullable=False, default=datetime.utcnow)
 
     field = relationship("GameField", back_populates="events")
@@ -132,6 +141,8 @@ class CalendarEvent(db.Model):
             "start_time": self.start_time.isoformat() if self.start_time else None,
             "end_time": self.end_time.isoformat() if self.end_time else None,
             "source": self.source,
+            "paid": bool(self.paid),
+            "fee": self.fee if self.paid else None,
         }
 
 
@@ -149,6 +160,10 @@ class EventAttendance(db.Model):
     confirmed_by = db.Column(Integer, ForeignKey("user.id"), nullable=True)
     confirmed_at = db.Column(DateTime, nullable=True)
     points_awarded = db.Column(Integer, nullable=False, default=0)
+    # Quota di partecipazione incassata (solo per gli eventi a pagamento)
+    fee_paid = db.Column(Boolean, nullable=False, default=False)
+    fee_paid_at = db.Column(DateTime, nullable=True)
+    fee_paid_by = db.Column(Integer, ForeignKey("user.id"), nullable=True)
 
     event = relationship("CalendarEvent", back_populates="attendances")
     player = relationship("Player", back_populates="attendances")
@@ -162,6 +177,7 @@ class EventAttendance(db.Model):
             "confirmed": self.confirmed,
             "confirmed_at": self.confirmed_at.isoformat() if self.confirmed_at else None,
             "points_awarded": self.points_awarded,
+            "fee_paid": bool(self.fee_paid),
         }
 
 
@@ -178,6 +194,8 @@ class EventGuest(db.Model):
     confirmed = db.Column(Boolean, nullable=False, default=False)
     confirmed_by = db.Column(Integer, ForeignKey("user.id"), nullable=True)
     confirmed_at = db.Column(DateTime, nullable=True)
+    fee_paid = db.Column(Boolean, nullable=False, default=False)
+    fee_paid_at = db.Column(DateTime, nullable=True)
     created_at = db.Column(DateTime, nullable=False, default=datetime.utcnow)
 
     event = relationship("CalendarEvent", back_populates="guests")
@@ -191,6 +209,41 @@ class EventGuest(db.Model):
             "added_by": self.added_by,
             "confirmed": self.confirmed,
             "confirmed_at": self.confirmed_at.isoformat() if self.confirmed_at else None,
+            "fee_paid": bool(self.fee_paid),
+        }
+
+
+class MembershipPayment(db.Model):
+    """Pagamento della quota associativa annuale di un giocatore (una riga per anno).
+
+    L'importo è quello effettivamente versato: la quota di default
+    (OTS_MILSIM_ANNUAL_FEE) può cambiare negli anni senza toccare lo storico.
+    """
+
+    __tablename__ = "ec_membership_payments"
+    __table_args__ = (UniqueConstraint("player_id", "year", name="uq_ec_membership_player_year"),)
+
+    id = db.Column(Integer, primary_key=True)
+    player_id = db.Column(Integer, ForeignKey("ec_players.id"), nullable=False)
+    year = db.Column(Integer, nullable=False)
+    amount = db.Column(Float, nullable=False)
+    paid_on = db.Column(Date, nullable=False)
+    method = db.Column(String(32), nullable=True)  # contanti | bonifico | altro
+    notes = db.Column(Text, nullable=True)
+    recorded_by = db.Column(Integer, ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    player = relationship("Player", back_populates="membership_payments")
+
+    def serialize(self):
+        return {
+            "id": self.id,
+            "player_id": self.player_id,
+            "year": self.year,
+            "amount": self.amount,
+            "paid_on": self.paid_on.isoformat() if self.paid_on else None,
+            "method": self.method,
+            "notes": self.notes,
         }
 
 
@@ -541,6 +594,7 @@ PLUGIN_TABLES = [
     EventGuest.__table__,
     Rank.__table__,
     PlayerScore.__table__,
+    MembershipPayment.__table__,
     GameTemplate.__table__,
     GameMatch.__table__,
     EngineLease.__table__,

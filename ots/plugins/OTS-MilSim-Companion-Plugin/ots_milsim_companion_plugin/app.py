@@ -52,6 +52,7 @@ from .models import (
     GameField,
     GameMatch,
     GameTemplate,
+    MembershipPayment,
     MeshChannelMap,
     MeshTag,
     Player,
@@ -436,6 +437,52 @@ def _set_confirmation(event_id: int, player_id: int, confirmed: bool) -> bool:
         attendance.points_awarded = 0
         return True
     return False
+
+
+def _parse_fee(data: dict) -> tuple[bool, float | None]:
+    """Legge paid/fee dal body di un evento. Solleva ValueError se incoerenti."""
+    paid = bool(data.get("paid"))
+    if not paid:
+        return False, None
+    try:
+        fee = round(float(str(data.get("fee") or "").replace(",", ".")), 2)
+    except ValueError:
+        raise ValueError("Quota di partecipazione non valida")
+    if fee <= 0:
+        raise ValueError("Per un evento a pagamento indica una quota maggiore di zero")
+    return True, fee
+
+
+def _membership_number(value, player_id: int | None) -> str | None:
+    """Normalizza il numero di tessera e verifica che non sia già usato."""
+    number = (value or "").strip() or None
+    if number:
+        other = (
+            db.session.query(Player)
+            .filter(db.func.lower(Player.membership_number) == number.lower())
+            .first()
+        )
+        if other and other.id != player_id:
+            raise ValueError(f"Tessera {number} già assegnata a {other.display_name()}")
+    return number
+
+
+def _event_counts(event: CalendarEvent, player) -> tuple[dict, str, bool]:
+    """Conteggi RSVP/conferme/quote dell'evento + RSVP e quota del giocatore corrente."""
+    counts = {"present": 0, "absent": 0, "maybe": 0, "confirmed": 0, "fee_paid": 0}
+    my_rsvp, my_fee_paid = "not_configured", False
+    for attendance in event.attendances:
+        if attendance.rsvp_status in counts:
+            counts[attendance.rsvp_status] += 1
+        if attendance.confirmed:
+            counts["confirmed"] += 1
+        if attendance.fee_paid:
+            counts["fee_paid"] += 1
+        if player and attendance.player_id == player.id:
+            my_rsvp = attendance.rsvp_status
+            my_fee_paid = bool(attendance.fee_paid)
+    counts["fee_paid"] += sum(1 for g in event.guests if g.fee_paid)
+    return counts, my_rsvp, my_fee_paid
 
 
 def _rank_for_score(score_value: int, ranks: list) -> dict | None:
@@ -1061,6 +1108,32 @@ class MilSimCompanionPlugin(Plugin):
                         except BaseException:
                             db.session.rollback()
 
+                # 3.25: tessera giocatore, eventi a pagamento e quote incassate
+                for table, columns in (
+                    ("ec_players", (("membership_number", "VARCHAR(64)", None),)),
+                    ("ec_events", (("paid", "BOOLEAN", "FALSE"), ("fee", "FLOAT", None))),
+                    ("ec_attendances", (
+                        ("fee_paid", "BOOLEAN", "FALSE"),
+                        ("fee_paid_at", "TIMESTAMP", None),
+                        ("fee_paid_by", "INTEGER", None),
+                    )),
+                    ("ec_event_guests", (("fee_paid", "BOOLEAN", "FALSE"), ("fee_paid_at", "TIMESTAMP", None))),
+                ):
+                    if not inspector.has_table(table):
+                        continue
+                    existing = {c["name"] for c in inspector.get_columns(table)}
+                    added = []
+                    for name, sql_type, default in columns:
+                        if name in existing:
+                            continue
+                        db.session.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
+                        if default is not None:
+                            db.session.execute(text(f"UPDATE {table} SET {name} = {default} WHERE {name} IS NULL"))
+                        added.append(name)
+                    if added:
+                        db.session.commit()
+                        logger.info(f"MilSim: {table} migrata (aggiunte colonne {', '.join(added)})")
+
                 # 3.23: PSK dei canali per la chat Meshtastic
                 if inspector.has_table("msh_channel_map"):
                     map_columns = {c["name"] for c in inspector.get_columns("msh_channel_map")}
@@ -1407,17 +1480,7 @@ class MilSimCompanionPlugin(Plugin):
             results = []
             for event in events:
                 data = event.serialize()
-                counts = {"present": 0, "absent": 0, "maybe": 0, "confirmed": 0}
-                my_rsvp = "not_configured"
-                for attendance in event.attendances:
-                    if attendance.rsvp_status in counts:
-                        counts[attendance.rsvp_status] += 1
-                    if attendance.confirmed:
-                        counts["confirmed"] += 1
-                    if player and attendance.player_id == player.id:
-                        my_rsvp = attendance.rsvp_status
-                data["counts"] = counts
-                data["my_rsvp"] = my_rsvp
+                data["counts"], data["my_rsvp"], data["my_fee_paid"] = _event_counts(event, player)
                 results.append(data)
             return jsonify(results)
         except BaseException as e:
@@ -1436,17 +1499,7 @@ class MilSimCompanionPlugin(Plugin):
 
             player = _current_player()
             data = event.serialize()
-            counts = {"present": 0, "absent": 0, "maybe": 0, "confirmed": 0}
-            my_rsvp = "not_configured"
-            for attendance in event.attendances:
-                if attendance.rsvp_status in counts:
-                    counts[attendance.rsvp_status] += 1
-                if attendance.confirmed:
-                    counts["confirmed"] += 1
-                if player and attendance.player_id == player.id:
-                    my_rsvp = attendance.rsvp_status
-            data["counts"] = counts
-            data["my_rsvp"] = my_rsvp
+            data["counts"], data["my_rsvp"], data["my_fee_paid"] = _event_counts(event, player)
             data["has_player"] = player is not None
             data["guests"] = _serialize_guests(event)
             return jsonify(data)
@@ -1471,6 +1524,10 @@ class MilSimCompanionPlugin(Plugin):
 
             if not db.session.get(GameField, int(data["field_id"])):
                 return jsonify({"success": False, "error": "Campo da gioco non trovato"}), 400
+            try:
+                paid, fee = _parse_fee(data)
+            except ValueError as e:
+                return jsonify({"success": False, "error": str(e)}), 400
 
             event = CalendarEvent(
                 title=data["title"],
@@ -1479,6 +1536,8 @@ class MilSimCompanionPlugin(Plugin):
                 start_time=start,
                 end_time=end,
                 source="manual",
+                paid=paid,
+                fee=fee,
             )
             db.session.add(event)
             db.session.commit()
@@ -1510,6 +1569,12 @@ class MilSimCompanionPlugin(Plugin):
                 event.start_time = _parse_datetime(data["start_time"])
             if "end_time" in data:
                 event.end_time = _parse_datetime(data["end_time"])
+            if "paid" in data:
+                try:
+                    event.paid, event.fee = _parse_fee(data)
+                except ValueError as e:
+                    db.session.rollback()
+                    return jsonify({"success": False, "error": str(e)}), 400
             if event.end_time <= event.start_time:
                 db.session.rollback()
                 return jsonify({"success": False, "error": "La fine deve essere dopo l'inizio"}), 400
@@ -1708,6 +1773,7 @@ class MilSimCompanionPlugin(Plugin):
                         "display_name": player.formal_name(),
                         "rsvp_status": attendance.rsvp_status if attendance else "not_configured",
                         "confirmed": attendance.confirmed if attendance else False,
+                        "fee_paid": bool(attendance.fee_paid) if attendance else False,
                     }
                 )
             return jsonify(
@@ -1769,6 +1835,175 @@ class MilSimCompanionPlugin(Plugin):
                 f"for {changed} players on event {event_id}"
             )
             return jsonify({"success": True, "changed": changed})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    # Quota di partecipazione incassata (eventi a pagamento)
+    @staticmethod
+    @blueprint.route("/events/<int:event_id>/fee", methods=["POST"])
+    @roles_accepted("administrator")
+    def set_event_fee_paid(event_id):
+        try:
+            data = request.json or {}
+            player_id = data.get("player_id")
+            paid = bool(data.get("paid"))
+            if not player_id:
+                return jsonify({"success": False, "error": "player_id è obbligatorio"}), 400
+            event = db.session.get(CalendarEvent, event_id)
+            if not event:
+                return jsonify({"success": False, "error": "Evento non trovato"}), 404
+            if not event.paid:
+                return jsonify({"success": False, "error": "L'evento non è a pagamento"}), 400
+            if not db.session.get(Player, int(player_id)):
+                return jsonify({"success": False, "error": "Giocatore non trovato"}), 404
+
+            attendance = (
+                db.session.query(EventAttendance)
+                .filter_by(event_id=event_id, player_id=int(player_id))
+                .first()
+            )
+            if not attendance:
+                attendance = EventAttendance(event_id=event_id, player_id=int(player_id))
+                db.session.add(attendance)
+            attendance.fee_paid = paid
+            attendance.fee_paid_at = datetime.utcnow() if paid else None
+            attendance.fee_paid_by = current_user.id if paid else None
+            db.session.commit()
+            return jsonify({"success": True, "attendance": attendance.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    @staticmethod
+    @blueprint.route("/guests/<int:guest_id>/fee", methods=["POST"])
+    @roles_accepted("administrator")
+    def set_guest_fee_paid(guest_id):
+        try:
+            guest = db.session.get(EventGuest, guest_id)
+            if not guest:
+                return jsonify({"success": False, "error": "Ospite non trovato"}), 404
+            if not guest.event.paid:
+                return jsonify({"success": False, "error": "L'evento non è a pagamento"}), 400
+            paid = bool((request.json or {}).get("paid"))
+            guest.fee_paid = paid
+            guest.fee_paid_at = datetime.utcnow() if paid else None
+            db.session.commit()
+            return jsonify({"success": True, "guest": guest.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    # ------------------------------------------------------------------
+    # Quote associative annuali
+    # ------------------------------------------------------------------
+
+    # Situazione quote di un anno: tutti i giocatori attivi + chi ha pagato
+    # quell'anno anche se ora è disattivato
+    @staticmethod
+    @blueprint.route("/membership")
+    @roles_accepted("administrator")
+    def get_membership():
+        try:
+            year = int(request.args.get("year") or datetime.now().year)
+            payments = {
+                p.player_id: p
+                for p in db.session.query(MembershipPayment).filter_by(year=year).all()
+            }
+            players = (
+                db.session.query(Player)
+                .order_by(Player.last_name, Player.first_name, Player.callsign)
+                .all()
+            )
+            rows = []
+            for player in players:
+                payment = payments.get(player.id)
+                if not player.active and not payment:
+                    continue
+                rows.append(
+                    {
+                        "player_id": player.id,
+                        "display_name": player.formal_name(),
+                        "membership_number": player.membership_number,
+                        "active": player.active,
+                        "payment": payment.serialize() if payment else None,
+                    }
+                )
+            years = sorted(
+                {y for (y,) in db.session.query(MembershipPayment.year).distinct().all()}
+                | {datetime.now().year, year},
+                reverse=True,
+            )
+            return jsonify(
+                {
+                    "year": year,
+                    "fee": app.config.get("OTS_MILSIM_ANNUAL_FEE", 50),
+                    "years": years,
+                    "players": rows,
+                }
+            )
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # Registra (o corregge) il pagamento di un giocatore per un anno
+    @staticmethod
+    @blueprint.route("/membership", methods=["POST"])
+    @roles_accepted("administrator")
+    def save_membership_payment():
+        try:
+            data = request.json or {}
+            player_id = int(data.get("player_id") or 0)
+            year = int(data.get("year") or 0)
+            if not db.session.get(Player, player_id):
+                return jsonify({"success": False, "error": "Giocatore non trovato"}), 404
+            if not 2000 <= year <= 2100:
+                return jsonify({"success": False, "error": "Anno non valido"}), 400
+            try:
+                amount = round(float(str(data.get("amount") if data.get("amount") is not None else "").replace(",", ".")), 2)
+            except ValueError:
+                return jsonify({"success": False, "error": "Importo non valido"}), 400
+            if amount < 0:
+                return jsonify({"success": False, "error": "Importo non valido"}), 400
+            try:
+                paid_on = datetime.strptime(data.get("paid_on") or "", "%Y-%m-%d").date()
+            except ValueError:
+                paid_on = datetime.now().date()
+
+            payment = (
+                db.session.query(MembershipPayment)
+                .filter_by(player_id=player_id, year=year)
+                .first()
+            )
+            if not payment:
+                payment = MembershipPayment(player_id=player_id, year=year)
+                db.session.add(payment)
+            payment.amount = amount
+            payment.paid_on = paid_on
+            payment.method = (data.get("method") or "").strip() or None
+            payment.notes = (data.get("notes") or "").strip() or None
+            payment.recorded_by = current_user.id
+            db.session.commit()
+            return jsonify({"success": True, "payment": payment.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
+    @staticmethod
+    @blueprint.route("/membership/<int:payment_id>", methods=["DELETE"])
+    @roles_accepted("administrator")
+    def delete_membership_payment(payment_id):
+        try:
+            payment = db.session.get(MembershipPayment, payment_id)
+            if not payment:
+                return jsonify({"success": False, "error": "Pagamento non trovato"}), 404
+            db.session.delete(payment)
+            db.session.commit()
+            return jsonify({"success": True})
         except BaseException as e:
             db.session.rollback()
             logger.error(traceback.format_exc())
@@ -2165,10 +2400,17 @@ class MilSimCompanionPlugin(Plugin):
                 .all()
             )
             usernames = {u.id: u.username for u in db.session.query(User).all()}
+            paid_this_year = {
+                player_id
+                for (player_id,) in db.session.query(MembershipPayment.player_id)
+                .filter_by(year=datetime.now().year)
+                .all()
+            }
             results = []
             for player in players:
                 data = player.serialize()
                 data["username"] = usernames.get(player.user_id)
+                data["membership_paid"] = player.id in paid_this_year
                 results.append(data)
             return jsonify(results)
         except BaseException as e:
@@ -2186,11 +2428,16 @@ class MilSimCompanionPlugin(Plugin):
             callsign = (data.get("callsign") or "").strip() or None
             if not (first_name or last_name or callsign):
                 return jsonify({"success": False, "error": "Indica almeno nome/cognome o callsign"}), 400
+            try:
+                membership_number = _membership_number(data.get("membership_number"), None)
+            except ValueError as e:
+                return jsonify({"success": False, "error": str(e)}), 400
 
             player = Player(
                 first_name=first_name,
                 last_name=last_name,
                 callsign=callsign,
+                membership_number=membership_number,
                 notes=data.get("notes"),
                 active=data.get("active", True),
             )
@@ -2220,6 +2467,12 @@ class MilSimCompanionPlugin(Plugin):
                     setattr(player, attr, (data[attr] or "").strip() or None)
             if "active" in data:
                 player.active = bool(data["active"])
+            if "membership_number" in data:
+                try:
+                    player.membership_number = _membership_number(data["membership_number"], player.id)
+                except ValueError as e:
+                    db.session.rollback()
+                    return jsonify({"success": False, "error": str(e)}), 400
             if not (player.first_name or player.last_name or player.callsign):
                 db.session.rollback()
                 return jsonify({"success": False, "error": "Indica almeno nome/cognome o callsign"}), 400
@@ -2282,7 +2535,7 @@ class MilSimCompanionPlugin(Plugin):
     @blueprint.route("/players/import/csv", methods=["POST"])
     @roles_accepted("administrator")
     def import_players_csv():
-        """CSV con intestazione: nome,cognome,callsign (o first_name,last_name,callsign).
+        """CSV con intestazione: nome,cognome,callsign[,tessera] (o first_name,last_name,callsign).
 
         Separatore , o ; (qualsiasi export CSV di Excel). Righe duplicate
         (stesso nome+cognome o stesso callsign già in anagrafica) vengono saltate.
@@ -2306,6 +2559,11 @@ class MilSimCompanionPlugin(Plugin):
                 "callsign": "callsign",
                 "nickname": "callsign",
                 "soprannome": "callsign",
+                "tessera": "membership_number",
+                "numero_tessera": "membership_number",
+                "numero tessera": "membership_number",
+                "n_tessera": "membership_number",
+                "membership_number": "membership_number",
             }
 
             existing_names = {
@@ -2317,6 +2575,11 @@ class MilSimCompanionPlugin(Plugin):
                 p.callsign.strip().lower()
                 for p in db.session.query(Player).all()
                 if p.callsign
+            }
+            existing_cards = {
+                p.membership_number.strip().lower()
+                for p in db.session.query(Player).all()
+                if p.membership_number
             }
 
             reader = csv.DictReader(io.StringIO(content), dialect=dialect)
@@ -2332,6 +2595,7 @@ class MilSimCompanionPlugin(Plugin):
                     first_name = row.get("first_name", "")
                     last_name = row.get("last_name", "")
                     callsign = row.get("callsign", "") or None
+                    card = row.get("membership_number", "") or None
                     if not (first_name or last_name or callsign):
                         continue  # riga vuota
 
@@ -2342,11 +2606,22 @@ class MilSimCompanionPlugin(Plugin):
                     if callsign and callsign.lower() in existing_callsigns:
                         skipped += 1
                         continue
+                    if card and card.lower() in existing_cards:
+                        errors.append(f"Riga {index}: tessera {card} già assegnata, riga saltata")
+                        skipped += 1
+                        continue
 
                     db.session.add(
-                        Player(first_name=first_name, last_name=last_name, callsign=callsign)
+                        Player(
+                            first_name=first_name,
+                            last_name=last_name,
+                            callsign=callsign,
+                            membership_number=card,
+                        )
                     )
                     existing_names.add(name_key)
+                    if card:
+                        existing_cards.add(card.lower())
                     if callsign:
                         existing_callsigns.add(callsign.lower())
                     imported += 1

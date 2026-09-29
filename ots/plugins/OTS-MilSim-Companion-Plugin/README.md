@@ -713,6 +713,15 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.25.0** — **tessere, quote associative ed eventi a pagamento**. Giocatori: nuovo campo
+  «numero di tessera» (univoco, anche nell'import CSV con la colonna `tessera`) e stato della quota
+  dell'anno in corso. Nuova tab **Quote**: per ogni anno, chi ha pagato e chi no, importo, data e
+  metodo del pagamento, totale incassato e atteso; quota di default `OTS_MILSIM_ANNUAL_FEE` (50 €),
+  modificabile dalla tab. Eventi: spunta «💶 A pagamento» con la quota di partecipazione (es. 20 €);
+  in Presenze compare la colonna «Quota pagata» per giocatori e ospiti, con il totale incassato, e
+  il giocatore vede sulla card se la sua quota risulta pagata. Migrazione automatica delle colonne
+  (`ec_players.membership_number`, `ec_events.paid/fee`, `ec_attendances.fee_paid*`,
+  `ec_event_guests.fee_paid*`) e nuova tabella `ec_membership_payments`.
 - **3.24.0** — tab Giocatori: bottone **✏️ Modifica** (anche sui disattivati) che apre una
   finestra con nome, cognome, callsign, account OTS, note e stato attivo; il backend normalizza i
   campi e rifiuta un giocatore senza nome/cognome né callsign. Tab Presenze: il menu mostra solo

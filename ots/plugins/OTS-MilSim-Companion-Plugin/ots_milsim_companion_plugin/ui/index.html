@@ -147,8 +147,8 @@
   .kw { display: inline-block; background: var(--tab); border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px; font-size: 11px; color: var(--muted); margin-right: 4px; }
   .pcn-status { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px;
     margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
-  #modal-backdrop, #play-backdrop, #player-backdrop, #tpl-preview-backdrop, #dp-backdrop, #dpf-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
-  #modal-backdrop.hidden, #play-backdrop.hidden, #player-backdrop.hidden, #tpl-preview-backdrop.hidden, #dp-backdrop.hidden, #dpf-backdrop.hidden { display: none; }
+  #modal-backdrop, #play-backdrop, #player-backdrop, #fee-backdrop, #tpl-preview-backdrop, #dp-backdrop, #dpf-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
+  #modal-backdrop.hidden, #play-backdrop.hidden, #player-backdrop.hidden, #fee-backdrop.hidden, #tpl-preview-backdrop.hidden, #dp-backdrop.hidden, #dpf-backdrop.hidden { display: none; }
   .dpf-list { font-size: 12.5px; max-height: 200px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
   .dpf-list:empty { display: none; }
   #offline-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2100; }
@@ -428,6 +428,23 @@
     </div>
   </div>
 </div>
+<div id="fee-backdrop" class="hidden" onclick="closeFeeModal()">
+  <div class="modal" style="width:min(440px, 94vw)" onclick="event.stopPropagation()">
+    <h2 id="fee-title">💶 Quota annuale</h2>
+    <form id="fee-form" style="display:flex; flex-direction:column; gap:12px">
+      <label>Importo (€) <input name="amount" type="number" min="0" step="0.5" required></label>
+      <label>Data del pagamento <input name="paid_on" type="date" required></label>
+      <label>Metodo <select name="method">
+        <option value="contanti">Contanti</option><option value="bonifico">Bonifico</option>
+        <option value="altro">Altro</option></select></label>
+      <label>Note <textarea name="notes" rows="2"></textarea></label>
+      <div class="modal-actions">
+        <button class="btn" type="button" onclick="closeFeeModal()">Annulla</button>
+        <button class="btn primary" type="submit">💾 Salva</button>
+      </div>
+    </form>
+  </div>
+</div>
 <div id="player-backdrop" class="hidden" onclick="closePlayerModal()">
   <div class="modal" style="width:min(480px, 94vw)" onclick="event.stopPropagation()">
     <h2>✏️ Modifica giocatore</h2>
@@ -435,6 +452,7 @@
       <label>Nome <input name="first_name"></label>
       <label>Cognome <input name="last_name"></label>
       <label>Callsign <input name="callsign"></label>
+      <label>Numero di tessera <input name="membership_number"></label>
       <label>Account OTS <select name="user_id" id="player-edit-account"></select></label>
       <label>Note <textarea name="notes" rows="3"></textarea></label>
       <label style="flex-direction:row; align-items:center; gap:8px; color:var(--text)">
@@ -497,6 +515,22 @@ function fmtDT(iso) {
   return new Date(iso).toLocaleString("it-IT", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 function isAdmin() { return ME && ME.roles.includes("administrator"); }
+function fmtEuro(v) { return (Number(v) || 0).toLocaleString("it-IT", { style: "currency", currency: "EUR" }); }
+// Campo "A pagamento" + quota dei form evento: la quota compare solo con la spunta
+function feeFields(ev) {
+  const paid = !!(ev && ev.paid);
+  return `<label style="flex-direction:row; align-items:center; gap:6px; align-self:center">
+      <input type="checkbox" name="paid" ${paid ? "checked" : ""}
+        onchange="this.form.querySelector('.fee-input').style.display = this.checked ? '' : 'none'"> 💶 A pagamento</label>
+    <label class="fee-input" style="${paid ? "" : "display:none"}">Quota (€)
+      <input name="fee" type="number" min="0" step="0.5" style="width:90px" value="${paid ? ev.fee : 20}"></label>`;
+}
+function eventBody(form) {
+  const body = Object.fromEntries(new FormData(form).entries());
+  body.paid = form.paid.checked;
+  if (!body.paid) delete body.fee;
+  return body;
+}
 
 /* ---------------- Modalità notte ---------------- */
 function isDarkNow() {
@@ -536,6 +570,7 @@ const TABS = [
   { id: "leaderboard", label: "Classifica", admin: false, render: () => { clearEventHash(); renderLeaderboard(); } },
   { id: "attendance", label: "Presenze", admin: true, render: renderAttendance },
   { id: "players", label: "Giocatori", admin: true, render: renderPlayers },
+  { id: "membership", label: "Quote", admin: true, render: renderMembership },
   { id: "fields", label: "Campi da gioco", admin: true, render: renderFields },
   { id: "ranks", label: "Gradi e badge", admin: true, render: renderRanks },
   { id: "import", label: "Import", admin: true, render: renderImport },
@@ -598,13 +633,13 @@ async function renderEvents() {
         <label>Inizio <input type="datetime-local" name="start_time" required></label>
         <label>Fine <input type="datetime-local" name="end_time" required></label>
         <label style="flex:1;min-width:220px">Descrizione <input name="description"></label>
+        ${feeFields(null)}
         <button class="btn primary" type="submit">Crea evento</button>
       </form><h3>Calendario</h3>`;
     document.getElementById("ev-form").onsubmit = async (e) => {
       e.preventDefault();
-      const fd = new FormData(e.target);
       try {
-        await api("/events", { method: "POST", body: Object.fromEntries(fd.entries()) });
+        await api("/events", { method: "POST", body: eventBody(e.target) });
         toast("Evento creato"); renderEvents();
       } catch (err) { toast(err.message, false); }
     };
@@ -646,8 +681,9 @@ async function renderEvents() {
       </div>
       <div class="event-meta">📍 ${esc(ev.field ? ev.field.name : "?")}${ev.field && ev.field.address ? " — " + esc(ev.field.address) : ""}</div>
       <div class="event-meta">🕓 ${fmtDT(ev.start_time)} → ${fmtDT(ev.end_time)}</div>
+      ${feeLine(ev)}
       ${ev.description ? `<div class="event-desc">${esc(ev.description)}</div>` : ""}
-      <div class="counts">✅ ${ev.counts.present} presenti · ❌ ${ev.counts.absent} assenti · ❔ ${ev.counts.maybe} in dubbio · 🏅 ${ev.counts.confirmed} confermati sul campo</div>
+      <div class="counts">✅ ${ev.counts.present} presenti · ❌ ${ev.counts.absent} assenti · ❔ ${ev.counts.maybe} in dubbio · 🏅 ${ev.counts.confirmed} confermati sul campo${ev.paid ? ` · 💶 ${ev.counts.fee_paid} quote incassate` : ""}</div>
       ${past ? "" : `<div style="margin-top:8px" class="rsvp-group">
         <button class="btn ${st === "present" ? "on-present" : ""}" onclick="rsvp(${ev.id},'present')">Presente</button>
         <button class="btn ${st === "absent" ? "on-absent" : ""}" onclick="rsvp(${ev.id},'absent')">Non presente</button>
@@ -655,6 +691,14 @@ async function renderEvents() {
       </div>`}
     </div>`;
   }).join("");
+}
+// Quota di partecipazione: importo + stato del giocatore corrente (se ha dichiarato la presenza)
+function feeLine(ev) {
+  if (!ev.paid) return "";
+  const mine = ev.my_rsvp === "present" || ev.my_fee_paid
+    ? (ev.my_fee_paid ? ` · <span class="pill present">quota pagata</span>` : ` · <span class="pill maybe">quota da pagare</span>`)
+    : "";
+  return `<div class="event-meta">💶 Evento a pagamento: quota di partecipazione <strong>${fmtEuro(ev.fee)}</strong>${mine}</div>`;
 }
 function togglePast(show) {
   try { localStorage.setItem("ec_show_past", show ? "1" : "0"); } catch (e) {}
@@ -708,8 +752,9 @@ async function renderEventDetail(id) {
       </div>
       <div class="event-meta">📍 ${esc(ev.field ? ev.field.name : "?")}${ev.field && ev.field.address ? " — " + esc(ev.field.address) : ""}</div>
       <div class="event-meta">🕓 ${fmtDT(ev.start_time)} → ${fmtDT(ev.end_time)}</div>
+      ${feeLine(ev)}
       ${ev.description ? `<div class="event-desc">${esc(ev.description)}</div>` : ""}
-      <div class="counts">✅ ${ev.counts.present} presenti · ❌ ${ev.counts.absent} assenti · ❔ ${ev.counts.maybe} in dubbio · 🏅 ${ev.counts.confirmed} confermati sul campo</div>
+      <div class="counts">✅ ${ev.counts.present} presenti · ❌ ${ev.counts.absent} assenti · ❔ ${ev.counts.maybe} in dubbio · 🏅 ${ev.counts.confirmed} confermati sul campo${ev.paid ? ` · 💶 ${ev.counts.fee_paid} quote incassate` : ""}</div>
       ${past ? "<p class='muted'>Evento concluso.</p>" : ev.has_player ? `
       <p style="margin:10px 0 4px"><strong>La tua presenza:</strong></p>
       <div class="rsvp-group">
@@ -798,13 +843,14 @@ async function editEvent(id) {
       <label>Inizio <input type="datetime-local" name="start_time" required value="${toLocal(ev.start_time)}"></label>
       <label>Fine <input type="datetime-local" name="end_time" required value="${toLocal(ev.end_time)}"></label>
       <label style="flex:1;min-width:220px">Descrizione <input name="description" value="${esc(ev.description || "")}"></label>
+      ${feeFields(ev)}
       <button class="btn primary" type="submit">Salva</button>
       <button class="btn" type="button" onclick="renderEvents()">Annulla</button>
     </form>`;
   document.getElementById("edit-form-" + id).onsubmit = async (e) => {
     e.preventDefault();
     try {
-      await api(`/events/${id}`, { method: "PUT", body: Object.fromEntries(new FormData(e.target).entries()) });
+      await api(`/events/${id}`, { method: "PUT", body: eventBody(e.target) });
       toast("Evento aggiornato");
       renderEvents();
     } catch (err) { toast(err.message, false); }
@@ -1132,34 +1178,65 @@ async function renderAttendance() {
 
   async function loadAttendance() {
     const data = await api(`/events/${select.value}/attendance`);
+    const paid = data.event.paid;
+    const feeCount = data.attendance.filter(a => a.fee_paid).length + data.guests.filter(g => g.fee_paid).length;
     document.getElementById("att-list").innerHTML = `
+      ${paid ? `<p>💶 Evento a pagamento: quota <strong>${fmtEuro(data.event.fee)}</strong> ·
+        incassate <strong id="att-fee-count">${feeCount}</strong> quote
+        (<span id="att-fee-total">${fmtEuro(feeCount * data.event.fee)}</span>)</p>` : ""}
       <p>
         <button class="btn primary" onclick="confirmAll(${data.event.id}, true)">✅ Tutta la squadra presente</button>
         <button class="btn" onclick="confirmAll(${data.event.id}, false)">Annulla tutte le conferme</button>
       </p>
       <table><thead><tr>
-      <th>Giocatore</th><th>Dichiarazione</th><th>Presenza confermata</th></tr></thead><tbody>
+      <th>Giocatore</th><th>Dichiarazione</th><th>Presenza confermata</th>${paid ? "<th>Quota pagata</th>" : ""}</tr></thead><tbody>
       ${data.attendance.map(a => `<tr>
         <td>${esc(a.display_name)}</td>
         <td><span class="pill ${a.rsvp_status}">${{present:"Presente",absent:"Non presente",maybe:"In dubbio",not_configured:"Non configurato"}[a.rsvp_status]}</span></td>
         <td><input type="checkbox" ${a.confirmed ? "checked" : ""}
              onchange="confirmAttendance(${data.event.id}, ${a.player_id}, this.checked)"></td>
+        ${paid ? `<td><input type="checkbox" class="att-fee" ${a.fee_paid ? "checked" : ""}
+             onchange="setFeePaid(${data.event.id}, ${a.player_id}, this.checked, this)"></td>` : ""}
       </tr>`).join("")}
       </tbody></table>
       <p class="muted">La conferma vale anche per chi non ha dichiarato nulla: spuntando la casella il giocatore
-      riceve i punti presenza; togliendo la spunta i punti vengono revocati.</p>
+      riceve i punti presenza; togliendo la spunta i punti vengono revocati.${paid ? `
+      La spunta «Quota pagata» registra l'incasso della quota di partecipazione.` : ""}</p>
       ${data.guests.length ? `<h3>Ospiti in prova (${data.guests.length})</h3>
-      <table><thead><tr><th>Nome</th><th>Registrato da</th><th>Presenza confermata</th><th></th></tr></thead><tbody>
+      <table><thead><tr><th>Nome</th><th>Registrato da</th><th>Presenza confermata</th>${paid ? "<th>Quota pagata</th>" : ""}<th></th></tr></thead><tbody>
         ${data.guests.map(g => `<tr>
           <td>${esc(g.first_name)} ${esc(g.last_name)}</td>
           <td class="muted">${esc(g.added_by_username || "—")}</td>
           <td><input type="checkbox" ${g.confirmed ? "checked" : ""} onchange="confirmGuest(${g.id}, this.checked)"></td>
+          ${paid ? `<td><input type="checkbox" class="att-fee" ${g.fee_paid ? "checked" : ""}
+               onchange="setGuestFeePaid(${g.id}, this.checked, this)"></td>` : ""}
           <td><button class="btn small danger" onclick="deleteGuest(${g.id}, ${data.event.id})">Rimuovi</button></td>
         </tr>`).join("")}
       </tbody></table>
       <p class="muted">Gli ospiti non hanno un account: la conferma registra solo la loro presenza, senza punti.</p>` : ""}`;
   }
   window._reloadAttendance = loadAttendance;
+  window._attFee = () => {
+    const n = document.querySelectorAll("#att-list .att-fee:checked").length;
+    const ev = events.find(e => String(e.id) === select.value);
+    const c = document.getElementById("att-fee-count"), t = document.getElementById("att-fee-total");
+    if (c) c.textContent = n;
+    if (t && ev) t.textContent = fmtEuro(n * ev.fee);
+  };
+}
+async function setFeePaid(eventId, playerId, paid, box) {
+  try {
+    await api(`/events/${eventId}/fee`, { method: "POST", body: { player_id: playerId, paid } });
+    toast(paid ? "Quota incassata" : "Quota segnata come non pagata");
+    window._attFee && window._attFee();
+  } catch (err) { toast(err.message, false); box.checked = !paid; }
+}
+async function setGuestFeePaid(guestId, paid, box) {
+  try {
+    await api(`/guests/${guestId}/fee`, { method: "POST", body: { paid } });
+    toast(paid ? "Quota ospite incassata" : "Quota ospite segnata come non pagata");
+    window._attFee && window._attFee();
+  } catch (err) { toast(err.message, false); box.checked = !paid; }
 }
 async function confirmAttendance(eventId, playerId, confirmed) {
   try {
@@ -1211,10 +1288,11 @@ async function renderPlayers() {
       <label>Nome <input name="first_name"></label>
       <label>Cognome <input name="last_name"></label>
       <label>Callsign <input name="callsign"></label>
+      <label>N. tessera <input name="membership_number" style="width:110px"></label>
       <button class="btn primary" type="submit">Aggiungi</button>
     </form>
     <h3>Import da CSV (export Excel)</h3>
-    <p class="muted">Intestazione: <code>nome,cognome,callsign</code> — separatore <code>,</code> o <code>;</code>
+    <p class="muted">Intestazione: <code>nome,cognome,callsign</code> (facoltativa la colonna <code>tessera</code>) — separatore <code>,</code> o <code>;</code>
        (in Excel: Salva con nome → CSV). I giocatori già presenti (stesso nome+cognome o stesso callsign)
        vengono saltati, quindi puoi rilanciare l'import con il foglio aggiornato.</p>
     <form class="inline" id="players-csv-form">
@@ -1222,11 +1300,13 @@ async function renderPlayers() {
       <button class="btn primary" type="submit">Importa giocatori</button>
     </form>
     <div id="players-import-result"></div>
-    <table><thead><tr><th>Nome</th><th>Cognome</th><th>Callsign</th><th>Account OTS</th><th>Note</th><th></th></tr></thead><tbody>
+    <table><thead><tr><th>Tessera</th><th>Nome</th><th>Cognome</th><th>Callsign</th><th>Quota ${new Date().getFullYear()}</th><th>Account OTS</th><th>Note</th><th></th></tr></thead><tbody>
     ${active.map(p => `<tr>
+      <td>${esc(p.membership_number || "")}</td>
       <td>${esc(p.first_name)}</td>
       <td>${esc(p.last_name)}</td>
       <td>${esc(p.callsign || "")}</td>
+      <td>${p.membership_paid ? `<span class="pill present">pagata</span>` : `<span class="pill absent">da pagare</span>`}</td>
       <td>${accountSelect(p)}</td>
       <td class="muted">${esc(p.notes || "")}</td>
       <td style="white-space:nowrap">
@@ -1288,6 +1368,7 @@ function editPlayer(id) {
   form.first_name.value = p.first_name || "";
   form.last_name.value = p.last_name || "";
   form.callsign.value = p.callsign || "";
+  form.membership_number.value = p.membership_number || "";
   form.notes.value = p.notes || "";
   form.active.checked = !!p.active;
   document.getElementById("player-edit-account").innerHTML =
@@ -1302,6 +1383,7 @@ function editPlayer(id) {
       first_name: form.first_name.value.trim(),
       last_name: form.last_name.value.trim(),
       callsign: form.callsign.value.trim(),
+      membership_number: form.membership_number.value.trim(),
       notes: form.notes.value.trim(),
       active: form.active.checked,
       user_id: form.user_id.value ? parseInt(form.user_id.value, 10) : null,
@@ -1328,6 +1410,97 @@ async function delPlayer(id) {
   if (!confirm("Eliminare questo giocatore?")) return;
   try { await api(`/players/${id}`, { method: "DELETE" }); toast("Giocatore eliminato"); renderPlayers(); }
   catch (err) { toast(err.message, false); }
+}
+
+/* ---------------- Quote associative annuali (admin) ---------------- */
+async function renderMembership(year) {
+  const el = document.getElementById("content");
+  year = year || window._feeYear || new Date().getFullYear();
+  window._feeYear = year;
+  el.innerHTML = "<h2>Quote associative</h2><div id='fee-body'>Caricamento…</div>";
+  const data = await api(`/membership?year=${year}`);
+  window._membership = data;
+  const onlyUnpaid = !!window._feeOnlyUnpaid;
+  const paidRows = data.players.filter(p => p.payment);
+  const total = paidRows.reduce((sum, p) => sum + p.payment.amount, 0);
+  const missing = data.players.filter(p => p.active && !p.payment).length;
+  const rows = onlyUnpaid ? data.players.filter(p => !p.payment) : data.players;
+  const method = { contanti: "Contanti", bonifico: "Bonifico", altro: "Altro" };
+  document.getElementById("fee-body").innerHTML = `
+    <form class="inline" id="fee-settings">
+      <label>Anno <select id="fee-year">${data.years.map(y => `<option ${y === data.year ? "selected" : ""}>${y}</option>`).join("")}</select></label>
+      <label>Quota annuale di default (€) <input id="fee-default" type="number" min="0" step="0.5" style="width:100px" value="${data.fee}"></label>
+      <button class="btn" type="submit">Salva quota</button>
+      <label style="flex-direction:row; align-items:center; gap:6px; align-self:center">
+        <input type="checkbox" id="fee-only-unpaid" ${onlyUnpaid ? "checked" : ""}> Solo chi deve pagare</label>
+    </form>
+    <p>✅ <strong>${paidRows.length}</strong> quote pagate (${fmtEuro(total)}) ·
+       ❌ <strong>${missing}</strong> giocatori attivi da pagare (${fmtEuro(missing * data.fee)} attesi)</p>
+    <table><thead><tr><th>Tessera</th><th>Giocatore</th><th>Stato ${data.year}</th><th>Importo</th><th>Data</th><th>Metodo</th><th>Note</th><th></th></tr></thead><tbody>
+    ${rows.map(p => `<tr>
+      <td>${esc(p.membership_number || "")}</td>
+      <td>${esc(p.display_name)}${p.active ? "" : ` <span class="muted">(disattivato)</span>`}</td>
+      <td>${p.payment ? `<span class="pill present">Pagata</span>` : `<span class="pill absent">Da pagare</span>`}</td>
+      <td>${p.payment ? fmtEuro(p.payment.amount) : ""}</td>
+      <td>${p.payment ? new Date(p.payment.paid_on + "T00:00:00").toLocaleDateString("it-IT") : ""}</td>
+      <td>${p.payment ? esc(method[p.payment.method] || p.payment.method || "") : ""}</td>
+      <td class="muted">${p.payment ? esc(p.payment.notes || "") : ""}</td>
+      <td style="white-space:nowrap">${p.payment
+        ? `<button class="btn small" onclick="openFeeModal(${p.player_id})">✏️ Modifica</button>
+           <button class="btn small danger" onclick="deleteFee(${p.payment.id})">Annulla</button>`
+        : `<button class="btn small primary" onclick="openFeeModal(${p.player_id})">💶 Registra pagamento</button>`}</td>
+    </tr>`).join("") || `<tr><td colspan="8" class="muted">Nessun giocatore.</td></tr>`}
+    </tbody></table>
+    <p class="muted">L'elenco comprende i giocatori attivi e chi ha pagato l'anno scelto anche se oggi è disattivato.
+       L'importo registrato resta quello versato anche se in futuro cambi la quota di default.</p>`;
+  document.getElementById("fee-year").onchange = (e) => renderMembership(parseInt(e.target.value, 10));
+  document.getElementById("fee-only-unpaid").onchange = (e) => { window._feeOnlyUnpaid = e.target.checked; renderMembership(year); };
+  document.getElementById("fee-settings").onsubmit = async (e) => {
+    e.preventDefault();
+    const value = parseFloat(document.getElementById("fee-default").value);
+    if (isNaN(value) || value < 0) { toast("Quota non valida", false); return; }
+    try {
+      await api("/config", { method: "POST", body: { OTS_MILSIM_ANNUAL_FEE: value } });
+      toast("Quota annuale salvata");
+      renderMembership(year);
+    } catch (err) { toast(err.message, false); }
+  };
+}
+function openFeeModal(playerId) {
+  const data = window._membership;
+  const p = data.players.find(x => x.player_id === playerId);
+  if (!p) return;
+  const form = document.getElementById("fee-form");
+  document.getElementById("fee-title").textContent = `💶 Quota ${data.year} — ${p.display_name}`;
+  const pad = n => String(n).padStart(2, "0");
+  const today = new Date();
+  form.amount.value = p.payment ? p.payment.amount : data.fee;
+  form.paid_on.value = p.payment ? p.payment.paid_on : `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+  form.method.value = p.payment && p.payment.method ? p.payment.method : "contanti";
+  form.notes.value = p.payment ? (p.payment.notes || "") : "";
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api("/membership", { method: "POST", body: {
+        player_id: playerId, year: data.year, amount: parseFloat(form.amount.value),
+        paid_on: form.paid_on.value, method: form.method.value, notes: form.notes.value.trim(),
+      } });
+      toast("Pagamento registrato");
+      closeFeeModal();
+      renderMembership(data.year);
+    } catch (err) { toast(err.message, false); }
+  };
+  document.getElementById("fee-backdrop").classList.remove("hidden");
+  form.amount.focus();
+}
+function closeFeeModal() { document.getElementById("fee-backdrop").classList.add("hidden"); }
+async function deleteFee(paymentId) {
+  if (!confirm("Annullare questo pagamento? Il giocatore tornerà «da pagare».")) return;
+  try {
+    await api(`/membership/${paymentId}`, { method: "DELETE" });
+    toast("Pagamento annullato");
+    renderMembership(window._feeYear);
+  } catch (err) { toast(err.message, false); }
 }
 
 /* ---------------- Campi da gioco (admin) ---------------- */
