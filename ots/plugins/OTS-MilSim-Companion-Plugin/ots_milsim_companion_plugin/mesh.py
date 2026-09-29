@@ -304,6 +304,37 @@ def detect(xml: str, sender_uid: str | None) -> dict | None:
     return descriptor
 
 
+def detect_chat_cot(xml: str) -> dict | None:
+    """Riconosce un GeoChat generato dal controller nativo di OTS per traffico
+    Meshtastic. Non ha i marcatori che usa `detect()`: niente <takv>/<contact
+    endpoint="MQTT">, perché meshtastic_controller.cot() li salta apposta per
+    TEXT_MESSAGE_APP (verificato sul sorgente). L'unico modo per riconoscerlo
+    è lo schema dell'uid (`GeoChat.<uid mittente>.<chatroom>.<msg id>`) e il
+    node id nel <link>.
+    """
+    try:
+        event = ET.fromstring(xml)
+    except BaseException:
+        return None
+    if event.tag != "event" or event.get("type") != "b-t-f":
+        return None
+    uid = event.get("uid") or ""
+    if not uid.startswith("GeoChat."):
+        return None
+    detail = event.find("detail")
+    if detail is None:
+        return None
+    link = detail.find("link")
+    from_uid = link.get("uid") if link is not None else None
+    if not from_uid:
+        return None
+    remarks = detail.find("remarks")
+    text = (remarks.text or "") if remarks is not None else ""
+    chat_el = detail.find("__chat")
+    callsign = chat_el.get("senderCallsign") if chat_el is not None else None
+    return {"from_uid": from_uid, "text": text, "callsign": callsign, "cot_uid": uid}
+
+
 def _float_or_none(value):
     try:
         return float(value)
@@ -1085,6 +1116,69 @@ def handle_cot(rabbit_channel, body: bytes) -> bool:
     return True
 
 
+def handle_chat_cot(rabbit_channel, body: bytes) -> bool:
+    """Instrada verso il gruppo TAK mappato un GeoChat Meshtastic nativo di OTS.
+
+    A differenza delle posizioni (vedi `handle_cot`), OTS non instrada mai da
+    solo la chat per canale: la pubblica solo verso il gruppo fisso
+    `OTS_MESHTASTIC_GROUP` (o da nessuna parte, se quel gruppo non esiste più
+    — è il caso di chi l'ha cancellato preferendo il routing per canale del
+    plugin). Usa la stessa mappatura canale→gruppo delle posizioni,
+    correlando il mittente al tag già noto nel registry: il canale non
+    viaggia nel CoT di chat, esattamente come in quello di posizione.
+    """
+    try:
+        message = json.loads(body)
+    except BaseException:
+        return False
+    cot_xml = message.get("cot")
+    # Stesso filtro a buon mercato di handle_cot ma sulla firma della chat:
+    # una GeoChat Meshtastic non contiene mai "__meshtastic"/"Meshtastic"
+    # (niente takv/contact per TEXT_MESSAGE_APP), quindi handle_cot la scarta
+    # comunque prima ancora del parse — questa è la sua unica strada.
+    if not cot_xml or "GeoChat." not in cot_xml:
+        return False
+
+    chat = detect_chat_cot(cot_xml)
+    if not chat:
+        return False
+
+    node_id = normalize_node_id(chat["from_uid"])
+    tag = REGISTRY.get(node_id) if node_id else None
+    if not tag:
+        # Mittente non è (ancora) un tag noto: niente da cui dedurre il canale
+        return False
+
+    mappings = _cached("mappings", load_mappings)
+    overrides = _cached("overrides", load_overrides)
+    channel = channel_for(tag, overrides)
+    mapping = match_mapping(channel, mappings) if (channel["name"] or channel["index"] is not None) else None
+    if not mapping:
+        # Come per le posizioni, nessuna mappatura esplicita → non si inventa
+        # un instradamento: resta solo quanto OTS fa da solo (o nulla, se il
+        # gruppo fisso non esiste più).
+        return False
+
+    group_name = _group_name(mapping.group_id)
+    if not group_name:
+        return False
+
+    label = chat.get("callsign") or tag.callsign or tag.long_name or tag.key
+    try:
+        publish_to_group(rabbit_channel, group_name, chat["cot_uid"], cot_xml)
+        REGISTRY.log(
+            "info", f"Chat di {label} instradata → {group_name}.OUT",
+            tag=tag.key, channel=channel.get("name"), group=group_name, source="chat",
+        )
+        return True
+    except BaseException as e:
+        REGISTRY.log(
+            "error", f"Pubblicazione chat di {label} su {group_name}.OUT fallita: {e}",
+            tag=tag.key, channel=channel.get("name"), group=group_name, source="chat",
+        )
+        return False
+
+
 # ----------------------------------------------------------------------
 # Consumer firehose
 # ----------------------------------------------------------------------
@@ -1181,13 +1275,22 @@ class FirehoseConsumer(_Consumer):
 
     def on_message(self, channel, method, properties, body):
         self.messages += 1
-        try:
-            with self.flask_app.app_context():
+        with self.flask_app.app_context():
+            # Chiamate indipendenti: un errore nell'una non deve impedire
+            # all'altra di girare, sono percorsi separati (posizione vs chat)
+            # sullo stesso identico CoT del firehose.
+            try:
                 handle_cot(channel, body)
-        except BaseException as e:
-            logger.error(f"MilSim mesh: errore nel trattare un CoT: {e}")
-            logger.debug(traceback.format_exc())
-            REGISTRY.log("error", f"errore nel trattare un CoT: {e}")
+            except BaseException as e:
+                logger.error(f"MilSim mesh: errore nel trattare un CoT (posizione): {e}")
+                logger.debug(traceback.format_exc())
+                REGISTRY.log("error", f"errore nel trattare un CoT (posizione): {e}")
+            try:
+                handle_chat_cot(channel, body)
+            except BaseException as e:
+                logger.error(f"MilSim mesh: errore nel trattare un CoT (chat): {e}")
+                logger.debug(traceback.format_exc())
+                REGISTRY.log("error", f"errore nel trattare un CoT (chat): {e}")
 
 
 class MqttObserver(_Consumer):
