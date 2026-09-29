@@ -713,6 +713,8 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.26.1** — tab Giocatori: il bottone «💶 Segna pagata» nella colonna della quota dell'anno
+  apre la stessa finestra della tab Quote (importo, data, metodo); «✅ Pagata» la riapre per correggere.
 - **3.26.0** — Presenze: la colonna «Dichiarazione» è un menu (Non configurato / Presente /
   Non presente / In dubbio) con cui l'admin registra la risposta di chi non usa l'app (WhatsApp,
   a voce). Rotta `POST /events/<id>/attendance/rsvp` (solo admin); la conferma sul campo e i

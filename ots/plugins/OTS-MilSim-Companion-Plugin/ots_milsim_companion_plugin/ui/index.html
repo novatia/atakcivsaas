@@ -1324,7 +1324,9 @@ async function renderPlayers() {
       <td>${esc(p.first_name)}</td>
       <td>${esc(p.last_name)}</td>
       <td>${esc(p.callsign || "")}</td>
-      <td>${p.membership_paid ? `<span class="pill present">pagata</span>` : `<span class="pill absent">da pagare</span>`}</td>
+      <td>${p.membership_paid
+        ? `<button class="btn small" onclick="playerFee(${p.id})" title="Vedi o correggi il pagamento">✅ Pagata</button>`
+        : `<button class="btn small primary" onclick="playerFee(${p.id})">💶 Segna pagata</button>`}</td>
       <td>${accountSelect(p)}</td>
       <td class="muted">${esc(p.notes || "")}</td>
       <td style="white-space:nowrap">
@@ -1484,7 +1486,14 @@ async function renderMembership(year) {
     } catch (err) { toast(err.message, false); }
   };
 }
-function openFeeModal(playerId) {
+// Dalla tab Giocatori: stessa finestra della tab Quote, sull'anno in corso
+async function playerFee(playerId) {
+  try {
+    window._membership = await api(`/membership?year=${new Date().getFullYear()}`);
+    openFeeModal(playerId, renderPlayers);
+  } catch (err) { toast(err.message, false); }
+}
+function openFeeModal(playerId, onDone) {
   const data = window._membership;
   const p = data.players.find(x => x.player_id === playerId);
   if (!p) return;
@@ -1505,7 +1514,7 @@ function openFeeModal(playerId) {
       } });
       toast("Pagamento registrato");
       closeFeeModal();
-      renderMembership(data.year);
+      onDone ? onDone() : renderMembership(data.year);
     } catch (err) { toast(err.message, false); }
   };
   document.getElementById("fee-backdrop").classList.remove("hidden");
