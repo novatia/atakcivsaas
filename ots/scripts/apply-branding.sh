@@ -4,6 +4,7 @@
 #
 # Sostituisce il logo OTS (assets/ots-logo-<hash>.png nella root nginx) con
 # ots/branding/logo.png e, se presenti in ots/branding/, anche le favicon.
+# Inietta inoltre auth-guard.js, che rimanda al login chi apre la UI senza sessione.
 #
 # Va rilanciato dopo ogni aggiornamento della UI (update-ots.sh --ui lo fa da solo).
 #
@@ -57,6 +58,29 @@ for name in "${FAVICONS[@]}"; do
         log "Favicon sostituita: ${name}"
     fi
 done
+
+# ------------------------- Guardia di login -------------------------
+# La UI upstream apre dashboard e pagine interne anche senza login: auth-guard.js
+# rimanda a /login chi non ha sessione (tranne /login, /reset, /404).
+# Il ?v=<hash> cambia a ogni versione dello script e scavalca la cache del browser.
+GUARD="${BRANDING_DIR}/auth-guard.js"
+INDEX="${UI_ROOT}/index.html"
+if [[ -f "${GUARD}" && -f "${INDEX}" ]]; then
+    cp "${GUARD}" "${UI_ROOT}/auth-guard.js"
+    GUARD_VER="$(sha256sum "${GUARD}" | cut -c1-12)"
+    GUARD_TAG="<script src=\"/auth-guard.js?v=${GUARD_VER}\"></script>"
+    # Toglie un'eventuale versione precedente e mette la nuova subito dopo <head>,
+    # prima del bundle della UI (script classico = eseguito prima dei module).
+    sed -i -E '/<script src="\/auth-guard\.js[^"]*"><\/script>/d' "${INDEX}"
+    sed -i "0,/<head>/s|<head>|<head>\n    ${GUARD_TAG}|" "${INDEX}"
+    if grep -qF "${GUARD_TAG}" "${INDEX}"; then
+        log "Guardia di login attiva (auth-guard.js ${GUARD_VER})"
+    else
+        warn "Guardia di login NON iniettata: index.html senza <head>? Controlla ${INDEX}"
+    fi
+elif [[ ! -f "${GUARD}" ]]; then
+    warn "auth-guard.js non trovato in ${BRANDING_DIR}: le pagine della UI restano apribili senza login."
+fi
 
 log "Fatto. Se nel browser vedi ancora il vecchio logo, forza il refresh (Ctrl+F5):"
 log "il nome file non cambia, quindi la cache puo' tenere la versione precedente."
