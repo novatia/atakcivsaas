@@ -1813,6 +1813,49 @@ class MilSimCompanionPlugin(Plugin):
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 400
 
+    # Dichiarazione di presenza inserita dall'admin per conto del giocatore
+    # (chi risponde su WhatsApp o a voce e non usa il link dell'evento)
+    @staticmethod
+    @blueprint.route("/events/<int:event_id>/attendance/rsvp", methods=["POST"])
+    @roles_accepted("administrator")
+    def admin_rsvp(event_id):
+        try:
+            data = request.json or {}
+            status = data.get("status")
+            player_id = data.get("player_id")
+            if status not in RSVP_STATUSES:
+                return (
+                    jsonify({"success": False, "error": f"status deve essere uno di {RSVP_STATUSES}"}),
+                    400,
+                )
+            if not player_id:
+                return jsonify({"success": False, "error": "player_id è obbligatorio"}), 400
+            if not db.session.get(CalendarEvent, event_id):
+                return jsonify({"success": False, "error": "Evento non trovato"}), 404
+            player = db.session.get(Player, int(player_id))
+            if not player:
+                return jsonify({"success": False, "error": "Giocatore non trovato"}), 404
+
+            attendance = (
+                db.session.query(EventAttendance)
+                .filter_by(event_id=event_id, player_id=player.id)
+                .first()
+            )
+            if not attendance:
+                attendance = EventAttendance(event_id=event_id, player_id=player.id)
+                db.session.add(attendance)
+            attendance.rsvp_status = status
+            db.session.commit()
+            logger.info(
+                f"MilSim: {current_user.username} set rsvp={status} "
+                f"for player {player.id} on event {event_id}"
+            )
+            return jsonify({"success": True, "attendance": attendance.serialize()})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 400
+
     # Segna tutta la squadra (giocatori attivi) come presente sull'evento
     @staticmethod
     @blueprint.route("/events/<int:event_id>/attendance/all", methods=["POST"])

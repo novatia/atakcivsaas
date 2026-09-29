@@ -713,6 +713,10 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.26.0** — Presenze: la colonna «Dichiarazione» è un menu (Non configurato / Presente /
+  Non presente / In dubbio) con cui l'admin registra la risposta di chi non usa l'app (WhatsApp,
+  a voce). Rotta `POST /events/<id>/attendance/rsvp` (solo admin); la conferma sul campo e i
+  punti restano separati.
 - **3.25.0** — **tessere, quote associative ed eventi a pagamento**. Giocatori: nuovo campo
   «numero di tessera» (univoco, anche nell'import CSV con la colonna `tessera`) e stato della quota
   dell'anno in corso. Nuova tab **Quote**: per ogni anno, chi ha pagato e chi no, importo, data e
