@@ -186,7 +186,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MO-TAK-002 · Rev 20 · 2026-10-07</span><span>Per operatori da smartphone</span></div>
+    <div class="doc-meta"><span>MO-TAK-002 · Rev 21 · 2026-10-07</span><span>Per operatori da smartphone</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Operatore<br>Tactical Scout Codogno</h1>
@@ -509,12 +509,32 @@
       <li>Premi <strong>RST</strong> e controlla dall'app Meshtastic che la versione sia <strong>2.7.10.94d4bdf</strong>.</li>
       <li>Configura il tag come gli altri: regione <strong>EU_868</strong> e stesso canale (QR del canale da un tag già in uso), con un nome diverso da tutti gli altri tag — è il nome con cui il tag compare su ATAK. Nel dubbio chiedi all'amministratore.</li>
     </ol>
-    <h3>Accensione e spegnimento</h3>
-    <p>Il T-Beam ha tre pulsanti: <strong>PWR</strong> (alimentazione), il <strong>pulsante utente</strong> (naviga il menu del display) e <strong>RST</strong> (riavvia soltanto — non spegne).</p>
+    <h3>I tre pulsanti</h3>
+    <p>Guardando la scheda con il display in alto, i tre pulsanti sul fianco sono, da sinistra a destra:</p>
+    <div class="tblwrap"><table>
+      <tr><th>Pulsante</th><th>Pressione breve</th><th>Pressione lunga</th></tr>
+      <tr><td><strong>PWR</strong> (sinistra)</td><td>chiude il menu aperto o spegne il display</td><td><strong>~6 s</strong>: spegne il tag</td></tr>
+      <tr><td><strong>Pulsante utente</strong> (centro)</td><td>schermata successiva; a menu aperto, voce successiva</td><td><strong>~½ s</strong>: apre il menu della schermata, e a menu aperto conferma la voce evidenziata<br><strong>4 s e poi rilasci</strong>: spegne il tag</td></tr>
+      <tr><td><strong>RST</strong> (destra)</td><td>riavvia soltanto — non spegne e non cancella la configurazione</td><td>—</td></tr>
+    </table></div>
     <ul>
       <li><strong>Accendere</strong>: pressione breve di <strong>PWR</strong> (o basta inserire la batteria/collegare l'USB).</li>
-      <li><strong>Spegnere</strong>: tieni premuto <strong>PWR</strong> per circa <strong>6 secondi</strong> finché il display si spegne. In alternativa, dall'app Meshtastic connessa via Bluetooth: menu del dispositivo → <strong>Spegni (Shutdown)</strong>.</li>
+      <li><strong>Spegnere</strong>: tieni premuto <strong>PWR</strong> per circa <strong>6 secondi</strong> finché il display si spegne; oppure tieni il <strong>pulsante utente</strong> per <strong>4 secondi</strong> e poi rilascia — quando lo spegnimento è armato il tag suona <strong>quattro note crescenti</strong>. Lo spegnimento col pulsante utente funziona solo dopo i primi <strong>30 secondi</strong> dall'accensione. In alternativa, dall'app Meshtastic connessa via Bluetooth: menu del dispositivo → <strong>Spegni (Shutdown)</strong>.</li>
     </ul>
+
+    <h3>Inviare la posizione subito e spegnere il GPS</h3>
+    <div class="warn"><span class="tag">Attenzione</span><p>In rete trovi ovunque le scorciatoie <strong>doppio click = invia posizione</strong> e <strong>triplo click = spegni il GPS</strong>. Sui nostri tag <strong>non funzionano</strong>: valevano fino al firmware 2.6, mentre dalla <strong>2.7</strong> (la nostra è la <strong>2.7.10.94d4bdf</strong>) quelle funzioni sono passate nel menu del display. Se premi due o tre volte non succede niente: non è un tag rotto.</p></div>
+    <p>Con il firmware che usiamo si fa così, tutto dal pulsante utente:</p>
+    <ol>
+      <li>tienilo premuto <strong>mezzo secondo</strong> per aprire il menu;</li>
+      <li>pressioni <strong>brevi</strong> per scorrere le voci;</li>
+      <li>di nuovo <strong>mezzo secondo</strong> per confermare quella evidenziata.</li>
+    </ol>
+    <ul>
+      <li><strong>Invio immediato della posizione</strong>: menu <strong>Home</strong> → <strong>Send Position</strong>. Serve in fase di prova, per non aspettare il ciclo automatico.</li>
+      <li><strong>Accendere/spegnere il GPS</strong>: menu <strong>Position</strong> → <strong>GPS Toggle</strong>.</li>
+    </ul>
+    <div class="note"><span class="tag">Nota</span><p>In partita non serve toccare niente: con il ruolo <strong>TAK_TRACKER</strong> il tag trasmette la posizione da solo all'intervallo configurato. I pulsanti servono ad accendere, spegnere e — durante le prove — a forzare un invio.</p></div>
     <div class="note"><span class="tag">Nota</span><p>Con il <strong>cavo USB collegato</strong> il tag resta alimentato e può riaccendersi da solo: per lo stoccaggio spegnilo col pulsante PWR <em>e</em> stacca il cavo. Un tag spento non fa da ripetitore per gli altri: se la squadra contava su di lui per la copertura, la mesh si accorcia.</p></div>
   </section>
 
@@ -571,7 +591,7 @@
   </section>
 
   <footer>
-    <span>MO-TAK-002 · Rev 20</span>
+    <span>MO-TAK-002 · Rev 21</span>
     <span>Compagno del Manuale Operatore TAK (MO-TAK-001)</span>
   </footer>
 </div>
