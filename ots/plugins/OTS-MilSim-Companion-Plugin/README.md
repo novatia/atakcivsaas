@@ -673,6 +673,8 @@ restano invariate per compatibilità con i config esistenti.
 | `GET /meshtastic/tags/<key>` | admin | Dettaglio tag: anagrafica, strade di ricezione, traccia di routing, pacchetti recenti |
 | `POST /meshtastic/tags/<key>` | admin | Dichiarazione manuale di canale/gruppo per quel tag |
 | `DELETE /meshtastic/tags/<key>` | admin | Dimentica il tag (elenco conosciuti + dichiarazioni manuali) |
+| `GET /meshtastic/assignable-tags` | admin | Tag conosciuti con canale effettivo, se il canale è mappato e a chi sono assegnati (tab Team) |
+| `POST /meshtastic/tag-owner` | admin | Assegna `{tag_key, user_id}` un tag a un utente OTS, `user_id: null` lo libera |
 | `GET/POST /meshtastic/mappings` · `PUT/DELETE /meshtastic/mappings/<id>` | admin | Mappature canale → gruppo TAK |
 | `POST /meshtastic/events/clear` | admin | Svuota la console eventi |
 | `GET /meshtastic/chat/channels` | admin | Canali della chat: sorgente PSK, topic, se si può scrivere, pacchetti decifrati/falliti |
@@ -713,6 +715,15 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.27.0** — tab Team: sotto ogni utente si può assegnare un **tag LoRa Meshtastic** fra quelli visti
+  sui canali mappati (tab Canali Meshtastic), e liberarlo con ✕. Il tag segue la squadra dell'utente come
+  un suo EUD ATAK: la posizione va ai gruppi IN dell'utente (stessa regola di `route_cot` di OTS), con
+  precedenza sulla mappatura del canale; vince solo il gruppo forzato a mano sul tag. Se l'utente non è in
+  nessun gruppo si torna alla mappatura del canale. Assegnazione in `msh_tags.owner_user_id` (migrazione
+  automatica) e copiata su `euds.user_id` della riga che OTS crea per il nodo dal feed MQTT: OTS la
+  azzera a ogni NODEINFO (`insert_or_update_eud` fa UPDATE con `user_id: None`), quindi il plugin la
+  riallinea al massimo ogni 30 s per tag. I nodi Meshtastic non vengono legati alle code dei gruppi né
+  ricevono marker/inviti di partita (non hanno coda).
 - **3.26.1** — tab Giocatori: il bottone «💶 Segna pagata» nella colonna della quota dell'anno
   apre la stessa finestra della tab Quote (importo, data, metodo); «✅ Pagata» la riapre per correggere.
 - **3.26.0** — Presenze: la colonna «Dichiarazione» è un menu (Non configurato / Presente /

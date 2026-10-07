@@ -1142,6 +1142,14 @@ class MilSimCompanionPlugin(Plugin):
                         db.session.commit()
                         logger.info("MilSim: msh_channel_map migrata (aggiunta colonna psk)")
 
+                # 3.27: tag Meshtastic assegnato a un utente (tab Team)
+                if inspector.has_table("msh_tags"):
+                    tag_columns = {c["name"] for c in inspector.get_columns("msh_tags")}
+                    if "owner_user_id" not in tag_columns:
+                        db.session.execute(text("ALTER TABLE msh_tags ADD COLUMN owner_user_id INTEGER"))
+                        db.session.commit()
+                        logger.info("MilSim: msh_tags migrata (aggiunta colonna owner_user_id)")
+
                 # 3.6 -> 3.7: flag "crea missione" sui template
                 if inspector.has_table("gm_templates"):
                     template_columns = {c["name"] for c in inspector.get_columns("gm_templates")}
@@ -3526,6 +3534,8 @@ class MilSimCompanionPlugin(Plugin):
                             "uid": eud.uid,
                             "callsign": eud.callsign,
                             "last_event_time": eud.last_event_time.isoformat() + "Z" if eud.last_event_time else None,
+                            # Nodo Meshtastic creato da OTS (tag assegnato), non un ATAK
+                            "meshtastic": mesh.is_mesh_eud(eud),
                         }
                     )
 
@@ -3614,7 +3624,11 @@ class MilSimCompanionPlugin(Plugin):
         from opentakserver.models.GroupUser import GroupUser
 
         group_names = {g.id: g.name for g in db.session.query(Group).all()}
-        eud_uids = [e.uid for e in db.session.query(EUD).filter_by(user_id=user.id).all()]
+        # I tag Meshtastic dell'utente non hanno una coda: si legano solo gli ATAK
+        eud_uids = [
+            e.uid for e in db.session.query(EUD).filter_by(user_id=user.id).all()
+            if not mesh.is_mesh_eud(e)
+        ]
         warnings, bound, unbound = [], 0, 0
 
         for group_id, direction in plan["clear"]:
@@ -4918,6 +4932,122 @@ class MilSimCompanionPlugin(Plugin):
             mesh.REGISTRY.forget(tag_key)
             mesh.invalidate_cache()
             return jsonify({"success": True})
+        except BaseException as e:
+            db.session.rollback()
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # Tag Meshtastic assegnati agli utenti (tab Team)
+    # ------------------------------------------------------------------
+    #
+    # È l'equivalente di «questo EUD ATAK è di quell'utente» per i tag LoRa:
+    # il tag segue la squadra dell'utente (gruppi IN, come route_cot di OTS)
+    # e la riga `euds` che OTS crea per il nodo viene collegata all'utente.
+
+    @staticmethod
+    @blueprint.route("/meshtastic/assignable-tags")
+    @roles_accepted("administrator")
+    def meshtastic_assignable_tags():
+        """Tag conosciuti con canale effettivo, canale mappato e proprietario.
+
+        `on_mapped_channel` = il canale del tag ha una mappatura nella tab
+        Canali Meshtastic: la tab Team propone quelli (più quelli già
+        assegnati, ovunque siano).
+        """
+        try:
+            th = mesh.thresholds()
+            overrides = mesh.load_overrides()
+            mappings = mesh.load_mappings()
+            usernames = {u.id: u.username for u in db.session.query(User).all()}
+
+            result = []
+            with mesh.REGISTRY._lock:
+                tags = list(mesh.REGISTRY.tags.values())
+            for tag in tags:
+                override = overrides.get(tag.key) or {}
+                channel = mesh.channel_for(tag, overrides)
+                mapping = (
+                    mesh.match_mapping(channel, mappings)
+                    if (channel["name"] or channel["index"] is not None) else None
+                )
+                owner_id = override.get("owner_user_id")
+                result.append({
+                    "key": tag.key,
+                    "node_id": tag.node_id,
+                    "uid": tag.uid,
+                    "callsign": tag.callsign,
+                    "long_name": tag.long_name,
+                    "short_name": tag.short_name,
+                    "status": tag.status(th["live"], th["recent"]),
+                    "last_seen": tag.last_seen.isoformat(),
+                    "channel_name": channel["name"],
+                    "channel_index": channel["index"],
+                    "on_mapped_channel": mapping is not None,
+                    "mapped_group_id": mapping.group_id if mapping else None,
+                    "owner_user_id": owner_id,
+                    "owner_username": usernames.get(owner_id) if owner_id else None,
+                })
+            result.sort(key=lambda t: ((t["channel_name"] or "~").lower(),
+                                       (t["callsign"] or t["long_name"] or t["key"]).lower()))
+            return jsonify(result)
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @blueprint.route("/meshtastic/tag-owner", methods=["POST"])
+    @roles_accepted("administrator")
+    def meshtastic_tag_owner():
+        """Assegna un tag a un utente OTS (`user_id`) o lo libera (`null`).
+
+        Rotta separata da /meshtastic/tags/<path:...>: il convertitore `path`
+        si mangerebbe un suffisso tipo `/owner`.
+        """
+        try:
+            body = request.json or {}
+            tag_key = (body.get("tag_key") or "").strip()
+            if not tag_key:
+                return jsonify({"success": False, "error": "tag_key obbligatorio"}), 400
+            user_id = body.get("user_id")
+            user = None
+            if user_id not in (None, "", 0, "0"):
+                user = db.session.get(User, int(user_id))
+                if not user:
+                    return jsonify({"success": False, "error": "Utente inesistente"}), 400
+
+            tag = mesh.REGISTRY.get(tag_key)
+            row = db.session.query(MeshTag).filter_by(tag_key=tag.key if tag else tag_key).first()
+            if not row:
+                if not tag:
+                    return jsonify({"success": False, "error": "Tag non trovato"}), 404
+                row = MeshTag(tag_key=tag.key, first_seen=tag.first_seen.replace(tzinfo=None))
+                row.node_id, row.cot_uid, row.callsign = tag.node_id, tag.uid, tag.callsign
+                row.long_name, row.short_name = tag.long_name, tag.short_name
+                db.session.add(row)
+            row.owner_user_id = user.id if user else None
+            db.session.commit()
+            mesh.invalidate_cache()
+
+            # Collega subito la riga `euds` del nodo, se OTS l'ha già creata;
+            # altrimenti la collega il primo pacchetto che arriva
+            eud = None
+            if tag:
+                eud = mesh.sync_owner_eud(tag, row.owner_user_id, force=True)
+            else:
+                eud = mesh.find_tag_eud(row.node_id, (row.cot_uid,))
+                if eud is not None and eud.user_id != row.owner_user_id:
+                    eud.user_id = row.owner_user_id
+                    db.session.commit()
+
+            label = row.callsign or row.long_name or row.tag_key
+            logger.info(f"MilSim: tag {label} " + (f"assegnato a {user.username}" if user else "liberato"))
+            return jsonify({
+                "success": True,
+                "tag": row.serialize(),
+                "username": user.username if user else None,
+                "eud_uid": eud.uid if eud is not None else None,
+            })
         except BaseException as e:
             db.session.rollback()
             logger.error(traceback.format_exc())

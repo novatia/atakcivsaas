@@ -168,6 +168,9 @@
   /* ---- Composizione squadre (tab Team) ---- */
   .team-add { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
   .team-add select { flex: 1; min-width: 140px; }
+  .team-tag { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+  .team-tag select { flex: 1; min-width: 0; font-size: 12px; padding: 2px 4px; }
+  .team-tag .btn.small { padding: 1px 7px; }
   .team-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; margin-bottom: 10px; cursor: pointer; }
   .team-toggle input { width: auto; }
   ul.team-rule { margin: 4px 0 10px; padding-left: 20px; color: var(--muted); font-size: 12.5px; }
@@ -482,7 +485,7 @@
 "use strict";
 const API = location.pathname.replace(/\/ui\/?$/, "");
 let ME = null, FIELDS = [], RANKS = [];
-let OTS_USERS = [], TEAMS_SHOW_ALL = false;
+let OTS_USERS = [], TEAMS_SHOW_ALL = false, MESH_TAGS = [];
 
 function xsrf() {
   const m = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
@@ -2582,7 +2585,11 @@ async function renderTeams() {
   el.innerHTML = "Caricamento gruppi ATAK…";
   let cfg = {};
   try {
-    [ATAK_GROUPS, cfg, OTS_USERS] = await Promise.all([api("/groups"), api("/config"), api("/ots-users")]);
+    // I tag Meshtastic sono un di più: se il monitor è spento la tab funziona lo stesso
+    [ATAK_GROUPS, cfg, OTS_USERS, MESH_TAGS] = await Promise.all([
+      api("/groups"), api("/config"), api("/ots-users"),
+      api("/meshtastic/assignable-tags").catch(() => []),
+    ]);
   } catch (e) {
     el.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
     return;
@@ -2617,6 +2624,26 @@ async function renderTeams() {
     return "";
   }
 
+  // Tag LoRa (Meshtastic) dei giocatori: quelli già assegnati all'utente e,
+  // da assegnare, i liberi visti sui canali mappati in «Canali Meshtastic»
+  const tagLabel = t => `${t.callsign || t.long_name || t.short_name || t.key}${t.node_id && t.node_id !== (t.callsign || t.long_name) ? " · " + t.node_id : ""}`;
+  const freeTags = MESH_TAGS.filter(t => !t.owner_user_id && t.on_mapped_channel);
+  const freeByChannel = {};
+  freeTags.forEach(t => (freeByChannel[t.channel_name || "?"] = freeByChannel[t.channel_name || "?"] || []).push(t));
+  const freeOptions = Object.entries(freeByChannel).map(([ch, list]) =>
+    `<optgroup label="📻 ${esc(ch)}">${list.map(t => `<option value="${esc(t.key)}">${esc(tagLabel(t))}${t.status === "stale" ? " (non visto di recente)" : ""}</option>`).join("")}</optgroup>`).join("");
+  function userTags(userId) {
+    const own = MESH_TAGS.filter(t => t.owner_user_id === userId);
+    const lines = own.map(t => `<div class="team-tag"><span class="muted" style="font-size:11.5px; flex:1; overflow-wrap:anywhere"
+        title="Tag LoRa assegnato: la sua posizione va ai gruppi di questo utente">📡 ${esc(tagLabel(t))}${t.channel_name ? " · " + esc(t.channel_name) : ""}</span>
+      <button class="btn small" title="Libera il tag" data-key="${esc(t.key)}" onclick="setTagOwner(this.dataset.key, null, this)">✕</button></div>`).join("");
+    const picker = freeTags.length ? `<div class="team-tag">
+        <select><option value="">📡 assegna tag LoRa…</option>${freeOptions}</select>
+        <button class="btn small" title="Assegna il tag scelto a questo utente"
+          onclick="setTagOwner(this.previousElementSibling.value, ${userId}, this)">＋</button></div>` : "";
+    return lines + picker;
+  }
+
   const cards = shown.map(g => {
     const kind = kindOf(g);
     const inGroup = new Set((g.users || []).map(u => u.user_id));
@@ -2640,9 +2667,10 @@ async function renderTeams() {
         ${g.users.map(u => `<tr>
           <td style="overflow-wrap:anywhere">
             <strong>${esc(u.username || "?")}</strong> ${roleBadge(kind, u.directions)}<br>
-            ${u.euds.length
-              ? u.euds.map(e => `<span class="muted" style="font-size:11.5px">📱 ${esc(e.callsign || "?")} · ${esc(e.uid)}</span>`).join("<br>")
+            ${u.euds.filter(e => !e.meshtastic).length
+              ? u.euds.filter(e => !e.meshtastic).map(e => `<span class="muted" style="font-size:11.5px">📱 ${esc(e.callsign || "?")} · ${esc(e.uid)}</span>`).join("<br>")
               : `<span class="muted" style="font-size:11.5px">nessun EUD registrato per l'utente</span>`}
+            ${userTags(u.user_id)}
           </td>
           <td class="muted" style="text-align:right; font-size:12px">${u.euds.length ? fmtDT(u.euds[0].last_event_time) : ""}</td>
           <td style="text-align:right"><button class="btn danger small"
@@ -2682,6 +2710,10 @@ async function renderTeams() {
     <p class="muted">⚠️ In OpenTAKServer l'appartenenza è <b>per utente</b>, non per dispositivo: entrano in squadra
       <b>tutti gli EUD</b> di quell'utente. Per avere due dispositivi della stessa persona in squadre diverse servono
       due account OTS distinti.</p>
+    <p class="muted">📡 <b>Tag LoRa</b>: sotto ogni utente puoi assegnargli un tag Meshtastic tra quelli visti sui
+      canali mappati (tab <b>Canali Meshtastic</b>). Il tag segue la squadra dell'utente come un suo EUD ATAK — la
+      posizione va ai suoi gruppi, non a quello del canale — e in OpenTAKServer il nodo risulta suo.
+      ${MESH_TAGS.length && !freeTags.length && !MESH_TAGS.some(t => t.owner_user_id) ? "<br>⚠️ Nessun tag libero sui canali mappati: controlla la mappatura canali." : ""}</p>
     <label class="team-toggle"><input type="checkbox" ${TEAMS_SHOW_ALL ? "checked" : ""}
       onchange="TEAMS_SHOW_ALL = this.checked; renderTeams()"> Mostra tutti i gruppi del server</label>
     ${shown.length ? `<div class="mode-grid">${cards}</div>`
@@ -2733,6 +2765,24 @@ async function addGroupMember(groupId, btn) {
       toast(`${res.username}: ${res.description} — ${res.warnings.length} EUD su ${res.euds} non erano collegati, riceveranno al prossimo avvio di ATAK.`);
     } else {
       toast(`${res.username}: ${res.description}`);
+    }
+    renderTeams();
+  } catch (e) { toast(e.message, false); btn.disabled = false; }
+}
+
+async function setTagOwner(tagKey, userId, btn) {
+  if (!tagKey) return toast("Scegli prima un tag dalla lista.", false);
+  const tag = MESH_TAGS.find(t => t.key === tagKey) || {};
+  const label = tag.callsign || tag.long_name || tagKey;
+  if (!userId && !confirm(`Liberare il tag ${label}? Torna a seguire la mappatura del suo canale.`)) return;
+  btn.disabled = true;
+  try {
+    const res = await api("/meshtastic/tag-owner", { method: "POST", body: { tag_key: tagKey, user_id: userId } });
+    if (userId) {
+      toast(`📡 ${label} assegnato a ${res.username}` + (res.eud_uid ? "" :
+        " — il nodo non è ancora fra gli EUD di OTS: verrà collegato al primo pacchetto via MQTT."));
+    } else {
+      toast(`📡 ${label} liberato`);
     }
     renderTeams();
   } catch (e) { toast(e.message, false); btn.disabled = false; }

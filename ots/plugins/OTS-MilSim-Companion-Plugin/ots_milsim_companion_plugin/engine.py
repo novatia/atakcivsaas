@@ -134,7 +134,9 @@ def resolve_targets(match: GameMatch) -> dict | None:
         if not user_ids:
             return set()
         rows = db.session.query(EUD).filter(EUD.user_id.in_(user_ids)).all()
-        return {row.uid for row in rows}
+        # I tag Meshtastic assegnati agli utenti hanno una riga in euds ma
+        # nessuna coda dms: mandargli marker e inviti non serve
+        return {row.uid for row in rows if (row.platform or "") != "Meshtastic"}
 
     team_a = members(match.team_a_id)
     team_b = members(match.team_b_id)

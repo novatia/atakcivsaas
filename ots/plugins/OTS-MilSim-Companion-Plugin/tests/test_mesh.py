@@ -707,3 +707,72 @@ def test_forget_rimuove_tag_e_alias(env):
     mesh.REGISTRY.forget("!bbad0ac8")
     assert mesh.REGISTRY.tags == {}
     assert mesh.REGISTRY.aliases == {}
+
+
+# ----------------------------------------------------------------------
+# Tag assegnato a un utente (tab Team): segue la squadra del giocatore
+# ----------------------------------------------------------------------
+
+def test_tag_assegnato_segue_i_gruppi_dell_utente(env):
+    # Il canale direbbe ALPHA, ma il tag è di un giocatore di BRAVO
+    env["mappings"] = [Mapping(group_id=1, channel_name="ALPHA")]
+    env["overrides"] = {"ALPHA-1": {"manual_channel_name": "ALPHA", "owner_user_id": 7}}
+    env["user_groups"] = {7: [2, 3]}  # BRAVO + osservatori (IN)
+    channel = FakeChannel()
+    mesh.handle_cot(channel, firehose(relay_cot(), "ANDROID-abc"))
+
+    trace = mesh.REGISTRY.tags["ALPHA-1"].last_routing
+    assert trace["result"] == mesh.RESULT_ROUTED
+    assert trace["owner"] == "user7"
+    assert trace["group_names"] == ["BRAVO", "LOGISTICS"]
+    assert [p["routing_key"] for p in channel.published] == ["BRAVO.OUT", "LOGISTICS.OUT"]
+
+
+def test_tag_assegnato_non_duplica_i_gruppi_gia_serviti_da_ots(env):
+    # Il telefono che rilancia è dello stesso giocatore: OTS consegna già a BRAVO
+    env["overrides"] = {"ALPHA-1": {"owner_user_id": 7}}
+    env["user_groups"] = {7: [2, 3]}
+    env["eud_groups"] = {"ANDROID-abc": [2]}
+    channel = FakeChannel()
+    mesh.handle_cot(channel, firehose(relay_cot(), "ANDROID-abc"))
+    assert [p["routing_key"] for p in channel.published] == ["LOGISTICS.OUT"]
+
+
+def test_tag_di_utente_senza_gruppi_torna_alla_mappatura_canale(env):
+    env["mappings"] = [Mapping(group_id=1, channel_name="ALPHA")]
+    env["overrides"] = {"ALPHA-1": {"manual_channel_name": "ALPHA", "owner_user_id": 7}}
+    channel = FakeChannel()
+    mesh.handle_cot(channel, firehose(relay_cot(), "ANDROID-abc"))
+
+    trace = mesh.REGISTRY.tags["ALPHA-1"].last_routing
+    assert channel.published[0]["routing_key"] == "ALPHA.OUT"
+    assert "non è in nessun gruppo" in trace["reason"]
+
+
+def test_gruppo_forzato_vince_sul_proprietario(env):
+    env["overrides"] = {"ALPHA-1": {"manual_group_id": 3, "owner_user_id": 7}}
+    env["user_groups"] = {7: [2]}
+    channel = FakeChannel()
+    mesh.handle_cot(channel, firehose(relay_cot(), "ANDROID-abc"))
+    assert [p["routing_key"] for p in channel.published] == ["LOGISTICS.OUT"]
+
+
+def test_tag_nativo_assegnato_riallinea_l_eud_di_ots(env):
+    # OTS azzera euds.user_id a ogni NODEINFO: il plugin lo rimette
+    env["overrides"] = {"!bbad0ac8": {"owner_user_id": 7}}
+    env["user_groups"] = {7: [2]}
+    channel = FakeChannel()
+    mesh.handle_cot(channel, firehose(native_cot(), None))
+
+    assert env["owner_syncs"] == [("!bbad0ac8", 7, "bbad0ac8")]
+    # Il nativo va solo al gruppo fisso Meshtastic: la squadra la aggiunge il plugin
+    assert [p["routing_key"] for p in channel.published] == ["BRAVO.OUT"]
+
+
+def test_publish_targets_esclude_i_gruppi_nativi():
+    trace = {"result": mesh.RESULT_ROUTED, "group_name": "A, B", "group_names": ["A", "B"],
+             "native_groups": ["B"]}
+    assert mesh.publish_targets(trace) == ["A"]
+    assert mesh.should_publish(trace)
+    trace["native_groups"] = ["A", "B"]
+    assert not mesh.should_publish(trace)

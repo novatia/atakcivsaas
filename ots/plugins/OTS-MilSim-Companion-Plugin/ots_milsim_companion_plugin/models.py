@@ -568,6 +568,10 @@ class MeshTag(db.Model):
     # Override ancora più diretto: gruppo forzato, salta la mappatura canali
     manual_group_id = db.Column(Integer, nullable=True)
     notes = db.Column(Text, nullable=True)
+    # Utente OTS a cui il tag è assegnato (tab Team): il tag segue la sua
+    # squadra come un EUD ATAK. Fonte di verità qui e non in euds.user_id,
+    # perché il meshtastic_controller di OTS lo riazzera a ogni NODEINFO.
+    owner_user_id = db.Column(Integer, nullable=True)
 
     def serialize(self):
         return {
@@ -583,6 +587,7 @@ class MeshTag(db.Model):
             "manual_channel_index": self.manual_channel_index,
             "manual_group_id": self.manual_group_id,
             "notes": self.notes,
+            "owner_user_id": self.owner_user_id,
         }
 
 

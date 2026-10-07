@@ -740,15 +740,24 @@ def eud_groups(eud_uid: str | None) -> list:
     if not eud_uid:
         return []
     from opentakserver.models.EUD import EUD
-    from opentakserver.models.Group import Group
-    from opentakserver.models.GroupUser import GroupUser
 
     eud = db.session.query(EUD).filter_by(uid=eud_uid).first()
     if not eud or not eud.user_id:
         return []
+    return user_groups(eud.user_id)
+
+
+def user_groups(user_id: int | None) -> list:
+    """Gruppi IN dell'utente: dove `route_cot()` di OTS smista i CoT che
+    pubblica. Per un tag assegnato all'utente valgono gli stessi."""
+    if not user_id:
+        return []
+    from opentakserver.models.Group import Group
+    from opentakserver.models.GroupUser import GroupUser
+
     memberships = (
         db.session.query(GroupUser)
-        .filter_by(user_id=eud.user_id, direction=Group.IN, enabled=True)
+        .filter_by(user_id=int(user_id), direction=Group.IN, enabled=True)
         .all()
     )
     return [
@@ -756,6 +765,96 @@ def eud_groups(eud_uid: str | None) -> list:
         for m in memberships
         if m.group is not None
     ]
+
+
+def _username(user_id: int | None) -> str | None:
+    if not user_id:
+        return None
+    from opentakserver.models.user import User
+
+    user = db.session.get(User, int(user_id))
+    return user.username if user else None
+
+
+# ----------------------------------------------------------------------
+# Tag assegnato a un utente: la riga `euds` che OTS crea per il nodo
+# ----------------------------------------------------------------------
+#
+# Col feed MQTT (gateway Raspberry) il meshtastic_controller di OTS crea una
+# riga in `euds` per ogni nodo, con `meshtastic_id` = node id numerico. Il
+# collegamento all'utente è lo stesso degli EUD ATAK (`euds.user_id`), ma OTS
+# lo AZZERA a ogni NODEINFO: `insert_or_update_eud()` fa un UPDATE con
+# `EUD.serialize()`, che contiene `user_id: None` (meshtastic_controller.py
+# 313-344 in OTS 1.7.13). Per questo l'assegnazione vive in
+# `msh_tags.owner_user_id` e qui la si riapplica alla riga `euds`.
+
+MESH_PLATFORM = "Meshtastic"
+
+
+def is_mesh_eud(eud) -> bool:
+    """La riga `euds` è un nodo Meshtastic creato da OTS, non un ATAK."""
+    return (getattr(eud, "platform", None) or "") == MESH_PLATFORM
+
+
+def find_tag_eud(node_id: str | None, uids=()):
+    """Riga `euds` del tag: per node id (`meshtastic_id`, il collegamento che
+    usa OTS stesso), altrimenti per uid del CoT. None se OTS non l'ha creata
+    (tag visto solo via relay ATAK, o Meshtastic di OTS spento). Solo righe
+    Meshtastic: l'utente di un EUD ATAK vero lo gestisce OTS, mai il plugin."""
+    from opentakserver.models.EUD import EUD
+
+    canonical = normalize_node_id(node_id) if node_id else None
+    if canonical:
+        eud = (
+            db.session.query(EUD)
+            .filter_by(meshtastic_id=int(canonical[1:], 16), platform=MESH_PLATFORM)
+            .first()
+        )
+        if eud:
+            return eud
+    candidates = [u for u in uids if u]
+    if canonical:
+        candidates += [canonical, canonical[1:]]
+    for uid in dict.fromkeys(candidates):
+        eud = db.session.query(EUD).filter_by(uid=uid, platform=MESH_PLATFORM).first()
+        if eud:
+            return eud
+    return None
+
+
+OWNER_SYNC_INTERVAL = 30.0
+_owner_sync_due: dict = {}
+
+
+def sync_owner_eud(tag, owner_user_id: int | None, cot_uid: str | None = None, force: bool = False):
+    """Allinea `euds.user_id` del nodo al proprietario del tag.
+
+    Al massimo una volta ogni 30 s per tag (salvo `force`): con 100 tag sono
+    ~3 query/s, e un ritardo costa solo qualche secondo in cui la web UI di
+    OTS mostra il nodo senza utente — l'instradamento del plugin non ne
+    dipende. Con `owner_user_id` None stacca il nodo dall'utente.
+    Ritorna la riga `euds` trovata, o None.
+    """
+    now = time.time()
+    if not force and now < _owner_sync_due.get(tag.key, 0.0):
+        return None
+    _owner_sync_due[tag.key] = now + OWNER_SYNC_INTERVAL
+    try:
+        eud = find_tag_eud(tag.node_id, (cot_uid, tag.uid))
+        if eud is None:
+            return None
+        wanted = int(owner_user_id) if owner_user_id else None
+        if eud.user_id != wanted:
+            eud.user_id = wanted
+            db.session.commit()
+            if wanted and not force:
+                REGISTRY.log("info", f"nodo {eud.uid} ricollegato a {_username(wanted)} "
+                                     f"(OTS l'aveva azzerato)", tag=tag.key)
+        return eud
+    except BaseException:
+        db.session.rollback()
+        logger.debug(f"MilSim mesh: allineamento proprietario {tag.key} fallito\n{traceback.format_exc()}")
+        return None
 
 
 def native_groups(descriptor: dict, source_groups: list) -> list:
@@ -846,6 +945,10 @@ def decide_route(tag: Tag, descriptor: dict, mappings: list, overrides: dict | N
         "fallback": None,
         "group_id": None,
         "group_name": None,
+        # Più di un gruppo solo quando il tag segue un utente (come route_cot)
+        "group_names": None,
+        "owner_user_id": manual.get("owner_user_id"),
+        "owner": None,
         "result": RESULT_OBSERVED,
         "reason": "",
     }
@@ -863,6 +966,25 @@ def decide_route(tag: Tag, descriptor: dict, mappings: list, overrides: dict | N
         )
         return trace
 
+    # Tag assegnato a un giocatore: segue la sua squadra, cioè i gruppi IN
+    # dell'utente — esattamente dove OTS smista i CoT del suo ATAK
+    owner_id = manual.get("owner_user_id")
+    owner_note = ""
+    if owner_id:
+        owner_groups = _cached(f"user:{owner_id}", lambda: user_groups(owner_id))
+        owner_name = _cached(f"username:{owner_id}", lambda: _username(owner_id))
+        trace["owner"] = owner_name or f"utente {owner_id}"
+        if owner_groups:
+            names = [g["name"] for g in owner_groups]
+            trace["mapping"] = f"assegnato a {trace['owner']}"
+            trace["group_id"] = owner_groups[0]["id"]
+            trace["group_names"] = names
+            trace["group_name"] = ", ".join(names)
+            trace["result"] = RESULT_ROUTED
+            trace["reason"] = f"Tag di {trace['owner']} → {trace['group_name']}"
+            return trace
+        owner_note = f" (assegnato a {trace['owner']}, che non è in nessun gruppo)"
+
     mapping = match_mapping(channel, mappings) if (channel["name"] or channel["index"] is not None) else None
     if mapping:
         name = _group_name(mapping.group_id)
@@ -873,7 +995,7 @@ def decide_route(tag: Tag, descriptor: dict, mappings: list, overrides: dict | N
         trace["reason"] = (
             f"Canale {channel['name'] or channel['index']} mappato su {name}" if name
             else f"Mappatura verso un gruppo (id {mapping.group_id}) che non esiste più"
-        )
+        ) + owner_note
         return trace
 
     # Canale sconosciuto o senza mappatura → politica di fallback
@@ -883,6 +1005,7 @@ def decide_route(tag: Tag, descriptor: dict, mappings: list, overrides: dict | N
         trace["reason"] = f"Canale {channel['name'] or channel['index']} senza mappatura → fallback {policy}"
     else:
         trace["reason"] = f"Canale non determinabile → fallback {policy}"
+    trace["reason"] += owner_note
 
     if policy == "ignore":
         trace["result"] = RESULT_IGNORED
@@ -934,8 +1057,8 @@ def publish_to_group(channel, group_name: str, uid: str, cot_xml: str) -> None:
     )
 
 
-def should_publish(trace: dict) -> bool:
-    """Si pubblica solo se aggiunge una consegna che OTS non ha già fatto.
+def publish_targets(trace: dict) -> list:
+    """Gruppi a cui consegnare: solo quelli che OTS non ha già servito.
 
     OTS instrada il CoT rilanciato ai gruppi dell'EUD sorgente: se il gruppo
     mappato è già lì dentro, ripubblicare significherebbe consegnare due volte
@@ -943,10 +1066,14 @@ def should_publish(trace: dict) -> bool:
     limitazione nel documento di analisi.)
     """
     if trace["result"] not in (RESULT_ROUTED, RESULT_ROUTED_FALLBACK):
-        return False
-    if not trace.get("group_name"):
-        return False
-    return trace["group_name"] not in (trace.get("native_groups") or [])
+        return []
+    names = trace.get("group_names") or ([trace["group_name"]] if trace.get("group_name") else [])
+    native = trace.get("native_groups") or []
+    return [name for name in names if name and name not in native]
+
+
+def should_publish(trace: dict) -> bool:
+    return bool(publish_targets(trace))
 
 
 # ----------------------------------------------------------------------
@@ -968,6 +1095,7 @@ def load_overrides() -> dict:
             "manual_channel_index": row.manual_channel_index,
             "manual_group_id": row.manual_group_id,
             "notes": row.notes,
+            "owner_user_id": row.owner_user_id,
         }
     return result
 
@@ -1056,15 +1184,21 @@ def handle_cot(rabbit_channel, body: bytes) -> bool:
     trace = decide_route(tag, descriptor, mappings, overrides)
     tag.last_routing = trace
 
+    # OTS azzera euds.user_id a ogni NODEINFO del nodo: lo si rimette
+    owner_id = (overrides.get(tag.key) or {}).get("owner_user_id")
+    if owner_id and descriptor.get("source") == SOURCE_OTS_MESHTASTIC:
+        sync_owner_eud(tag, owner_id, descriptor.get("uid"))
+
     delivered = False
-    if fresh and should_publish(trace):
+    targets = publish_targets(trace) if fresh else []
+    for group_name in targets:
         try:
-            publish_to_group(rabbit_channel, trace["group_name"], descriptor["uid"], cot_xml)
+            publish_to_group(rabbit_channel, group_name, descriptor["uid"], cot_xml)
             delivered = True
             tag.last_error = None
         except BaseException as e:
             trace["result"] = RESULT_ERROR
-            trace["reason"] = f"Pubblicazione su {trace['group_name']}.OUT fallita: {e}"
+            trace["reason"] = f"Pubblicazione su {group_name}.OUT fallita: {e}"
             tag.last_error = str(e)
             logger.error(f"MilSim mesh: publish fallito per {tag.key}: {e}")
 
@@ -1103,7 +1237,7 @@ def handle_cot(rabbit_channel, body: bytes) -> bool:
             source=descriptor["source"], result=trace["result"],
         )
         if delivered:
-            REGISTRY.log("info", f"CoT instradato → {trace['group_name']}.OUT", tag=tag.key,
+            REGISTRY.log("info", f"CoT instradato → {', '.join(t + '.OUT' for t in targets)}", tag=tag.key,
                          channel=channel_text, group=trace["group_name"], source=descriptor["source"],
                          result=trace["result"])
 

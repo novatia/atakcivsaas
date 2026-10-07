@@ -193,5 +193,19 @@ def env(monkeypatch):
             {"id": gid, "name": state["groups"][gid]} for gid in state["eud_groups"].get(uid, [])
         ],
     )
+    # Gruppi IN degli utenti a cui sono assegnati i tag (tab Team)
+    state["user_groups"] = {}
+    state["owner_syncs"] = []
+    monkeypatch.setattr(
+        mesh, "user_groups",
+        lambda uid: [
+            {"id": gid, "name": state["groups"][gid]} for gid in state["user_groups"].get(uid, [])
+        ],
+    )
+    monkeypatch.setattr(mesh, "_username", lambda uid: f"user{uid}" if uid else None)
+    monkeypatch.setattr(
+        mesh, "sync_owner_eud",
+        lambda tag, owner, cot_uid=None, force=False: state["owner_syncs"].append((tag.key, owner, cot_uid)),
+    )
     monkeypatch.setattr(mesh, "_cfg", lambda key, default=None: state["config"].get(key, default))
     return state
