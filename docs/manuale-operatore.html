@@ -186,7 +186,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MO-TAK-002 · Rev 19 · 2026-09-24</span><span>Per operatori da smartphone</span></div>
+    <div class="doc-meta"><span>MO-TAK-002 · Rev 20 · 2026-10-07</span><span>Per operatori da smartphone</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Operatore<br>Tactical Scout Codogno</h1>
@@ -270,7 +270,7 @@
       <tr><td>ATAK-CIV</td><td><strong>5.6.0.12</strong></td><td>Play Store</td></tr>
       <tr><td>ATAK Plugin: Meshtastic</td><td>abbinata ad ATAK</td><td>Play Store (si aggiornano insieme)</td></tr>
       <tr><td>App Meshtastic (Android)</td><td><strong>2.7.13</strong> — bloccata</td><td>APK da GitHub (riquadro sopra)</td></tr>
-      <tr><td>Firmware radio/tag Meshtastic</td><td><strong>2.7.10.94d4bdf</strong></td><td>web flasher ufficiale (flasher.meshtastic.org)</td></tr>
+      <tr><td>Firmware radio/tag Meshtastic</td><td><strong>2.7.10.94d4bdf</strong></td><td><a href="https://github.com/meshtastic/firmware/releases/download/v2.7.10.94d4bdf/firmware-esp32-2.7.10.94d4bdf.zip">firmware-esp32-2.7.10.94d4bdf.zip</a> da GitHub — v. sez. 11 «Programmare un tag nuovo»</td></tr>
     </table></div></div>
   </section>
 
@@ -494,11 +494,21 @@
       <tr><td>GPS</td><td>modulo u-blox <strong>integrato</strong> con antenna ceramica: i tag funzionano da tracker autonomi</td></tr>
       <tr><td>Display</td><td>OLED 0,96&Prime; saldato (pulsante utente: pressione breve = naviga, lunga = seleziona)</td></tr>
       <tr><td>Batteria</td><td>cella <strong>18650</strong> nel portabatteria a bordo, ricarica via USB</td></tr>
-      <tr><td>Firmware</td><td>Meshtastic — versione validata nella tabella della sez. 4</td></tr>
+      <tr><td>Firmware</td><td>Meshtastic <strong>2.7.10.94d4bdf</strong> — <a href="https://github.com/meshtastic/firmware/releases/download/v2.7.10.94d4bdf/firmware-esp32-2.7.10.94d4bdf.zip">firmware-esp32-2.7.10.94d4bdf.zip</a></td></tr>
       <tr><td>Case</td><td>stampato in 3D — modello <a href="https://www.printables.com/model/127253-t-beam-v1x-case-for-meshtastic">«T-Beam V1.x case for Meshtastic» su Printables</a></td></tr>
     </table></div>
     <div class="warn"><span class="tag">Attenzione</span><p><strong>Mai accendere la scheda senza l'antenna LoRa collegata</strong>: trasmettere senza antenna può danneggiare in modo permanente il modulo radio. Alla stessa maniera, se apri il case controlla che i connettori delle antenne (LoRa e GPS) siano ben agganciati — il connettore u.FL del GPS si stacca facilmente, e senza antenna il tag non prende mai il fix.</p></div>
     <div class="note"><span class="tag">Nota</span><p>Il primo fix GPS di un modulo nuovo (o rimasto spento a lungo) può richiedere <strong>15–30 minuti</strong> all'aperto con cielo libero. I fix successivi arrivano in secondi. Un tag senza fix compare nella mesh ma <strong>non genera nessun marker su ATAK</strong>.</p></div>
+    <h3>Programmare un tag nuovo</h3>
+    <p>Un tag nuovo va portato allo <strong>stesso firmware degli altri</strong>: <strong>2.7.10.94d4bdf</strong> (tabella della sez. 4), non la versione più recente.</p>
+    <ol>
+      <li>Scarica lo zip del firmware per ESP32 dalla release ufficiale su GitHub: <a href="https://github.com/meshtastic/firmware/releases/download/v2.7.10.94d4bdf/firmware-esp32-2.7.10.94d4bdf.zip">firmware-esp32-2.7.10.94d4bdf.zip</a> — pagina release: <a href="https://github.com/meshtastic/firmware/releases/tag/v2.7.10.94d4bdf">github.com/meshtastic/firmware → v2.7.10.94d4bdf</a>. Su GitHub la release è marcata <em>Alpha</em>: per questo il web flasher (<a href="https://flasher.meshtastic.org">flasher.meshtastic.org</a>) non la mostra, se non si attiva la visualizzazione delle versioni alpha/prerelease.</li>
+      <li>Estrai lo zip. I file del T-Beam sono <code>firmware-tbeam-2.7.10.94d4bdf.bin</code> (installazione completa), <code>firmware-tbeam-2.7.10.94d4bdf-update.bin</code> (solo aggiornamento) e <code>littlefs-tbeam-2.7.10.94d4bdf.bin</code>; nello zip ci sono anche gli script <code>device-install.bat</code> / <code>device-install.sh</code>.</li>
+      <li>Avvita l'antenna LoRa, poi collega il T-Beam al PC con un cavo USB <strong>dati</strong>. Se Windows non crea una porta COM installa il driver <strong>WCH CH9102</strong> (il chip USB della scheda) e cerca la porta in Gestione dispositivi.</li>
+      <li>Dalla cartella estratta, con Python ed <code>esptool</code> installati (<code>pip install esptool</code>), lancia lo script, che cancella la memoria e scrive firmware e filesystem: <code>device-install.bat -f firmware-tbeam-2.7.10.94d4bdf.bin -p COM5</code> (al posto di COM5 la porta del tag). In alternativa, dal web flasher, carica lo stesso <code>.bin</code> come file personalizzato con <strong>Full Erase</strong> attivo.</li>
+      <li>Premi <strong>RST</strong> e controlla dall'app Meshtastic che la versione sia <strong>2.7.10.94d4bdf</strong>.</li>
+      <li>Configura il tag come gli altri: regione <strong>EU_868</strong> e stesso canale (QR del canale da un tag già in uso), con un nome diverso da tutti gli altri tag — è il nome con cui il tag compare su ATAK. Nel dubbio chiedi all'amministratore.</li>
+    </ol>
     <h3>Accensione e spegnimento</h3>
     <p>Il T-Beam ha tre pulsanti: <strong>PWR</strong> (alimentazione), il <strong>pulsante utente</strong> (naviga il menu del display) e <strong>RST</strong> (riavvia soltanto — non spegne).</p>
     <ul>
@@ -561,7 +571,7 @@
   </section>
 
   <footer>
-    <span>MO-TAK-002 · Rev 19</span>
+    <span>MO-TAK-002 · Rev 20</span>
     <span>Compagno del Manuale Operatore TAK (MO-TAK-001)</span>
   </footer>
 </div>
