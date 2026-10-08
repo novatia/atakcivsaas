@@ -715,6 +715,9 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.27.1** — tab Team: il menu «📡 assegna tag LoRa» è sempre visibile e propone tutti i tag liberi
+  (prima quelli dei canali mappati, poi gli altri). Nella 3.27.0 spariva dopo ogni riavvio di OTS: il canale
+  di un tag si impara dal feed MQTT e finché il tag non ritrasmette non risultava su un canale mappato.
 - **3.27.0** — tab Team: sotto ogni utente si può assegnare un **tag LoRa Meshtastic** fra quelli visti
   sui canali mappati (tab Canali Meshtastic), e liberarlo con ✕. Il tag segue la squadra dell'utente come
   un suo EUD ATAK: la posizione va ai gruppi IN dell'utente (stessa regola di `route_cot` di OTS), con

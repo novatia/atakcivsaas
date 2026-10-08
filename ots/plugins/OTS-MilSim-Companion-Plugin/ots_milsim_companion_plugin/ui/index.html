@@ -2625,22 +2625,29 @@ async function renderTeams() {
   }
 
   // Tag LoRa (Meshtastic) dei giocatori: quelli già assegnati all'utente e,
-  // da assegnare, i liberi visti sui canali mappati in «Canali Meshtastic»
+  // da assegnare, tutti i liberi — prima quelli dei canali mappati in «Canali
+  // Meshtastic», poi gli altri. Il canale di un tag il plugin lo impara dal
+  // feed MQTT e lo tiene in memoria: dopo un riavvio di OTS i tag ripartono
+  // «senza canale» finché non trasmettono, e non devono sparire dal menu.
   const tagLabel = t => `${t.callsign || t.long_name || t.short_name || t.key}${t.node_id && t.node_id !== (t.callsign || t.long_name) ? " · " + t.node_id : ""}`;
-  const freeTags = MESH_TAGS.filter(t => !t.owner_user_id && t.on_mapped_channel);
+  const freeTags = MESH_TAGS.filter(t => !t.owner_user_id);
   const freeByChannel = {};
-  freeTags.forEach(t => (freeByChannel[t.channel_name || "?"] = freeByChannel[t.channel_name || "?"] || []).push(t));
-  const freeOptions = Object.entries(freeByChannel).map(([ch, list]) =>
-    `<optgroup label="📻 ${esc(ch)}">${list.map(t => `<option value="${esc(t.key)}">${esc(tagLabel(t))}${t.status === "stale" ? " (non visto di recente)" : ""}</option>`).join("")}</optgroup>`).join("");
+  const groupOf = t => t.on_mapped_channel ? `📻 ${t.channel_name || t.channel_index}`
+                     : t.channel_name ? `📻 ${t.channel_name} (canale non mappato)` : "❔ canale non ancora visto";
+  freeTags.forEach(t => (freeByChannel[groupOf(t)] = freeByChannel[groupOf(t)] || []).push(t));
+  const freeOptions = Object.entries(freeByChannel)
+    .sort(([a], [b]) => (a.startsWith("❔") - b.startsWith("❔")) || (a.includes("non mappato") - b.includes("non mappato")) || a.localeCompare(b))
+    .map(([label, list]) =>
+      `<optgroup label="${esc(label)}">${list.map(t => `<option value="${esc(t.key)}">${esc(tagLabel(t))}${t.status === "stale" ? " (non visto di recente)" : ""}</option>`).join("")}</optgroup>`).join("");
   function userTags(userId) {
     const own = MESH_TAGS.filter(t => t.owner_user_id === userId);
     const lines = own.map(t => `<div class="team-tag"><span class="muted" style="font-size:11.5px; flex:1; overflow-wrap:anywhere"
         title="Tag LoRa assegnato: la sua posizione va ai gruppi di questo utente">📡 ${esc(tagLabel(t))}${t.channel_name ? " · " + esc(t.channel_name) : ""}</span>
       <button class="btn small" title="Libera il tag" data-key="${esc(t.key)}" onclick="setTagOwner(this.dataset.key, null, this)">✕</button></div>`).join("");
-    const picker = freeTags.length ? `<div class="team-tag">
-        <select><option value="">📡 assegna tag LoRa…</option>${freeOptions}</select>
-        <button class="btn small" title="Assegna il tag scelto a questo utente"
-          onclick="setTagOwner(this.previousElementSibling.value, ${userId}, this)">＋</button></div>` : "";
+    const picker = `<div class="team-tag">
+        <select ${freeTags.length ? "" : "disabled"}><option value="">${freeTags.length ? "📡 assegna tag LoRa…" : "📡 nessun tag LoRa libero"}</option>${freeOptions}</select>
+        <button class="btn small" title="Assegna il tag scelto a questo utente" ${freeTags.length ? "" : "disabled"}
+          onclick="setTagOwner(this.previousElementSibling.value, ${userId}, this)">＋</button></div>`;
     return lines + picker;
   }
 
@@ -2713,7 +2720,7 @@ async function renderTeams() {
     <p class="muted">📡 <b>Tag LoRa</b>: sotto ogni utente puoi assegnargli un tag Meshtastic tra quelli visti sui
       canali mappati (tab <b>Canali Meshtastic</b>). Il tag segue la squadra dell'utente come un suo EUD ATAK — la
       posizione va ai suoi gruppi, non a quello del canale — e in OpenTAKServer il nodo risulta suo.
-      ${MESH_TAGS.length && !freeTags.length && !MESH_TAGS.some(t => t.owner_user_id) ? "<br>⚠️ Nessun tag libero sui canali mappati: controlla la mappatura canali." : ""}</p>
+      ${MESH_TAGS.length ? "" : "<br>⚠️ Il plugin non conosce ancora nessun tag: accendili e controlla che il gateway MQTT li stia girando (tab Meshtastic)."}</p>
     <label class="team-toggle"><input type="checkbox" ${TEAMS_SHOW_ALL ? "checked" : ""}
       onchange="TEAMS_SHOW_ALL = this.checked; renderTeams()"> Mostra tutti i gruppi del server</label>
     ${shown.length ? `<div class="mode-grid">${cards}</div>`
