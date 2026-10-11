@@ -3518,9 +3518,12 @@ class MilSimCompanionPlugin(Plugin):
     def get_matches():
         try:
             matches = db.session.query(GameMatch).order_by(GameMatch.created_at.desc()).limit(100).all()
-            from opentakserver.models.Team import Team
+            from opentakserver.models.Group import Group
 
-            team_names = {t.id: t.name for t in db.session.query(Team).all()}
+            # team_a_id/team_b_id/osservatori sono groups.id (gruppi ATAK), non
+            # la tabella teams di OTS (i colori ATAK): fino alla 3.28.0 i nomi
+            # venivano cercati lì e uscivano sbagliati o vuoti
+            team_names = {g.id: g.name for g in db.session.query(Group).all()}
             results = []
             for match in matches:
                 data = match.serialize()

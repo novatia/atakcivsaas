@@ -721,6 +721,9 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.28.1** — storico partite: i nomi di Team A/B/osservatori venivano cercati nella tabella `teams` di OTS
+  (i colori ATAK) invece che nei gruppi ATAK in cui la partita li salva, quindi uscivano sbagliati o
+  vuoti e una partita a squadre poteva comparire come «📢 broadcast a tutti gli EUD».
 - **3.28.0** — replay evento e partita: compaiono anche i **tag LoRa Meshtastic**, con l'etichetta del
   tag, e tutte le tracce sono colorate per squadra (legenda raggruppata per squadra). Prima il replay
   raggruppava i punti per mittente (`points.device_uid`): un tag rilanciato da un ATAK finiva nella
