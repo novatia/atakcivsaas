@@ -65,8 +65,13 @@ mappe PCN** (ex OTS-SkyFi-Plugin). Usa il login e gli utenti di OpenTAKServer.
   📡 col nome del tag), sia rilanciati da un ATAK sia arrivati dal gateway MQTT: le due strade
   dello stesso tag sono un'unica traccia. Le tracce sono **colorate per squadra** (Team A rosso,
   Team B blu, osservatori grigio; senza squadra colori liberi) e la legenda è raggruppata per
-  squadra. La squadra è quella attuale dell'utente (per un tag: dell'utente a cui è assegnato
-  nella tab Team); il replay partita usa i gruppi Team A/B/osservatori della partita.
+  squadra. La squadra è quella **di quel momento**, dallo storico squadre (tabella
+  `ms_membership_history`: gruppi degli utenti, proprietario dei tag, mappatura Team, ognuno con
+  intervallo di validità); se qualcuno cambia squadra durante la giocata la traccia prende quella in
+  cui è stato più a lungo. Il replay partita usa i gruppi Team A/B/osservatori salvati nella partita.
+  Lo storico è allineato ogni 30 s dal loop del motore partite (cattura anche le modifiche fatte dalla
+  web UI di OpenTAKServer) e subito dopo ogni cambio fatto dal plugin; per i momenti precedenti alla
+  sua nascita (installazione della 3.29.0) si usa la squadra attuale, e il replay lo segnala.
 - Le tracce vengono lette dalle tabelle `points`/`euds` di OpenTAKServer (popolate dal
   processo `cot_parser`): nessuna tabella aggiuntiva, funziona retroattivamente su tutti
   i dati già registrati. Gli orari degli eventi sono interpretati nel fuso
@@ -721,6 +726,13 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.29.0** — **storico delle squadre**: nuova tabella `ms_membership_history` con gli intervalli di
+  validità di appartenenza utente→gruppo, proprietario di ogni tag Meshtastic e mappatura Team A/B/
+  osservatori. Il replay colora ogni traccia con la squadra del momento invece di quella attuale
+  (prevale la squadra in cui il giocatore è stato più a lungo nella finestra). Allineamento ogni 30 s nel
+  loop del motore partite e immediato dopo cambio squadra, assegnazione tag e salvataggio mappatura dal
+  plugin; la mappatura è letta da `config.yml`, perché `app.config` è aggiornato solo nel processo che
+  ha ricevuto il salvataggio.
 - **3.28.1** — storico partite: i nomi di Team A/B/osservatori venivano cercati nella tabella `teams` di OTS
   (i colori ATAK) invece che nei gruppi ATAK in cui la partita li salva, quindi uscivano sbagliati o
   vuoti e una partita a squadre poteva comparire come «📢 broadcast a tutti gli EUD».

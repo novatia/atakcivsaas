@@ -24,9 +24,15 @@ def team_of(user_id):
     return replay.user_team(TEAMS.get(user_id, []), ROLES)
 
 
-def build(rows, tags=(TAG,), mesh_euds=(MESH_EUD,), relay_uids=(), step=0):
+def current_team_at(owner, t):
+    """Nessuno storico: squadra dallo stato attuale (TEAMS, tag di TAG)."""
+    user_id = 20 if owner.get("tag_key") == TAG["tag_key"] else owner.get("user_id")
+    return (team_of(user_id) if user_id else None), False
+
+
+def build(rows, tags=(TAG,), mesh_euds=(MESH_EUD,), relay_uids=(), step=0, team_at=current_team_at):
     index = replay.TagIndex(list(tags), list(mesh_euds), relay_uids)
-    return replay.build_tracks(rows, index, {PHONE: ("ALFA-1", 10)}, team_of, step)
+    return replay.build_tracks(rows, index, {PHONE: ("ALFA-1", 10)}, team_at, step)
 
 
 def test_squadra_utente():
@@ -91,3 +97,66 @@ def test_downsampling_e_ordine_per_squadra():
     assert [t["team"] for t in tracks] == [replay.TEAM_A, replay.TEAM_B]
     assert len(tracks[0]["points"]) == 1
     assert [p[0] for p in tracks[1]["points"]] == [100.0, 106.0]
+
+
+# ----------------------------------------------------------------------
+# Storico squadre
+# ----------------------------------------------------------------------
+
+from ots_milsim_companion_plugin import history  # noqa: E402
+
+
+def test_diff_chiude_e_apre():
+    open_rows = {("group", "10", ALPHA, "IN"): 1, ("group", "10", ALPHA, "OUT"): 2}
+    facts = history.current_facts(
+        [(10, BRAVO, "IN"), (10, BRAVO, "OUT"), (10, ALPHA, "IN")],
+        [("!bbad0ac8", 20), ("!libero", None)],
+        ROLES,
+    )
+    to_close, to_open = history.diff(open_rows, facts)
+    assert to_close == [2]
+    assert ("group", "10", BRAVO, "OUT") in to_open and ("group", "10", ALPHA, "IN") not in to_open
+    assert ("tag", "!bbad0ac8", 20, None) in to_open
+    assert not any(f[1] == "!libero" for f in to_open)
+    assert ("role", "team_a", ALPHA, None) in to_open and ("role", "observers", OBS, None) in to_open
+
+
+def _timeline():
+    # ALFA-1 (utente 10) passa da Alpha a Bravo a t=200; il tag passa da 20 a 10 a t=150
+    rows = [
+        ("group", "10", ALPHA, "IN", 0, 200), ("group", "10", ALPHA, "OUT", 0, 200),
+        ("group", "10", BRAVO, "IN", 200, None), ("group", "10", BRAVO, "OUT", 200, None),
+        ("group", "20", BRAVO, "IN", 0, None), ("group", "20", BRAVO, "OUT", 0, None),
+        ("tag", "!bbad0ac8", 20, None, 0, 150), ("tag", "!bbad0ac8", 10, None, 150, None),
+        ("role", "team_a", ALPHA, None, 0, None), ("role", "team_b", BRAVO, None, 0, None),
+    ]
+    return history.Timeline(rows, since=0)
+
+
+def test_squadra_al_momento_del_punto():
+    tl = _timeline()
+    team_at = replay.team_resolver(tl, {}, {}, ROLES)
+    assert team_at({"user_id": 10}, 100) == (replay.TEAM_A, True)
+    assert team_at({"user_id": 10}, 250) == (replay.TEAM_B, True)
+    assert team_at({"tag_key": "!bbad0ac8", "user_id": None}, 100) == (replay.TEAM_B, True)
+    assert team_at({"tag_key": "!bbad0ac8", "user_id": None}, 160) == (replay.TEAM_A, True)
+
+
+def test_prima_dello_storico_usa_lo_stato_attuale():
+    tl = history.Timeline([
+        ("group", "10", BRAVO, "OUT", 1000, None),
+        ("role", "team_a", ALPHA, None, 1000, None), ("role", "team_b", BRAVO, None, 1000, None),
+    ], since=1000)
+    team_at = replay.team_resolver(tl, {10: [(ALPHA, "IN")]}, {}, ROLES)
+    assert team_at({"user_id": 10}, 500) == (replay.TEAM_A, False)
+    assert team_at({"user_id": 10}, 1500) == (replay.TEAM_B, True)
+
+
+def test_squadra_prevalente_e_partita_con_squadre_proprie():
+    team_at = replay.team_resolver(_timeline(), {}, {}, ROLES)
+    rows = [(t, PHONE, PHONE, 45.1, 9.1, 0) for t in (100, 150, 190, 250)]
+    track = build(rows, team_at=team_at)[0]
+    assert track["team"] == replay.TEAM_A and track["team_from_current"] is False
+    # Replay partita: valgono i gruppi salvati nella partita, non la mappatura dello storico
+    swapped = replay.team_resolver(_timeline(), {}, {}, ROLES, match_roles={"team_a": BRAVO, "team_b": ALPHA, "observers": []})
+    assert build(rows, team_at=swapped)[0]["team"] == replay.TEAM_B

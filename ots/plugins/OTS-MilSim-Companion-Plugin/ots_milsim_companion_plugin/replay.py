@@ -56,6 +56,7 @@ class TagIndex:
         for tag in tags:
             info = {
                 "key": "tag:" + tag["tag_key"],
+                "tag_key": tag["tag_key"],
                 "label": tag.get("callsign") or tag.get("long_name") or tag.get("short_name")
                 or tag.get("node_id") or tag["tag_key"],
                 "node_id": normalize_node_id(tag.get("node_id")) if tag.get("node_id") else None,
@@ -75,6 +76,7 @@ class TagIndex:
             if info is None:
                 info = {
                     "key": "tag:" + (node or eud["uid"]),
+                    "tag_key": None,
                     "label": eud.get("callsign") or node or eud["uid"],
                     "node_id": node,
                     "user_id": eud.get("user_id"),
@@ -88,7 +90,7 @@ class TagIndex:
 
         for uid in relay_uids:
             if uid and uid not in self._by_uid:
-                info = {"key": "tag:" + uid, "label": uid, "node_id": None, "user_id": None}
+                info = {"key": "tag:" + uid, "tag_key": None, "label": uid, "node_id": None, "user_id": None}
                 self._tags[info["key"]] = info
                 self._by_uid[uid] = info
 
@@ -117,14 +119,21 @@ def track_key(uid: str | None, device_uid: str | None, tags: TagIndex) -> tuple[
     return None
 
 
-def build_tracks(rows, tags: TagIndex, euds: dict, user_team_of, step: int) -> list[dict]:
+def build_tracks(rows, tags: TagIndex, euds: dict, team_at, step: int) -> list[dict]:
     """Tracce del replay da righe (t, uid, device_uid, lat, lon, speed)
     ordinate per tempo. `euds`: uid → (callsign, user_id) degli ATAK.
-    `user_team_of(user_id)` → TEAM_A/TEAM_B/OBSERVERS/None.
+
+    `team_at(owner, t)` → (squadra o None, dallo storico?) con owner
+    {"user_id": ...} per un EUD o {"tag_key": ..., "user_id": ...} per un tag
+    (user_id = proprietario attuale, da usare dove lo storico non arriva).
+    La squadra della traccia è quella prevalente fra i suoi punti: un cambio
+    squadra a metà giocata non ricolora tutto col valore finale.
+
     Downsampling: al massimo un punto ogni `step` secondi per traccia (unisce
     anche le copie dello stesso tag ricevute da più telefoni/gateway).
     """
     tracks: dict[str, dict] = {}
+    owners: dict[str, dict] = {}
     last_kept: dict[str, float] = {}
     for t, uid, device_uid, lat, lon, speed in rows:
         if lat is None or lon is None or (not lat and not lon):
@@ -139,20 +148,61 @@ def build_tracks(rows, tags: TagIndex, euds: dict, user_team_of, step: int) -> l
         track = tracks.get(key)
         if track is None:
             if tag:
-                user_id = tag["user_id"]
+                owners[key] = {"tag_key": tag["tag_key"], "user_id": tag["user_id"]}
                 track = {"uid": key, "callsign": tag["label"], "kind": "tag", "node_id": tag["node_id"]}
             else:
                 callsign, user_id = euds.get(key, (None, None))
+                owners[key] = {"user_id": user_id}
                 track = {"uid": key, "callsign": callsign or key, "kind": "eud"}
-            track["team"] = user_team_of(user_id) if user_id else None
             track["points"] = []
             tracks[key] = track
         track["points"].append(
             [round(t, 1), round(lat, 6), round(lon, 6), round(speed, 1) if speed is not None else None]
         )
 
+    for key, track in tracks.items():
+        votes: dict = {}
+        from_current = False
+        for point in track["points"]:
+            team, from_history = team_at(owners[key], point[0])
+            votes[team] = votes.get(team, 0) + 1
+            from_current = from_current or not from_history
+        # A parità vince una squadra vera su «nessuna»
+        track["team"] = max(votes, key=lambda team: (votes[team], team is not None))
+        track["team_from_current"] = from_current
+
     order = {TEAM_A: 0, TEAM_B: 1, OBSERVERS: 2, None: 3}
     return sorted(
         tracks.values(),
         key=lambda tr: (order[tr["team"]], tr["kind"] != "eud", tr["callsign"].lower()),
     )
+
+
+def team_resolver(timeline, current_groups: dict, current_tag_owner: dict, current_roles: dict,
+                  match_roles: dict | None = None):
+    """team_at(owner, t) per build_tracks.
+
+    timeline: history.Timeline. current_*: lo stato di adesso (user_id →
+    [(group, dir)], tag_key → user_id, mappatura Team), usato solo prima
+    dell'inizio dello storico. match_roles: le squadre salvate nella partita
+    (replay partita); None = mappatura Team valida in quel momento.
+    """
+
+    def team_at(owner: dict, t: float):
+        user_id = owner.get("user_id")
+        tag_key = owner.get("tag_key")
+        if not timeline.covers(t):
+            if tag_key:
+                user_id = current_tag_owner.get(tag_key)
+            groups, roles = current_groups.get(user_id, []), match_roles or current_roles
+        else:
+            # Un tag senza anagrafica nel plugin non ha storico: vale il
+            # proprietario della riga euds di OTS
+            if tag_key:
+                user_id = timeline.tag_owner_at(tag_key, t)
+            groups, roles = timeline.groups_at(user_id, t), match_roles or timeline.roles_at(t)
+        if not user_id:
+            return None, timeline.covers(t)
+        return user_team(groups, roles), timeline.covers(t)
+
+    return team_at

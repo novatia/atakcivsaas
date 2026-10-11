@@ -977,9 +977,11 @@ async function renderReplay(id, isMatch = false) {
     <div id="rp-map"></div>
     <div id="rp-legend"></div>
     <p class="muted" style="margin-top:6px">Vengono mostrati tutti gli EUD (●) e i tag LoRa Meshtastic (◆) che hanno
-       inviato la posizione, colorati per squadra. La squadra è quella <b>attuale</b> dell'utente (per i tag: dell'utente
-       a cui sono assegnati nella tab Team), OpenTAKServer non ne conserva lo storico. Usa le caselle qui sopra per
-       nascondere le tracce che non ti interessano.</p>`;
+       inviato la posizione, colorati con la squadra <b>di quel momento</b> (per i tag: dell'utente a cui erano
+       assegnati), presa dallo storico delle squadre; se qualcuno ha cambiato squadra durante la giocata vale quella
+       in cui è stato più a lungo. Usa le caselle qui sopra per nascondere le tracce che non ti interessano.</p>
+    ${data.tracks.some(t => t.team_from_current) ? `<p class="muted">⚠️ Parte di questa giocata è precedente
+       all'inizio dello storico delle squadre (versione 3.29.0): per quei momenti è usata la squadra attuale.</p>` : ""}`;
 
   const map = L.map("rp-map");
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {

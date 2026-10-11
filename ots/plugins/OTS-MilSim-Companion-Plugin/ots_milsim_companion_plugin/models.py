@@ -591,6 +591,28 @@ class MeshTag(db.Model):
         }
 
 
+class MembershipHistory(db.Model):
+    """Storico di chi era in quale squadra, per il replay.
+
+    OTS tiene solo lo stato attuale (groups_users, msh_tags.owner_user_id,
+    mappatura Team in config): qui ogni fatto ha un intervallo di validità.
+    `kind`: "group" (subject = user_id, ref_id = groups.id, direction IN/OUT),
+    "tag" (subject = tag_key, ref_id = utente proprietario), "role"
+    (subject = team_a/team_b/observers, ref_id = groups.id). valid_to NULL =
+    vale ancora. Lo scrive history.sync().
+    """
+
+    __tablename__ = "ms_membership_history"
+
+    id = db.Column(Integer, primary_key=True)
+    kind = db.Column(String(16), nullable=False, index=True)
+    subject = db.Column(String(255), nullable=False)
+    ref_id = db.Column(Integer, nullable=False)
+    direction = db.Column(String(8), nullable=True)
+    valid_from = db.Column(DateTime, nullable=False, index=True)
+    valid_to = db.Column(DateTime, nullable=True, index=True)
+
+
 PLUGIN_TABLES = [
     GameField.__table__,
     Player.__table__,
@@ -608,4 +630,5 @@ PLUGIN_TABLES = [
     MeshTag.__table__,
     MeshChatMessage.__table__,
     MeshChatRoot.__table__,
+    MembershipHistory.__table__,
 ]

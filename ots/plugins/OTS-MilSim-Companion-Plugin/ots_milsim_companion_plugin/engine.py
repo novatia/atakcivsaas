@@ -23,7 +23,7 @@ from sqlalchemy import or_, update
 
 from opentakserver.extensions import db, logger
 
-from . import cot
+from . import cot, history
 from .game_modes import GAME_MODES
 from .models import EngineLease, GameMatch
 
@@ -247,6 +247,8 @@ def _loop(flask_app) -> None:
                 if not _acquire_lease(holder):
                     continue
                 _tick()
+                # Storico squadre: cattura anche i cambi fatti dalla web UI di OTS
+                history.sync(flask_app.config)
         except BaseException as e:
             logger.error(f"MilSim engine: errore nel tick: {e}")
             logger.debug(traceback.format_exc())

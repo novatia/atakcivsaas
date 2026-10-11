@@ -40,7 +40,7 @@ from opentakserver.models.MissionContentMission import MissionContentMission
 from opentakserver.models.user import User
 from opentakserver.plugins.Plugin import Plugin
 
-from . import chat, cot, datapackage, engine, health, mesh, offline_map, replay, skyfi, teams
+from . import chat, cot, datapackage, engine, health, history, mesh, offline_map, replay, skyfi, teams
 from .default_config import DefaultConfig
 from .game_modes import GAME_MODES, MARKER_TYPES, ZONE_TYPES, serialize_registry, validate_template
 from .models import (
@@ -703,14 +703,17 @@ def _template_payload(body: dict) -> tuple[dict | None, str | None]:
     }, None
 
 
-def _gps_tracks(start_utc: datetime, end_utc: datetime, step: int, roles: dict) -> list[dict]:
+def _gps_tracks(start_utc: datetime, end_utc: datetime, step: int, match_roles: dict | None = None) -> dict:
     """Tracce GPS di EUD ATAK e tag Meshtastic (tabelle points/euds di OTS)
     nella finestra UTC data, con downsampling a max un punto ogni `step`
     secondi per traccia. Usato dal replay evento (finestra dal calendario) e
     dal replay partita (started_at → ended_at tenuti dal match engine).
-    `roles` (teams.roles_from_config o le squadre della partita) colora le
-    tracce per squadra: è la composizione di ADESSO, OTS non ne tiene lo
-    storico. Chi possiede cosa lo decide replay.py."""
+
+    Le tracce sono colorate con la squadra di QUEL momento, dallo storico
+    (history.py): gruppi dell'utente, proprietario del tag e — nel replay
+    evento — mappatura Team. `match_roles`: le squadre salvate nella partita.
+    Chi possiede quale punto lo decide replay.py.
+    Ritorna {"tracks", "teams" (nomi per la legenda)}."""
     from opentakserver.models.CoT import CoT
     from opentakserver.models.EUD import EUD
     from opentakserver.models.GroupUser import GroupUser
@@ -735,17 +738,18 @@ def _gps_tracks(start_utc: datetime, end_utc: datetime, step: int, roles: dict) 
         .filter(CoT.xml.contains("__meshtastic"))
         .distinct()
     ]
-    tags = replay.TagIndex([t.serialize() for t in db.session.query(MeshTag).all()], mesh_euds, relay_uids)
+    tag_rows = db.session.query(MeshTag).all()
+    tags = replay.TagIndex([t.serialize() for t in tag_rows], mesh_euds, relay_uids)
 
-    memberships: dict[int, list] = {}
+    # Stato attuale: serve solo per i momenti precedenti all'inizio dello storico
+    current_groups: dict[int, list] = {}
     for m in db.session.query(GroupUser).filter_by(enabled=True).all():
-        memberships.setdefault(m.user_id, []).append((m.group_id, m.direction))
-    team_of = {}
-
-    def user_team_of(user_id):
-        if user_id not in team_of:
-            team_of[user_id] = replay.user_team(memberships.get(user_id, []), roles)
-        return team_of[user_id]
+        current_groups.setdefault(m.user_id, []).append((m.group_id, m.direction))
+    current_roles = history.roles_on_disk(app.config)
+    timeline = history.load_timeline(start, end)
+    team_at = replay.team_resolver(
+        timeline, current_groups, {t.tag_key: t.owner_user_id for t in tag_rows}, current_roles, match_roles,
+    )
 
     rows = (
         db.session.query(Point.timestamp, Point.uid, Point.device_uid, Point.latitude, Point.longitude, Point.speed)
@@ -753,13 +757,18 @@ def _gps_tracks(start_utc: datetime, end_utc: datetime, step: int, roles: dict) 
         .filter(Point.latitude.isnot(None), Point.longitude.isnot(None))
         .order_by(Point.timestamp)
     )
-    return replay.build_tracks(
+    tracks = replay.build_tracks(
         (
             (ts.replace(tzinfo=timezone.utc).timestamp(), uid, device_uid, lat, lon, speed)
             for ts, uid, device_uid, lat, lon, speed in rows
         ),
-        tags, euds, user_team_of, step,
+        tags, euds, team_at, step,
     )
+
+    # Nomi in legenda: le squadre della partita, o la mappatura valida a fine finestra
+    end_ts = end_utc.timestamp()
+    roles = match_roles or (timeline.roles_at(end_ts) if timeline.covers(end_ts) else current_roles)
+    return {"tracks": tracks, "teams": _replay_teams(roles)}
 
 
 def _replay_teams(roles: dict) -> dict:
@@ -1362,6 +1371,7 @@ class MilSimCompanionPlugin(Plugin):
         try:
             result = DefaultConfig.update_config(request.json)
             if result["success"]:
+                history.sync(app.config, force=True)  # la mappatura Team è storicizzata
                 return jsonify(result)
             else:
                 return jsonify(result), 400
@@ -2116,15 +2126,13 @@ class MilSimCompanionPlugin(Plugin):
             start_utc = event.start_time.replace(tzinfo=tz).astimezone(timezone.utc)
             end_utc = event.end_time.replace(tzinfo=tz).astimezone(timezone.utc)
 
-            roles = teams.roles_from_config(app.config)
             return jsonify(
                 {
                     "event": event.serialize(),
                     "start": start_utc.timestamp(),
                     "end": end_utc.timestamp(),
                     "step": step,
-                    "teams": _replay_teams(roles),
-                    "tracks": _gps_tracks(start_utc, end_utc, step, roles),
+                    **_gps_tracks(start_utc, end_utc, step),
                 }
             )
         except BaseException as e:
@@ -3696,6 +3704,7 @@ class MilSimCompanionPlugin(Plugin):
                 warnings += warn
 
         db.session.commit()
+        history.sync(app.config, force=True)  # cambio squadra all'ora esatta
         return {
             "euds": len(eud_uids),
             "bound": bound,
@@ -4077,7 +4086,7 @@ class MilSimCompanionPlugin(Plugin):
             end_utc = (match.ended_at or match.ends_at or _utcnow()).replace(tzinfo=timezone.utc)
 
             # Le squadre della partita, non la mappatura attuale (può essere cambiata dopo)
-            roles = {
+            match_roles = {
                 "team_a": match.team_a_id,
                 "team_b": match.team_b_id,
                 "observers": json.loads(match.observers_json or "[]"),
@@ -4088,8 +4097,7 @@ class MilSimCompanionPlugin(Plugin):
                     "start": start_utc.timestamp(),
                     "end": end_utc.timestamp(),
                     "step": step,
-                    "teams": _replay_teams(roles),
-                    "tracks": _gps_tracks(start_utc, end_utc, step, roles),
+                    **_gps_tracks(start_utc, end_utc, step, match_roles),
                 }
             )
         except BaseException as e:
@@ -5066,6 +5074,7 @@ class MilSimCompanionPlugin(Plugin):
             row.owner_user_id = user.id if user else None
             db.session.commit()
             mesh.invalidate_cache()
+            history.sync(app.config, force=True)
 
             # Collega subito la riga `euds` del nodo, se OTS l'ha già creata;
             # altrimenti la collega il primo pacchetto che arriva
