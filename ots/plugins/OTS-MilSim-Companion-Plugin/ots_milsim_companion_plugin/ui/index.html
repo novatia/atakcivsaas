@@ -91,6 +91,9 @@
   .rp-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; border: 2px solid #fff; box-shadow: 0 0 3px rgba(0,0,0,.5); flex: none; }
   .rp-marker { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
   .rp-name { font-size: 11px; font-weight: 600; color: #111; background: rgba(255,255,255,.85); padding: 0 4px; border-radius: 4px; }
+  .rp-dot.tag { border-radius: 2px; transform: rotate(45deg) scale(.85); }
+  .rp-group { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; width: 100%; }
+  .rp-group > b { font-size: 12.5px; min-width: 110px; }
   .muted { color: var(--muted); }
   .hidden { display: none !important; }
   /* ---- Modalità di gioco (template missioni, partite) ---- */
@@ -900,7 +903,11 @@ function loadLeaflet() {
   return _leafletPromise;
 }
 
-const RP_COLORS = ["#e6194b","#3cb44b","#4363d8","#f58231","#911eb4","#42d4f4","#f032e6","#808000","#9a6324","#469990","#800000","#000075","#fabed4","#aaffc3","#dcbeff","#bfef45"];
+// Senza squadra: colori distinti ma lontani dal rosso/blu delle squadre
+const RP_COLORS = ["#3cb44b","#f58231","#911eb4","#42d4f4","#f032e6","#808000","#9a6324","#469990","#bfef45","#dcbeff","#aaffc3","#fabed4"];
+// Stessi colori degli spawn (MARKER_TYPES in game_modes.py)
+const RP_TEAM_COLORS = { team_a: "#E53935", team_b: "#1E88E5", observers: "#616161" };
+const RP_TEAM_ORDER = ["team_a", "team_b", "observers", null];
 const RP_SPEEDS = [1, 3, 5, 10, 100];
 let RP = null;          // stato del replay corrente
 let _rpToken = 0;       // invalida il loop di animazione dei replay precedenti
@@ -956,7 +963,7 @@ async function renderReplay(id, isMatch = false) {
     el.innerHTML = header + `
       <p style="margin-top:14px">Nessuna traccia GPS registrata nella finestra ${isMatch ? "della partita (luce verde → fine)" : "dell'evento"}.</p>
       <p class="muted">Le tracce vengono salvate solo per gli EUD (ATAK/WinTAK) collegati al server
-         durante la giocata, e richiedono che il processo cot_parser di OpenTAKServer sia attivo.</p>`;
+         e i tag Meshtastic attivi durante la giocata, e richiedono che il processo cot_parser di OpenTAKServer sia attivo.</p>`;
     return;
   }
 
@@ -969,8 +976,10 @@ async function renderReplay(id, isMatch = false) {
     <input type="range" id="rp-slider" min="${data.start}" max="${data.end}" step="1">
     <div id="rp-map"></div>
     <div id="rp-legend"></div>
-    <p class="muted" style="margin-top:6px">Vengono mostrati tutti gli EUD che hanno inviato la posizione
-       durante l'evento. Usa le caselle qui sopra per nascondere le tracce che non ti interessano.</p>`;
+    <p class="muted" style="margin-top:6px">Vengono mostrati tutti gli EUD (●) e i tag LoRa Meshtastic (◆) che hanno
+       inviato la posizione, colorati per squadra. La squadra è quella <b>attuale</b> dell'utente (per i tag: dell'utente
+       a cui sono assegnati nella tab Team), OpenTAKServer non ne conserva lo storico. Usa le caselle qui sopra per
+       nascondere le tracce che non ti interessano.</p>`;
 
   const map = L.map("rp-map");
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -985,20 +994,22 @@ async function renderReplay(id, isMatch = false) {
     }).addTo(map).bindTooltip(ev.field.name);
   }
 
-  const tracks = data.tracks.map((t, i) => {
-    const color = RP_COLORS[i % RP_COLORS.length];
+  let free = 0;
+  const tracks = data.tracks.map(t => {
+    const color = RP_TEAM_COLORS[t.team] || RP_COLORS[free++ % RP_COLORS.length];
+    const isTag = t.kind === "tag";
     const latlngs = t.points.map(p => [p[1], p[2]]);
     const marker = L.marker(latlngs[0], {
       icon: L.divIcon({
         className: "",
-        html: `<div class="rp-marker"><span class="rp-dot" style="background:${color}"></span><span class="rp-name">${esc(t.callsign)}</span></div>`,
+        html: `<div class="rp-marker"><span class="rp-dot${isTag ? " tag" : ""}" style="background:${color}"></span><span class="rp-name">${isTag ? "📡 " : ""}${esc(t.callsign)}</span></div>`,
         iconSize: null,
         iconAnchor: [8, 8],
       }),
       zIndexOffset: 100,
     });
-    const trail = L.polyline([], { color, weight: 3, opacity: 0.7 }).addTo(map);
-    return { ...t, color, latlngs, marker, trail, onMap: false, visible: true, lastIdx: -2 };
+    const trail = L.polyline([], { color, weight: 3, opacity: 0.7, dashArray: isTag ? "6 5" : null }).addTo(map);
+    return { ...t, color, isTag, latlngs, marker, trail, onMap: false, visible: true, lastIdx: -2 };
   });
 
   const bounds = L.latLngBounds(tracks.flatMap(t => t.latlngs));
@@ -1015,10 +1026,17 @@ async function renderReplay(id, isMatch = false) {
     speed: 1, playing: false, last: null,
   };
 
-  document.getElementById("rp-legend").innerHTML = tracks.map((t, i) => `
-    <label><input type="checkbox" checked onchange="rpToggle(${i}, this.checked)">
-    <span class="rp-dot" style="background:${t.color}"></span>${esc(t.callsign)}
-    <span class="muted">(${t.points.length} punti)</span></label>`).join("");
+  const teamNames = data.teams || {};
+  document.getElementById("rp-legend").innerHTML = RP_TEAM_ORDER.map(team => {
+    const items = tracks.map((t, i) => [t, i]).filter(([t]) => (t.team || null) === team);
+    if (!items.length) return "";
+    const title = team ? (teamNames[team] || team) : "Senza squadra";
+    return `<div class="rp-group"><b style="color:${RP_TEAM_COLORS[team] || "inherit"}">${esc(title)}</b>${items.map(([t, i]) => `
+      <label title="${t.isTag ? `Tag LoRa Meshtastic${t.node_id ? " " + esc(t.node_id) : ""}` : "EUD ATAK"}">
+      <input type="checkbox" checked onchange="rpToggle(${i}, this.checked)">
+      <span class="rp-dot${t.isTag ? " tag" : ""}" style="background:${t.color}"></span>${t.isTag ? "📡 " : ""}${esc(t.callsign)}
+      <span class="muted">(${t.points.length} punti)</span></label>`).join("")}</div>`;
+  }).join("");
 
   document.getElementById("rp-play").onclick = () => rpSetPlaying(!RP.playing);
   document.querySelectorAll(".rp-speed").forEach(btn => {

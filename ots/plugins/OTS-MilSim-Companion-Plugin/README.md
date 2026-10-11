@@ -61,6 +61,12 @@ mappe PCN** (ex OTS-SkyFi-Plugin). Usa il login e gli utenti di OpenTAKServer.
   che rigioca i movimenti degli EUD collegati al server durante l'evento, con velocità
   regolabile **1x / 3x / 5x / 10x / 100x**, slider temporale, scia del percorso e
   legenda con on/off per singolo EUD.
+- Insieme agli EUD ATAK (●) compaiono i **tag LoRa Meshtastic** (◆, scia tratteggiata, etichetta
+  📡 col nome del tag), sia rilanciati da un ATAK sia arrivati dal gateway MQTT: le due strade
+  dello stesso tag sono un'unica traccia. Le tracce sono **colorate per squadra** (Team A rosso,
+  Team B blu, osservatori grigio; senza squadra colori liberi) e la legenda è raggruppata per
+  squadra. La squadra è quella attuale dell'utente (per un tag: dell'utente a cui è assegnato
+  nella tab Team); il replay partita usa i gruppi Team A/B/osservatori della partita.
 - Le tracce vengono lette dalle tabelle `points`/`euds` di OpenTAKServer (popolate dal
   processo `cot_parser`): nessuna tabella aggiuntiva, funziona retroattivamente su tutti
   i dati già registrati. Gli orari degli eventi sono interpretati nel fuso
@@ -623,7 +629,7 @@ restano invariate per compatibilità con i config esistenti.
 | `PUT/DELETE /events/<id>` | admin | Modifica / eliminazione evento |
 | `POST /events/<id>/rsvp` | utente | `{"status": "present\|absent\|maybe\|not_configured"}` |
 | `GET/POST /events/<id>/attendance` | admin | Elenco presenze · conferma `{"player_id", "confirmed"}` |
-| `GET /events/<id>/replay` | admin | Tracce GPS degli EUD nella finestra dell'evento (`?step=N` = max un punto ogni N s per EUD, default 5) |
+| `GET /events/<id>/replay` | admin | Tracce GPS di EUD e tag Meshtastic nella finestra dell'evento, con squadra (`?step=N` = max un punto ogni N s per traccia, default 5) |
 | `GET /fields` · `POST/PUT/DELETE /fields…` | utente · admin | Anagrafica campi da gioco |
 | `POST /import/ics` | admin | `{"url": "…", "default_field_id": n}` o file `.ics` |
 | `POST /import/csv` | admin | multipart `file` + `default_field_id` |
@@ -715,6 +721,12 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.28.0** — replay evento e partita: compaiono anche i **tag LoRa Meshtastic**, con l'etichetta del
+  tag, e tutte le tracce sono colorate per squadra (legenda raggruppata per squadra). Prima il replay
+  raggruppava i punti per mittente (`points.device_uid`): un tag rilanciato da un ATAK finiva nella
+  traccia del telefono (che «saltava» sul tag), e così anche i marker piazzati dal telefono. Ora
+  `replay.py` attribuisce ogni punto a chi descrive: PLI dell'EUD, tag (msh_tags, righe `euds`
+  Meshtastic, CoT con `<__meshtastic/>`), mentre i marker vengono scartati.
 - **3.27.1** — tab Team: il menu «📡 assegna tag LoRa» è sempre visibile e propone tutti i tag liberi
   (prima quelli dei canali mappati, poi gli altri). Nella 3.27.0 spariva dopo ogni riavvio di OTS: il canale
   di un tag si impara dal feed MQTT e finché il tag non ritrasmette non risultava su un canale mappato.
