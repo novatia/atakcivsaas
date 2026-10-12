@@ -247,3 +247,18 @@ def test_tag_di_un_altro_solo_rilanciato_non_e_abbinato():
 def test_troppi_pochi_campioni_per_decidere():
     rows = sorted(_walk(PHONE, PHONE, n=5) + _walk("TRACKER-01", PHONE, n=5), key=lambda r: r[0])
     assert all("paired_with" not in t for t in build(rows))
+
+
+def test_tag_non_abbinato_dice_perche():
+    # Rilanciato dal telefono ma a ~1 km: candidato con il motivo
+    rows = sorted(_walk(PHONE, PHONE) + _walk("TRACKER-01", PHONE, offset_lat=0.01), key=lambda r: r[0])
+    tag = {t["uid"]: t for t in build(rows)}["tag:!bbad0ac8"]
+    cand = tag["pairing_candidate"]
+    assert cand["phone"] == PHONE and cand["relay_share"] == 1.0 and cand["close_share"] == 0.0
+    assert len(cand["reasons"]) == 1 and "entro 30 m" in cand["reasons"][0]
+
+
+def test_radio_abbinata_non_ha_candidato():
+    rows = sorted(_walk(PHONE, PHONE) + _walk("TRACKER-01", PHONE, offset_lat=0.00005), key=lambda r: r[0])
+    tag = {t["uid"]: t for t in build(rows)}["tag:!bbad0ac8"]
+    assert "paired_with" in tag and "pairing_candidate" not in tag

@@ -729,6 +729,10 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.39.1** — strumenti diagnostici: un telefono conta come nodo LoRa (raggio, bolla, rete stimata) solo se una
+  radio ce l'aveva di sicuro, cioè se ha rilanciato tag al server o ha una radio abbinata; un telefono con ATAK e
+  basta non parla LoRa. Nel pannello: riga «Radio LoRa» per i telefoni e, per un tag non riconosciuto come radio
+  di nessuno, il telefono candidato con i suoi numeri e la soglia che non passa (`pairing_candidate`).
 - **3.39.0** — strumenti diagnostici del replay: **rete stimata**. In ogni istante una linea fra ogni coppia
   di nodi LoRa attivi (tag e telefoni con un dato negli ultimi 2 minuti, più il QG) che secondo il modello si
   sentivano: perdita lungo la linea (due raggi + vegetazione attraversata) entro il budget del preset; verde con

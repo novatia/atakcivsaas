@@ -1155,6 +1155,8 @@ async function renderReplay(id, isMatch = false) {
     clock: Math.max(data.start, firstT),
     speed: 1, playing: false, last: null, tz: data.timezone,
     selected: null, teamNames: data.teams || {},
+    // Telefoni che hanno rilanciato tag al server: per farlo una radio LoRa ce l'avevano
+    relaying: new Set(tracks.flatMap(t => Object.keys(t.relayers || {}).filter(v => v !== "mqtt"))),
   };
 
   rpHqInit(data.hq);
@@ -1519,6 +1521,16 @@ function rpRenderInfo() {
       <span class="muted">Riconosciuta perché ${rpPairingText(radio.pairing)}. La sua posizione è nascosta: è quella del telefono.</span><br>
       <label><input type="checkbox" ${radio.visible ? "checked" : ""} onchange="rpShowPaired(${ri}, this.checked)"> mostra anche la sua traccia</label>
       · <button class="rp-pick" onclick="rpSelect(${ri})"><span class="rp-pick-name">dettagli della radio</span></button></div>`;
+  } else if (!t.isTag) {
+    pair = `<div class="rp-pair">📻 <b>Radio LoRa</b>: ${RP.relaying.has(t.uid)
+      ? "sì — ha rilanciato tag al server, quindi una radio Meshtastic collegata ce l'aveva; non è stato riconosciuto quale tag fosse (nessuno gli stava abbastanza vicino)"
+      : "<b>nessuna</b> — non ha rilanciato tag e non ha radio abbinate: per gli strumenti diagnostici non è un nodo LoRa (niente bolla né collegamenti)"}</div>`;
+  } else if (t.pairing_candidate) {
+    const c = t.pairing_candidate, cp = RP.tracks[idxOf(c.phone)];
+    pair = `<div class="rp-pair">🔗 <b>Non riconosciuta come radio di 📱 ${esc(cp ? cp.callsign : c.phone)}</b><br>
+      <span class="muted">Rilanciata da lui nel ${Math.round(c.relay_share * 100)}% dei pacchetti, entro ${c.radius_m} m nel
+      ${Math.round(c.close_share * 100)}% dei ${c.samples} campioni${c.median_m != null ? ` (distanza tipica ${c.median_m} m)` : ""}.
+      Motivo: ${c.reasons.map(esc).join("; ")}.</span></div>`;
   } else if (phone) {
     pair = `<div class="rp-pair">🔗 <b>Radio del telefono ${esc(phone.callsign)}</b><br>
       <span class="muted">Riconosciuta perché ${rpPairingText(t.pairing)}.</span><br>
@@ -1796,11 +1808,18 @@ function rpDiagDraw(layers, pos, color, h1, bodies, visible) {
 const RP_NET_MARGIN_OK_DB = 6;
 const RP_NET_MAX_HOPS = 3;          // hop limit di default di Meshtastic
 
+// Nodo LoRa? I tag sempre; un telefono solo se una radio ce l'aveva di sicuro: ha
+// rilanciato tag al server o ha una radio abbinata. Un telefono senza radio (ATAK e
+// basta) non parla LoRa: niente raggio, bolla né collegamenti per lui.
+function rpHasRadio(t) {
+  return t.isTag || !!t.paired_tag || (RP.relaying && RP.relaying.has(t.uid));
+}
+
 function rpNetCompute() {
   const D = RP.diag, f = D.cfg.freq_mhz, clock = RP.clock;
   const nodes = [];
   for (const t of RP.tracks) {
-    if (t.paired_with) continue;
+    if (t.paired_with || !rpHasRadio(t)) continue;
     const i = rpLocate(t.points, clock);
     if (i < 0 || clock - t.points[i][0] > RP_GAP_S || !t.onMap) continue;
     const ll = t.marker.getLatLng();
@@ -1880,7 +1899,7 @@ function rpDiagTick() {
   RP.diag.budget = 3;
   for (const t of RP.tracks) {
     t.diagLayers = t.diagLayers || {};
-    const on = t.visible && t.onMap;
+    const on = t.visible && t.onMap && rpHasRadio(t);
     const ll = on ? t.marker.getLatLng() : null;
     rpDiagDraw(t.diagLayers, on ? [ll.lat, ll.lng] : null, t.color, RP.diag.cfg.tag_height_m, 2, on);
   }

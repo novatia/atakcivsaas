@@ -338,9 +338,14 @@ def pair_tracks(tracks: list) -> None:
     """Segna le coppie telefono ↔ radio: sul tag `paired_with` (uid del
     telefono) e `pairing` (i numeri della decisione), sul telefono
     `paired_tag`. Un telefono ha al massimo una radio: se più tag passano la
-    soglia vince quello che gli sta vicino più spesso."""
+    soglia vince quello che gli sta vicino più spesso.
+
+    Un tag non abbinato porta `pairing_candidate`: il telefono che lo
+    rilanciava con i suoi numeri e la soglia che non passa, così il pannello
+    dettagli può dire perché non è stato riconosciuto come radio di qualcuno."""
     by_uid = {t["uid"]: t for t in tracks}
     candidates = []
+    best_for_tag: dict = {}
     for tag in tracks:
         if tag["kind"] != "tag":
             continue
@@ -348,25 +353,38 @@ def pair_tracks(tracks: list) -> None:
         total = sum(relayers.values())
         for phone_uid, count in relayers.items():
             phone = by_uid.get(phone_uid)
-            if not phone or phone["kind"] != "eud" or count / total < PAIR_MIN_RELAY:
+            if not phone or phone["kind"] != "eud":
                 continue
             distances = []
             for point in tag["points"]:
                 where = _position_at(phone["points"], point[0])
                 if where:
                     distances.append(_distance_m(point[1], point[2], where[0], where[1]))
+            distances.sort()
+            share = sum(d <= PAIR_RADIUS_M for d in distances) / len(distances) if distances else 0.0
+            numbers = {
+                "phone": phone_uid,
+                "relay_share": round(count / total, 2),
+                "close_share": round(share, 2),
+                "median_m": round(distances[len(distances) // 2], 1) if distances else None,
+                "samples": len(distances),
+                "radius_m": PAIR_RADIUS_M,
+            }
+            reasons = []
+            if count / total < PAIR_MIN_RELAY:
+                reasons.append(f"rilanciato da lui solo nel {round(count / total * 100)}% dei pacchetti "
+                               f"(serve {round(PAIR_MIN_RELAY * 100)}%)")
             if len(distances) < PAIR_MIN_SAMPLES:
-                continue
-            share = sum(d <= PAIR_RADIUS_M for d in distances) / len(distances)
-            if share >= PAIR_MIN_SHARE:
-                distances.sort()
-                candidates.append((share, tag, phone, {
-                    "relay_share": round(count / total, 2),
-                    "close_share": round(share, 2),
-                    "median_m": round(distances[len(distances) // 2], 1),
-                    "samples": len(distances),
-                    "radius_m": PAIR_RADIUS_M,
-                }))
+                reasons.append(f"solo {len(distances)} campioni confrontabili con la sua posizione "
+                               f"(servono {PAIR_MIN_SAMPLES})")
+            elif share < PAIR_MIN_SHARE:
+                reasons.append(f"entro {round(PAIR_RADIUS_M)} m da lui solo nel {round(share * 100)}% dei campioni "
+                               f"(serve {round(PAIR_MIN_SHARE * 100)}%)")
+            if not reasons:
+                candidates.append((share, tag, phone, numbers))
+            current = best_for_tag.get(tag["uid"])
+            if current is None or (share, count) > (current[0], current[1]):
+                best_for_tag[tag["uid"]] = (share, count, {**numbers, "reasons": reasons})
 
     for _, tag, phone, numbers in sorted(candidates, key=lambda c: -c[0]):
         if "paired_tag" in phone or "paired_with" in tag:
@@ -374,3 +392,11 @@ def pair_tracks(tracks: list) -> None:
         tag["paired_with"] = phone["uid"]
         tag["pairing"] = numbers
         phone["paired_tag"] = tag["uid"]
+
+    for tag in tracks:
+        if tag["kind"] == "tag" and "paired_with" not in tag and tag["uid"] in best_for_tag:
+            numbers = best_for_tag[tag["uid"]][2]
+            if not numbers["reasons"]:
+                # Passava le soglie ma il telefono aveva già una radio più vicina
+                numbers["reasons"] = ["il telefono ha già un'altra radio che gli sta vicino più spesso"]
+            tag["pairing_candidate"] = numbers
