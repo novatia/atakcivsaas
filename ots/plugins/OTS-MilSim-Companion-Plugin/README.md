@@ -729,6 +729,16 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.35.0** — replay: **pannello dettagli** accanto alla mappa (sotto, su schermi stretti). Si apre
+  cliccando un operatore sulla mappa o il suo nome in legenda: utente, squadra, node id, da chi è stato
+  ricevuto (telefoni che l'hanno rilanciato / gateway MQTT, in percentuale), posizione, velocità, direzione e
+  batteria all'istante del player, riepilogo della sessione (percorso, interruzioni, consumo %/h) e grafici
+  di batteria e velocità con la linea del momento; passando il mouse si leggono ora e valori, cliccando il
+  player salta a quell'istante. **Radio abbinata**: un tag rilanciato per almeno l'80% da un telefono e
+  entro 30 m da lui nell'80% dei campioni (minimo 10) è la radio Bluetooth di quel telefono: la sua traccia è
+  nascosta (si può rimostrare), in legenda compare accanto al telefono (🔗) e il grafico della batteria del
+  telefono mostra anche quella della radio. Il pannello dice sempre perché li ha abbinati. Punti del replay
+  ora `[t, lat, lon, speed, direzione, batteria]`.
 - **3.34.0** — replay: **orologio di gioco** in alto a destra sulla mappa, con l'ora grande, il tempo
   trascorso dall'inizio (`T+hh:mm:ss`, dall'inizio evento o dalla luce verde della partita), stato ▶/⏸ e
   velocità. L'ora è nel fuso del calendario (`OTS_EVENTCALENDAR_TIMEZONE`), non in quello del PC da cui si

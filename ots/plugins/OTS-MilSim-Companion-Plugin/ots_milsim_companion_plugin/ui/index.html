@@ -92,6 +92,28 @@
   .rp-speed.on { background: var(--accent); color: #fff; border-color: var(--accent); }
   #rp-slider { width: 100%; margin-top: 10px; accent-color: var(--accent); }
   #rp-legend { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+  /* Mappa + pannello dettagli: affiancati, uno sotto l'altro su schermi stretti */
+  .rp-main { display: flex; gap: 10px; margin-top: 10px; align-items: stretch; }
+  .rp-main #rp-map { flex: 1; min-width: 0; margin-top: 0; }
+  .rp-info { width: 340px; flex: none; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+    overflow-y: auto; max-height: min(62vh, 560px); font-size: 13px; }
+  @media (max-width: 900px) { .rp-main { flex-direction: column; } .rp-info { width: auto; max-height: none; } }
+  .rp-info h3 { margin: 0 0 2px; font-size: 16px; display: flex; align-items: center; gap: 6px; }
+  .rp-info h4 { margin: 12px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .rp-info dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; }
+  .rp-info dt { color: var(--muted); }
+  .rp-info dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .rp-pair { border: 1px dashed var(--border); border-radius: 6px; padding: 6px 8px; margin-top: 8px; }
+  .rp-chart { position: relative; }
+  .rp-chart svg { display: block; width: 100%; cursor: crosshair; }
+  .rp-chart .rp-tip { position: absolute; top: 2px; pointer-events: none; background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; font-size: 11.5px; white-space: nowrap;
+    box-shadow: 0 1px 4px rgba(0,0,0,.25); display: none; font-variant-numeric: tabular-nums; }
+  .rp-chart-key { display: flex; gap: 12px; font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  .rp-chart-key svg { vertical-align: middle; }
+  .rp-pick { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
+  .rp-pick:hover .rp-pick-name, .rp-pick.sel .rp-pick-name { text-decoration: underline; }
+  .rp-marker.rp-sel .rp-name { outline: 2px solid var(--accent); }
   #rp-legend label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; font-size: 12.5px; }
   .rp-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; border: 2px solid #fff; box-shadow: 0 0 3px rgba(0,0,0,.5); flex: none; }
   .rp-marker { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
@@ -1035,13 +1057,19 @@ async function renderReplay(id, isMatch = false) {
       <span class="rp-clock" id="rp-clock"></span>
     </div>
     <input type="range" id="rp-slider" min="${data.start}" max="${data.end}" step="1">
-    <div id="rp-map"></div>
+    <div class="rp-main">
+      <div id="rp-map"></div>
+      <aside class="rp-info" id="rp-info"><p class="muted" style="margin:0">Clicca un operatore sulla mappa o il suo
+        nome nella legenda per vederne i dettagli: batteria, velocità, percorso, da chi è stato ricevuto.</p></aside>
+    </div>
     <div id="rp-legend"></div>
     <p class="muted" style="margin-top:6px">Vengono mostrati tutti gli EUD (●) e i tag LoRa Meshtastic (◆) che hanno
        inviato la posizione; appena si muovono il simbolo diventa un <b>▲ orientato verso la direzione di marcia</b>
        (non dove guardano: i tag non hanno bussola) e da fermi tiene l'ultima direzione affidabile. Sono colorati con la squadra <b>di quel momento</b> (per i tag: dell'utente a cui erano
        assegnati), presa dallo storico delle squadre; se qualcuno ha cambiato squadra durante la giocata vale quella
-       in cui è stato più a lungo. Usa le caselle qui sopra per nascondere le tracce che non ti interessano.</p>
+       in cui è stato più a lungo. Usa le caselle qui sopra per nascondere le tracce che non ti interessano.
+       Un tag che stava sempre col telefono che lo rilanciava è la <b>radio di quel telefono</b> (🔗): la sua traccia
+       è nascosta e i suoi dati sono nel pannello del telefono.</p>
     ${data.tracks.some(t => t.team_from_current) ? `<p class="muted">⚠️ Parte di questa giocata è precedente
        all'inizio dello storico delle squadre (versione 3.29.0): per quei momenti è usata la squadra attuale.</p>` : ""}`;
 
@@ -1084,11 +1112,15 @@ async function renderReplay(id, isMatch = false) {
       }),
       zIndexOffset: 100,
     });
-    const trail = L.polyline([], { color, weight: 3, opacity: 0.7, dashArray: isTag ? "6 5" : null }).addTo(map);
-    return { ...t, color, isTag, latlngs, marker, trail, onMap: false, visible: true, lastIdx: -2 };
+    // La radio abbinata a un telefono duplica la sua posizione: nascosta finché non la si chiede
+    const visible = !t.paired_with;
+    const trail = L.polyline([], { color, weight: 3, opacity: 0.7, dashArray: isTag ? "6 5" : null });
+    if (visible) trail.addTo(map);
+    return { ...t, color, isTag, latlngs, marker, trail, onMap: false, visible, lastIdx: -2 };
   });
+  tracks.forEach((t, i) => t.marker.on("click", () => rpSelect(i)));
 
-  const bounds = L.latLngBounds(tracks.flatMap(t => t.latlngs));
+  const bounds = L.latLngBounds(tracks.filter(t => t.visible).flatMap(t => t.latlngs));
   map.fitBounds(bounds.pad(0.1));
   // Se il contenitore non era ancora dimensionato (iframe/tab appena mostrati) rimisura e ricentra
   setTimeout(() => { map.invalidateSize(); map.fitBounds(bounds.pad(0.1)); }, 150);
@@ -1100,18 +1132,25 @@ async function renderReplay(id, isMatch = false) {
     start: data.start, end: data.end,
     clock: Math.max(data.start, firstT),
     speed: 1, playing: false, last: null, tz: data.timezone,
+    selected: null, teamNames: data.teams || {},
   };
 
   const teamNames = data.teams || {};
   document.getElementById("rp-legend").innerHTML = RP_TEAM_ORDER.map(team => {
-    const items = tracks.map((t, i) => [t, i]).filter(([t]) => (t.team || null) === team);
+    // Le radio abbinate non hanno una voce propria: compaiono accanto al loro telefono
+    const items = tracks.map((t, i) => [t, i]).filter(([t]) => (t.team || null) === team && !t.paired_with);
     if (!items.length) return "";
     const title = team ? (teamNames[team] || team) : "Senza squadra";
-    return `<div class="rp-group"><b style="color:${RP_TEAM_COLORS[team] || "inherit"}">${esc(title)}</b>${items.map(([t, i]) => `
-      <label title="${t.isTag ? `Tag LoRa Meshtastic${t.node_id ? " " + esc(t.node_id) : ""}` : "EUD ATAK"}">
-      <input type="checkbox" checked onchange="rpToggle(${i}, this.checked)">
-      <span class="rp-dot${t.isTag ? " tag" : ""}" style="background:${t.color}"></span>${t.isTag ? "📡 " : ""}${esc(t.callsign)}
-      <span class="muted">(${t.points.length} punti)</span></label>`).join("")}</div>`;
+    return `<div class="rp-group"><b style="color:${RP_TEAM_COLORS[team] || "inherit"}">${esc(title)}</b>${items.map(([t, i]) => {
+      const radio = t.paired_tag ? tracks.find(r => r.uid === t.paired_tag) : null;
+      return `<span style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px"
+        title="${t.isTag ? `Tag LoRa Meshtastic${t.node_id ? " " + esc(t.node_id) : ""}` : "EUD ATAK"}">
+      <input type="checkbox" checked onchange="rpToggle(${i}, this.checked)" aria-label="Mostra ${esc(t.callsign)}">
+      <button class="rp-pick" id="rp-pick-${i}" onclick="rpSelect(${i})">
+        <span class="rp-dot${t.isTag ? " tag" : ""}" style="background:${t.color}"></span><span class="rp-pick-name">${t.isTag ? "📡 " : ""}${esc(t.callsign)}</span>
+      </button>${radio ? `<span class="muted" title="Radio abbinata: la sua posizione coincide con quella del telefono">🔗 📡 ${esc(radio.callsign)}</span>` : ""}
+      <span class="muted">(${t.points.length} punti)</span></span>`;
+    }).join("")}</div>`;
   }).join("");
 
   document.getElementById("rp-play").onclick = () => rpSetPlaying(!RP.playing);
@@ -1177,6 +1216,242 @@ function rpLocate(points, t) {
   return ans;
 }
 
+/* ---- Pannello dettagli dell'operatore selezionato ---- */
+const RP_WINDS = ["N", "NE", "E", "SE", "S", "SO", "O", "NO"];
+
+function rpWind(deg) { return `${RP_WINDS[Math.round(deg / 45) % 8]} ${deg}°`; }
+
+// Ultimo indice con t <= clock e, se c'è, il valore della colonna `col` lì (null fuori traccia)
+function rpValueAt(t, col, clock) {
+  const i = rpLocate(t.points, clock);
+  return i < 0 ? null : t.points[i][col];
+}
+
+function rpDistanceM(lat1, lon1, lat2, lon2) {
+  const rad = Math.PI / 180;
+  const x = (lon2 - lon1) * rad * Math.cos((lat1 + lat2) / 2 * rad), y = (lat2 - lat1) * rad;
+  return Math.hypot(x, y) * 6371000;
+}
+
+// Riepilogo della sessione: distanza (solo spostamenti oltre 8 m, come per la direzione:
+// il GPS fermo "balla" e gonfierebbe il totale), interruzioni oltre 2 minuti, batteria
+function rpStats(t) {
+  const p = t.points;
+  let dist = 0, anchor = p[0], gaps = 0, gapTime = 0;
+  for (let i = 1; i < p.length; i++) {
+    const dt = p[i][0] - p[i - 1][0];
+    if (dt > 120) { gaps++; gapTime += dt; anchor = p[i]; continue; }
+    const d = rpDistanceM(anchor[1], anchor[2], p[i][1], p[i][2]);
+    if (d >= 8) { dist += d; anchor = p[i]; }
+  }
+  const withBat = p.filter(q => q[5] != null);
+  let battery = null;
+  if (withBat.length) {
+    const a = withBat[0], b = withBat[withBat.length - 1], hours = (b[0] - a[0]) / 3600;
+    battery = { from: a[5], to: b[5], perHour: hours >= 0.25 ? (a[5] - b[5]) / hours : null };
+  }
+  return { dist, gaps, gapTime, battery, first: p[0][0], last: p[p.length - 1][0] };
+}
+
+function rpTeamPill(t) {
+  if (!t.team) return `<span class="muted">senza squadra</span>`;
+  return `<span class="pill" style="${pillColor(RP_TEAM_COLORS[t.team] || "#616161")}">${esc(RP.teamNames[t.team] || t.team)}</span>`;
+}
+
+function rpPairingText(n) {
+  return `rilanciata da quel telefono nel ${Math.round(n.relay_share * 100)}% dei pacchetti e a meno di
+    ${n.radius_m} m da lui nel ${Math.round(n.close_share * 100)}% dei ${n.samples} campioni
+    (distanza tipica ${n.median_m} m)`;
+}
+
+// Grafico a linee su tutta la finestra del replay, con la linea del momento attuale.
+// series: [{ name, color, dash, col, track }] — tutte sulla stessa scala (un solo asse y).
+function rpChart(id, title, series, yMax, unit) {
+  const box = document.getElementById("rp-info");
+  const W = Math.max(240, (box ? box.clientWidth : 320) - 26), H = 96, L = 30, R = 6, T = 6, B = 16;
+  const x = tt => L + (tt - RP.start) / Math.max(1, RP.end - RP.start) * (W - L - R);
+  const y = v => T + (1 - v / yMax) * (H - T - B);
+  const paths = series.map(s => {
+    let d = "", prev = null;
+    for (const p of s.track.points) {
+      const v = p[s.col];
+      if (v == null) { prev = null; continue; }
+      // Buco oltre 2 minuti o valore mancante: la linea si interrompe, non inventa
+      d += (prev && p[0] - prev[0] <= 120 ? "L" : "M") + x(p[0]).toFixed(1) + " " + y(Math.min(v, yMax)).toFixed(1);
+      prev = p;
+    }
+    return d ? `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round"
+      stroke-linecap="round" ${s.dash ? 'stroke-dasharray="5 4"' : ""}/>` : "";
+  });
+  if (!paths.some(Boolean)) {
+    return `<h4>${title}</h4><p class="muted" style="margin:0">Nessun dato in questa giocata.</p>`;
+  }
+  const ticks = [0, yMax / 2, yMax].map(v => `
+    <line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--border)" stroke-width="1"/>
+    <text x="${L - 4}" y="${y(v) + 3.5}" text-anchor="end" font-size="10" fill="var(--muted)">${Math.round(v)}</text>`).join("");
+  const times = [RP.start, (RP.start + RP.end) / 2, RP.end].map((tt, k) => `
+    <text x="${x(tt)}" y="${H - 3}" text-anchor="${["start", "middle", "end"][k]}" font-size="10" fill="var(--muted)">${rpClock(tt).slice(0, 5)}</text>`).join("");
+  const key = series.length > 1 ? `<div class="rp-chart-key">${series.map(s => `<span>
+      <svg width="22" height="8"><line x1="1" x2="21" y1="4" y2="4" stroke="${s.color}" stroke-width="2" ${s.dash ? 'stroke-dasharray="5 4"' : ""}/></svg>
+      ${esc(s.name)}</span>`).join("")}</div>` : "";
+  RP.charts.push({ id, series, x, W, L, R, unit });
+  return `<h4>${title}</h4>
+    <div class="rp-chart" id="${id}">
+      <svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="${esc(title)}">
+        ${ticks}${times}${paths.join("")}
+        <line id="${id}-cur" y1="${T}" y2="${H - B}" stroke="var(--text)" stroke-width="1.5" opacity=".75"/>
+        <rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"/>
+      </svg>
+      <div class="rp-tip"></div>
+    </div>${key}`;
+}
+
+// Hover: ora e valori sotto il puntatore; click: il player salta a quell'istante
+function rpBindChart(c) {
+  const wrap = document.getElementById(c.id);
+  if (!wrap) return;
+  const svg = wrap.querySelector("svg"), tip = wrap.querySelector(".rp-tip");
+  const timeAt = ev => {
+    const r = svg.getBoundingClientRect();
+    const px = (ev.clientX - r.left) / r.width * c.W;
+    const f = Math.min(1, Math.max(0, (px - c.L) / (c.W - c.L - c.R)));
+    return RP.start + f * (RP.end - RP.start);
+  };
+  svg.addEventListener("mousemove", ev => {
+    const tt = timeAt(ev);
+    const vals = c.series.map(s => {
+      const v = rpValueAt(s.track, s.col, tt);
+      return `${c.series.length > 1 ? esc(s.name) + ": " : ""}${v == null ? "—" : Math.round(v) + c.unit}`;
+    });
+    tip.innerHTML = `<b>${rpClock(tt)}</b> · ${vals.join(" · ")}`;
+    tip.style.display = "block";
+    const r = svg.getBoundingClientRect(), left = ev.clientX - r.left;
+    tip.style.left = Math.min(Math.max(0, left - tip.offsetWidth / 2), r.width - tip.offsetWidth) + "px";
+  });
+  svg.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+  svg.addEventListener("click", ev => {
+    RP.clock = timeAt(ev);
+    const slider = document.getElementById("rp-slider");
+    if (slider) slider.value = RP.clock;
+    rpUpdate(false);
+  });
+}
+
+function rpSelect(index) {
+  if (!RP) return;
+  const prev = RP.selected;
+  RP.selected = index;
+  document.querySelectorAll(".rp-pick").forEach(b => b.classList.toggle("sel", b.id === `rp-pick-${index}`));
+  for (const k of [prev, index]) {
+    if (k == null) continue;
+    const el = RP.tracks[k].marker.getElement();
+    if (el) el.querySelector(".rp-marker").classList.toggle("rp-sel", k === index);
+  }
+  rpRenderInfo();
+}
+
+function rpShowPaired(index, show) {
+  rpToggle(index, show);
+  rpRenderInfo();
+}
+
+function rpRenderInfo() {
+  const box = document.getElementById("rp-info");
+  if (!box || RP.selected == null) return;
+  const t = RP.tracks[RP.selected];
+  const idxOf = uid => RP.tracks.findIndex(r => r.uid === uid);
+  const radio = t.paired_tag ? RP.tracks[idxOf(t.paired_tag)] : null;
+  const phone = t.paired_with ? RP.tracks[idxOf(t.paired_with)] : null;
+  const st = rpStats(t);
+  const fmtH = sec => `${Math.floor(sec / 3600)} h ${String(Math.round(sec / 60) % 60).padStart(2, "0")} min`;
+  RP.charts = [];
+
+  let pair = "";
+  if (radio) {
+    const ri = idxOf(radio.uid);
+    pair = `<div class="rp-pair">🔗 <b>Radio abbinata: 📡 ${esc(radio.callsign)}</b>${radio.node_id ? ` <span class="muted">${esc(radio.node_id)}</span>` : ""}<br>
+      <span class="muted">Riconosciuta perché ${rpPairingText(radio.pairing)}. La sua posizione è nascosta: è quella del telefono.</span><br>
+      <label><input type="checkbox" ${radio.visible ? "checked" : ""} onchange="rpShowPaired(${ri}, this.checked)"> mostra anche la sua traccia</label>
+      · <button class="rp-pick" onclick="rpSelect(${ri})"><span class="rp-pick-name">dettagli della radio</span></button></div>`;
+  } else if (phone) {
+    pair = `<div class="rp-pair">🔗 <b>Radio del telefono ${esc(phone.callsign)}</b><br>
+      <span class="muted">Riconosciuta perché ${rpPairingText(t.pairing)}.</span><br>
+      <label><input type="checkbox" ${t.visible ? "checked" : ""} onchange="rpShowPaired(${RP.selected}, this.checked)"> mostra la sua traccia</label>
+      · <button class="rp-pick" onclick="rpSelect(${idxOf(phone.uid)})"><span class="rp-pick-name">dettagli del telefono</span></button></div>`;
+  }
+
+  let received = "";
+  if (t.isTag) {
+    const rel = t.relayers || {}, total = Object.values(rel).reduce((a, b) => a + b, 0) || 1;
+    const names = Object.entries(rel).sort((a, b) => b[1] - a[1]).map(([via, n]) => {
+      const who = via === "mqtt" ? "gateway MQTT" : "📱 " + esc((RP.tracks[idxOf(via)] || { callsign: via }).callsign);
+      return `${who} ${Math.round(n / total * 100)}%`;
+    });
+    received = `<dt>Ricevuto da</dt><dd>${names.join("<br>") || "—"}</dd>`;
+  }
+
+  const batSeries = [{ name: t.isTag ? "radio" : "telefono", color: t.color, dash: t.isTag, col: 5, track: t }];
+  // Telefono e sua radio: stesso colore (è la stessa persona), li distinguono tratteggio ed etichetta
+  if (radio) batSeries.push({ name: "📡 " + radio.callsign, color: t.color, dash: true, col: 5, track: radio });
+  if (phone) {
+    batSeries[0].color = phone.color;
+    batSeries.unshift({ name: "📱 " + phone.callsign, color: phone.color, dash: false, col: 5, track: phone });
+  }
+  const bat = st.battery;
+
+  box.innerHTML = `
+    <h3><span class="rp-dot${t.isTag ? " tag" : ""}" style="background:${t.color}"></span>${t.isTag ? "📡 " : "📱 "}${esc(t.callsign)}</h3>
+    <div class="muted">${t.isTag ? "Tag LoRa Meshtastic" : "EUD ATAK"} · ${rpTeamPill(t)}</div>
+    <dl style="margin-top:8px">
+      <dt>Utente</dt><dd>${t.user ? esc(t.user) : '<span class="muted">non assegnato</span>'}</dd>
+      ${t.node_id ? `<dt>Node id</dt><dd>${esc(t.node_id)}</dd>` : ""}
+      ${received}
+    </dl>
+    ${pair}
+    <h4>In questo momento</h4>
+    <dl id="rp-now"></dl>
+    <h4>Sessione</h4>
+    <dl>
+      <dt>Dati</dt><dd>${rpClock(st.first).slice(0, 5)} → ${rpClock(st.last).slice(0, 5)} · ${t.points.length} punti</dd>
+      <dt>Percorso</dt><dd>${(st.dist / 1000).toFixed(2)} km</dd>
+      <dt>Interruzioni</dt><dd>${st.gaps ? `${st.gaps} oltre 2 min (${fmtH(st.gapTime)} in tutto)` : "nessuna"}</dd>
+      <dt>Batteria</dt><dd>${bat ? `${bat.from}% → ${bat.to}%${bat.perHour != null ? ` · ${bat.perHour.toFixed(1)}%/h` : ""}` : '<span class="muted">non riportata</span>'}</dd>
+    </dl>
+    ${rpChart("rp-ch-bat", "Batteria %", batSeries, 100, "%")}
+    ${rpChart("rp-ch-speed", "Velocità km/h", [{ name: "velocità", color: t.color, dash: false, col: 3,
+      track: { points: t.points.map(p => [p[0], 0, 0, p[3] == null ? null : p[3] * 3.6]) } }],
+      Math.max(10, Math.ceil(Math.max(...t.points.map(p => (p[3] || 0) * 3.6)) / 5) * 5), " km/h")}`;
+  RP.charts.forEach(rpBindChart);
+  rpInfoTick();
+}
+
+// Parte del pannello che segue l'orologio del player
+function rpInfoTick() {
+  if (!RP || RP.selected == null) return;
+  const t = RP.tracks[RP.selected];
+  const now = document.getElementById("rp-now");
+  if (now) {
+    const i = rpLocate(t.points, RP.clock);
+    if (i < 0) {
+      now.innerHTML = `<dt>Stato</dt><dd class="muted">non ancora in gioco</dd>`;
+    } else {
+      const p = t.points[i], age = RP.clock - p[0];
+      const radio = t.paired_tag ? RP.tracks.find(r => r.uid === t.paired_tag) : null;
+      const rb = radio ? rpValueAt(radio, 5, RP.clock) : null;
+      now.innerHTML = `
+        <dt>Ultimo dato</dt><dd>${rpClock(p[0])}${age > 120 ? ` <span class="pill warn">${Math.round(age / 60)} min fa</span>` : ""}</dd>
+        <dt>Posizione</dt><dd>${p[1].toFixed(5)}, ${p[2].toFixed(5)}</dd>
+        <dt>Velocità</dt><dd>${p[3] == null ? "—" : (p[3] * 3.6).toFixed(1) + " km/h"}</dd>
+        <dt>Direzione</dt><dd>${p[4] == null ? '<span class="muted">non ancora nota</span>' : rpWind(p[4])}</dd>
+        <dt>Batteria</dt><dd>${p[5] == null ? "—" : p[5] + "%"}${radio ? ` · 📡 ${rb == null ? "—" : rb + "%"}` : ""}</dd>`;
+    }
+  }
+  for (const c of RP.charts || []) {
+    const cur = document.getElementById(`${c.id}-cur`);
+    if (cur) { const xx = c.x(RP.clock); cur.setAttribute("x1", xx); cur.setAttribute("x2", xx); }
+  }
+}
+
 function rpSetHeading(t) {
   const el = t.marker.getElement();
   if (!el) return;
@@ -1185,6 +1460,7 @@ function rpSetHeading(t) {
   dot.style.display = known ? "none" : "";
   tri.style.display = known ? "" : "none";
   if (known) tri.style.transform = `rotate(${t.heading}deg)`;
+  el.querySelector(".rp-marker").classList.toggle("rp-sel", RP.selected != null && RP.tracks[RP.selected] === t);
 }
 
 function rpUpdate(fromLoop) {
@@ -1221,6 +1497,7 @@ function rpUpdate(fromLoop) {
   }
   const clockEl = document.getElementById("rp-clock");
   if (clockEl) clockEl.textContent = rpClock(clock);
+  rpInfoTick();
   const ovTime = document.getElementById("rp-ov-time");
   if (ovTime) {
     ovTime.textContent = rpClock(clock);

@@ -122,9 +122,10 @@ def track_key(uid: str | None, device_uid: str | None, tags: TagIndex) -> tuple[
 
 
 def build_tracks(rows, tags: TagIndex, euds: dict, team_at, step: int) -> list[dict]:
-    """Tracce del replay da righe (t, uid, device_uid, lat, lon, speed, course)
-    ordinate per tempo. Ogni punto esce come [t, lat, lon, speed, direzione]
-    (direzione di marcia in gradi, vedi headings()). `euds`: uid → (callsign, user_id) degli ATAK.
+    """Tracce del replay da righe (t, uid, device_uid, lat, lon, speed, course, battery)
+    ordinate per tempo. Ogni punto esce come [t, lat, lon, speed, direzione, batteria]
+    (direzione di marcia in gradi, vedi headings()). Ogni tag porta anche
+    `relayers`: chi l'ha fatto arrivare al server, {uid telefono | "mqtt": righe}. `euds`: uid → (callsign, user_id) degli ATAK.
 
     `team_at(owner, t)` → (squadra o None, dallo storico?) con owner
     {"user_id": ...} per un EUD o {"tag_key": ..., "user_id": ...} per un tag
@@ -139,13 +140,21 @@ def build_tracks(rows, tags: TagIndex, euds: dict, team_at, step: int) -> list[d
     owners: dict[str, dict] = {}
     last_kept: dict[str, float] = {}
     courses: dict[str, list] = {}
-    for t, uid, device_uid, lat, lon, speed, course in rows:
+    relayers: dict[str, dict] = {}
+    for t, uid, device_uid, lat, lon, speed, course, battery in rows:
         if lat is None or lon is None or (not lat and not lon):
             continue  # (0, 0) = nessun fix GPS
         found = track_key(uid, device_uid, tags)
         if not found:
             continue
         key, tag = found
+        if tag:
+            # Contate tutte le righe, anche quelle che il downsampling scarta:
+            # servono a sapere chi rilanciava il tag e quanto spesso
+            via = "mqtt" if tags.lookup(device_uid) is tag else device_uid
+            if via:
+                counts = relayers.setdefault(key, {})
+                counts[via] = counts.get(via, 0) + 1
         if key in last_kept and t - last_kept[key] < step:
             continue
         last_kept[key] = t
@@ -158,17 +167,24 @@ def build_tracks(rows, tags: TagIndex, euds: dict, team_at, step: int) -> list[d
                 callsign, user_id = euds.get(key, (None, None))
                 owners[key] = {"user_id": user_id}
                 track = {"uid": key, "callsign": callsign or key, "kind": "eud"}
+            track["user_id"] = owners[key]["user_id"]
             track["points"] = []
             tracks[key] = track
             courses[key] = []
-        courses[key].append(course)
+        courses[key].append((course, battery))
         track["points"].append(
             [round(t, 1), round(lat, 6), round(lon, 6), round(speed, 1) if speed is not None else None]
         )
 
     for key, track in tracks.items():
-        for point, heading in zip(track["points"], headings(track["points"], courses[key])):
-            point.append(heading)
+        extra = courses[key]
+        for point, heading, (_, battery) in zip(
+            track["points"], headings(track["points"], [c for c, _ in extra]), extra
+        ):
+            # Batteria 0 = «non riportata» (OTS non distingue): meglio un buco nel grafico
+            point.extend([heading, round(battery) if battery else None])
+        if track["kind"] == "tag":
+            track["relayers"] = relayers.get(key, {})
 
         votes: dict = {}
         from_current = False
@@ -180,6 +196,7 @@ def build_tracks(rows, tags: TagIndex, euds: dict, team_at, step: int) -> list[d
         track["team"] = max(votes, key=lambda team: (votes[team], team is not None))
         track["team_from_current"] = from_current
 
+    pair_tracks(list(tracks.values()))
     order = {TEAM_A: 0, TEAM_B: 1, OBSERVERS: 2, None: 3}
     return sorted(
         tracks.values(),
@@ -273,3 +290,87 @@ def headings(points: list, courses: list) -> list:
         prev_t = t
         result.append(heading)
     return result
+
+
+# ----------------------------------------------------------------------
+# Radio abbinata a un telefono
+# ----------------------------------------------------------------------
+#
+# Un telefono col plugin Meshtastic di ATAK è collegato via Bluetooth a una
+# radio (spesso un tag): la radio trasmette anche la SUA posizione, che il
+# telefono rilancia come un tag qualsiasi. Nei dati non c'è scritto «questa
+# è la radio di quel telefono»; lo si riconosce da due fatti insieme:
+#   - il tag è rilanciato (quasi solo) da quel telefono;
+#   - per quasi tutta la sessione sta dove sta il telefono.
+# Un tag di un altro giocatore, solo rilanciato, si muove per conto suo. Il
+# caso che sfugge è un compagno che cammina accanto per tutta la giocata:
+# per questo i numeri della decisione escono nella traccia e la UI li mostra.
+
+PAIR_RADIUS_M = 30.0      # «stesso posto», con due GPS diversi
+PAIR_MIN_SHARE = 0.8      # quota di campioni del tag entro il raggio
+PAIR_MIN_RELAY = 0.8      # quota di righe del tag arrivate da quel telefono
+PAIR_MIN_SAMPLES = 10     # sotto, troppo poco per decidere
+PAIR_MAX_DT = 120.0       # posizione del telefono interpolata solo fra punti vicini nel tempo
+
+
+def _position_at(points: list, t: float):
+    """Posizione interpolata della traccia all'istante t, None se lì non c'è."""
+    if not points or t < points[0][0] or t > points[-1][0]:
+        return None
+    lo, hi = 0, len(points) - 1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if points[mid][0] <= t:
+            lo = mid
+        else:
+            hi = mid - 1
+    a = points[lo]
+    if a[0] == t or lo == len(points) - 1:
+        return a[1], a[2]
+    b = points[lo + 1]
+    if b[0] - a[0] > PAIR_MAX_DT:
+        return None
+    f = (t - a[0]) / (b[0] - a[0])
+    return a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f
+
+
+def pair_tracks(tracks: list) -> None:
+    """Segna le coppie telefono ↔ radio: sul tag `paired_with` (uid del
+    telefono) e `pairing` (i numeri della decisione), sul telefono
+    `paired_tag`. Un telefono ha al massimo una radio: se più tag passano la
+    soglia vince quello che gli sta vicino più spesso."""
+    by_uid = {t["uid"]: t for t in tracks}
+    candidates = []
+    for tag in tracks:
+        if tag["kind"] != "tag":
+            continue
+        relayers = tag.get("relayers") or {}
+        total = sum(relayers.values())
+        for phone_uid, count in relayers.items():
+            phone = by_uid.get(phone_uid)
+            if not phone or phone["kind"] != "eud" or count / total < PAIR_MIN_RELAY:
+                continue
+            distances = []
+            for point in tag["points"]:
+                where = _position_at(phone["points"], point[0])
+                if where:
+                    distances.append(_distance_m(point[1], point[2], where[0], where[1]))
+            if len(distances) < PAIR_MIN_SAMPLES:
+                continue
+            share = sum(d <= PAIR_RADIUS_M for d in distances) / len(distances)
+            if share >= PAIR_MIN_SHARE:
+                distances.sort()
+                candidates.append((share, tag, phone, {
+                    "relay_share": round(count / total, 2),
+                    "close_share": round(share, 2),
+                    "median_m": round(distances[len(distances) // 2], 1),
+                    "samples": len(distances),
+                    "radius_m": PAIR_RADIUS_M,
+                }))
+
+    for _, tag, phone, numbers in sorted(candidates, key=lambda c: -c[0]):
+        if "paired_tag" in phone or "paired_with" in tag:
+            continue
+        tag["paired_with"] = phone["uid"]
+        tag["pairing"] = numbers
+        phone["paired_tag"] = tag["uid"]

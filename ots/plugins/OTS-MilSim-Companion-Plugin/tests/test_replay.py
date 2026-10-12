@@ -32,7 +32,7 @@ def current_team_at(owner, t):
 
 def build(rows, tags=(TAG,), mesh_euds=(MESH_EUD,), relay_uids=(), step=0, team_at=current_team_at):
     index = replay.TagIndex(list(tags), list(mesh_euds), relay_uids)
-    rows = [r if len(r) == 7 else (*r, None) for r in rows]   # course non rilevante qui
+    rows = [(*r, *([None] * (8 - len(r)))) for r in rows]   # course e batteria non rilevanti qui
     return replay.build_tracks(rows, index, {PHONE: ("ALFA-1", 10)}, team_at, step)
 
 
@@ -50,7 +50,7 @@ def test_tag_rilanciato_non_finisce_nella_traccia_del_telefono():
         (101.0, "TRACKER-01", PHONE, 45.2, 9.2, 0),   # relay ATAK (Path A)
     ])
     by_uid = {t["uid"]: t for t in tracks}
-    assert by_uid[PHONE]["points"] == [[100.0, 45.1, 9.1, 0, None]]
+    assert by_uid[PHONE]["points"] == [[100.0, 45.1, 9.1, 0, None, None]]
     tag = by_uid["tag:!bbad0ac8"]
     assert tag["kind"] == "tag" and tag["callsign"] == "T-ALFA-1"
     assert tag["team"] == replay.TEAM_B       # squadra del proprietario, non del telefono
@@ -204,3 +204,46 @@ def test_niente_direzione_attraverso_un_buco():
 def test_build_tracks_aggiunge_la_direzione():
     tracks = build([(0.0, PHONE, PHONE, 45.0, 9.0, 0, None), (5.0, PHONE, PHONE, 45.0 + NORTH, 9.0, 0, None)])
     assert [p[4] for p in tracks[0]["points"]] == [None, 0]
+
+
+# ----------------------------------------------------------------------
+# Batteria, rilanci e radio abbinata
+# ----------------------------------------------------------------------
+
+def test_batteria_e_chi_ha_rilanciato():
+    tracks = build([
+        (0.0, PHONE, PHONE, 45.0, 9.0, 0, None, 80.0),
+        (0.0, "TRACKER-01", PHONE, 45.5, 9.5, 0, None, 93.0),
+        (1.0, "TRACKER-01", PHONE, 45.5, 9.5, 0, None, 93.0),          # doppione: scartato ma contato
+        (5.0, "uuid", "bbad0ac8", 45.5, 9.5, 0, None, 0.0),             # via MQTT, batteria non riportata
+    ], step=5)
+    by_uid = {t["uid"]: t for t in tracks}
+    assert by_uid[PHONE]["points"][0][5] == 80
+    tag = by_uid["tag:!bbad0ac8"]
+    assert tag["relayers"] == {PHONE: 2, "mqtt": 1}
+    assert [p[5] for p in tag["points"]] == [93, None]
+
+
+def _walk(uid, sender, offset_lat=0.0, n=20, battery=90.0):
+    # Cammina verso nord a ~1 m/s, un punto ogni 10 s
+    return [(i * 10.0, uid, sender, 45.0 + offset_lat + i * 0.00009, 9.0, 1.0, None, battery) for i in range(n)]
+
+
+def test_radio_abbinata_al_telefono_che_la_porta():
+    rows = sorted(_walk(PHONE, PHONE) + _walk("TRACKER-01", PHONE, offset_lat=0.00005), key=lambda r: r[0])
+    by_uid = {t["uid"]: t for t in build(rows)}
+    tag = by_uid["tag:!bbad0ac8"]
+    assert tag["paired_with"] == PHONE and by_uid[PHONE]["paired_tag"] == "tag:!bbad0ac8"
+    assert tag["pairing"]["close_share"] == 1.0 and tag["pairing"]["median_m"] < 10
+
+
+def test_tag_di_un_altro_solo_rilanciato_non_e_abbinato():
+    # Stesso telefono che rilancia, ma il tag sta a ~1 km
+    rows = sorted(_walk(PHONE, PHONE) + _walk("TRACKER-01", PHONE, offset_lat=0.01), key=lambda r: r[0])
+    by_uid = {t["uid"]: t for t in build(rows)}
+    assert "paired_with" not in by_uid["tag:!bbad0ac8"] and "paired_tag" not in by_uid[PHONE]
+
+
+def test_troppi_pochi_campioni_per_decidere():
+    rows = sorted(_walk(PHONE, PHONE, n=5) + _walk("TRACKER-01", PHONE, n=5), key=lambda r: r[0])
+    assert all("paired_with" not in t for t in build(rows))

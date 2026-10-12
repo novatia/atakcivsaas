@@ -754,6 +754,7 @@ def _gps_tracks(start_utc: datetime, end_utc: datetime, step: int, match_roles: 
     rows = (
         db.session.query(
             Point.timestamp, Point.uid, Point.device_uid, Point.latitude, Point.longitude, Point.speed, Point.course,
+            Point.battery,
         )
         .filter(Point.timestamp >= start, Point.timestamp <= end)
         .filter(Point.latitude.isnot(None), Point.longitude.isnot(None))
@@ -761,11 +762,15 @@ def _gps_tracks(start_utc: datetime, end_utc: datetime, step: int, match_roles: 
     )
     tracks = replay.build_tracks(
         (
-            (ts.replace(tzinfo=timezone.utc).timestamp(), uid, device_uid, lat, lon, speed, course)
-            for ts, uid, device_uid, lat, lon, speed, course in rows
+            (ts.replace(tzinfo=timezone.utc).timestamp(), uid, device_uid, lat, lon, speed, course, battery)
+            for ts, uid, device_uid, lat, lon, speed, course, battery in rows
         ),
         tags, euds, team_at, step,
     )
+    # Proprietario attuale e callsign dei telefoni, per il pannello dettagli del player
+    usernames = {u.id: u.username for u in db.session.query(User).all()}
+    for track in tracks:
+        track["user"] = usernames.get(track.pop("user_id", None))
 
     # Nomi in legenda: le squadre della partita, o la mappatura valida a fine finestra
     end_ts = end_utc.timestamp()
