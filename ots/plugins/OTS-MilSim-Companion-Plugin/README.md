@@ -729,6 +729,15 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.37.0** — **strumenti diagnostici del replay** (spenti di default, tab Manutenzione): raggio radio
+  teorico in campo aperto per preset LoRa (link budget di Meshtastic, modello a due raggi con antenne a
+  1,5 m), **bolla** di portata che toglie l'attenuazione della vegetazione attraversata (Weissberger;
+  densità da ESA WorldCover × NDVI Sentinel-2) e layer **Sentinel-2** a colori veri. La scena è quella
+  del giorno della giocata o la più vicina prima o dopo, entro 20 giorni (configurabile), scartando quelle
+  coperte sulla zona; i dati si scaricano dai bucket pubblici AWS (nessun account) una volta per zona e
+  data. Parametri configurabili: preset, potenza, antenna, perdita del corpo, margine, altezza. **Quartier
+  generale** sulla mappa: dalla posizione fissa trasmessa dal gateway meshtasticd (node id) o scritta a
+  mano, con la sua bolla all'altezza dell'antenna. Sentinel-3 escluso: pixel da 300 m.
 - **3.36.0** — pannello dettagli del replay: riga **Stima totale** dei km quando ci sono interruzioni.
   Per ogni interruzione (oltre 2 min senza dati): velocità media effettiva, soste comprese, nei 15 minuti
   prima e dopo, moltiplicata per la durata; mai meno della linea d'aria fra il punto prima e quello dopo

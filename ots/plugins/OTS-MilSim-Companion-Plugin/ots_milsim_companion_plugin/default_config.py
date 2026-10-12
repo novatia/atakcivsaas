@@ -81,6 +81,33 @@ class DefaultConfig:
     # alle aree disegnate solo 7 giorni: poi ATAK le scarta all'import.
     OTS_MILSIM_DP_FIX_STALE_YEARS = 5
 
+    # ---- Strumenti diagnostici del replay (tab Manutenzione) -----------
+    # Spenti di default: scaricano dati d'ambiente da Internet (WorldCover,
+    # Sentinel-2) e disegnano stime, non misure.
+    OTS_MILSIM_DIAGNOSTICS = False
+    # Preset LoRa in uso sul campo: non viaggia nei CoT, va dichiarato
+    OTS_MILSIM_DIAG_PRESET = "LONG_FAST"
+    # Potenza e antenna dei tag. 22 dBm / 0 dBi sono il riferimento dei
+    # link budget di Meshtastic; un T-Beam con SX1276 arriva a 20 dBm
+    OTS_MILSIM_DIAG_TX_DBM = 22.0
+    OTS_MILSIM_DIAG_ANTENNA_DBI = 0.0
+    # Perdita dovuta al corpo per ogni operatore con la radio addosso (spalla)
+    OTS_MILSIM_DIAG_BODY_LOSS_DB = 3.0
+    # Margine per fading e interferenze: senza, la bolla è il caso ideale
+    OTS_MILSIM_DIAG_MARGIN_DB = 10.0
+    OTS_MILSIM_DIAG_TAG_HEIGHT_M = 1.5
+    # Distanza massima (giorni, prima o dopo la giocata) della scena Sentinel-2
+    OTS_MILSIM_DIAG_MAX_SCENE_DAYS = 20
+
+    # ---- Quartier generale (gateway meshtasticd) ------------------------
+    # Node id del gateway: se trasmette la sua posizione (posizione fissa con
+    # `meshtastic --setlat/--setlon`, nessun GPS necessario) la si prende da lì
+    OTS_MILSIM_HQ_NODE_ID = ""
+    # Altrimenti posizione a mano (0, 0 = non impostata)
+    OTS_MILSIM_HQ_LAT = 0.0
+    OTS_MILSIM_HQ_LON = 0.0
+    OTS_MILSIM_HQ_HEIGHT_M = 3.0
+
     @staticmethod
     def validate(config: dict) -> dict:
         try:
@@ -131,6 +158,33 @@ class DefaultConfig:
                             "success": False,
                             "error": f"{key} should be one of {', '.join(FALLBACK_POLICIES)}",
                         }
+                if key == "OTS_MILSIM_DIAGNOSTICS" and not isinstance(value, bool):
+                    return {"success": False, "error": f"{key} should be a boolean"}
+                if key == "OTS_MILSIM_DIAG_PRESET":
+                    from .radio import PRESETS
+
+                    if value not in PRESETS:
+                        return {"success": False, "error": f"{key} should be one of {', '.join(PRESETS)}"}
+                numeric = {
+                    "OTS_MILSIM_DIAG_TX_DBM": (0, 30),
+                    "OTS_MILSIM_DIAG_ANTENNA_DBI": (-10, 15),
+                    "OTS_MILSIM_DIAG_BODY_LOSS_DB": (0, 30),
+                    "OTS_MILSIM_DIAG_MARGIN_DB": (0, 40),
+                    "OTS_MILSIM_DIAG_TAG_HEIGHT_M": (0.1, 50),
+                    "OTS_MILSIM_DIAG_MAX_SCENE_DAYS": (1, 90),
+                    "OTS_MILSIM_HQ_LAT": (-90, 90),
+                    "OTS_MILSIM_HQ_LON": (-180, 180),
+                    "OTS_MILSIM_HQ_HEIGHT_M": (0.1, 200),
+                }
+                if key in numeric:
+                    low, high = numeric[key]
+                    if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
+                        return {"success": False, "error": f"{key} should be a number between {low} and {high}"}
+                if key == "OTS_MILSIM_HQ_NODE_ID" and value:
+                    from .mesh import normalize_node_id
+
+                    if not isinstance(value, str) or normalize_node_id(value) is None:
+                        return {"success": False, "error": f"{key} should be a Meshtastic node id like !a1b2c3d4"}
                 if key == "OTS_MILSIM_DP_FIX_STALE_YEARS" and (
                     not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 50
                 ):

@@ -114,6 +114,11 @@
   .rp-pick { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
   .rp-pick:hover .rp-pick-name, .rp-pick.sel .rp-pick-name { text-decoration: underline; }
   .rp-marker.rp-sel .rp-name { outline: 2px solid var(--accent); }
+  /* Strumenti diagnostici del replay */
+  .rp-diag { margin-top: 8px; padding: 6px 10px; border: 1px dashed var(--border); border-radius: 8px; font-size: 13px; }
+  .rp-diag label { display: inline-flex; align-items: center; gap: 4px; }
+  .rp-diag-status { flex-basis: 100%; font-size: 12px; }
+  .rp-hq { font-size: 20px; line-height: 1; filter: drop-shadow(0 0 2px rgba(0,0,0,.8)); }
   #rp-legend label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; font-size: 12.5px; }
   .rp-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; border: 2px solid #fff; box-shadow: 0 0 3px rgba(0,0,0,.5); flex: none; }
   .rp-marker { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
@@ -1056,6 +1061,16 @@ async function renderReplay(id, isMatch = false) {
       ${RP_SPEEDS.map(s => `<button class="btn rp-speed" data-speed="${s}">${s}x</button>`).join("")}
       <span class="rp-clock" id="rp-clock"></span>
     </div>
+    ${data.diagnostics && data.diagnostics.enabled ? `
+    <div class="rp-bar rp-diag" id="rp-diag">
+      <strong>🔧 Diagnostica radio</strong>
+      <label>Preset <select id="rp-diag-preset">${Object.entries(data.diagnostics.presets).map(([k, p]) =>
+        `<option value="${k}" ${k === data.diagnostics.preset ? "selected" : ""}>${esc(p.label)} (${p.budget_db} dB)</option>`).join("")}</select></label>
+      <label title="Portata teorica in campo aperto, senza ostacoli: il massimo possibile con questo preset"><input type="checkbox" id="rp-diag-range"> ◯ raggio in campo aperto</label>
+      <label title="Portata stimata direzione per direzione togliendo l'attenuazione della vegetazione attraversata"><input type="checkbox" id="rp-diag-bubble"> 🫧 bolla con vegetazione</label>
+      <label title="Immagine satellitare Sentinel-2 a colori veri della data più vicina alla giocata"><input type="checkbox" id="rp-diag-s2"> 🛰 Sentinel-2</label>
+      <span class="muted rp-diag-status" id="rp-diag-status"></span>
+    </div>` : ""}
     <input type="range" id="rp-slider" min="${data.start}" max="${data.end}" step="1">
     <div class="rp-main">
       <div id="rp-map"></div>
@@ -1134,6 +1149,9 @@ async function renderReplay(id, isMatch = false) {
     speed: 1, playing: false, last: null, tz: data.timezone,
     selected: null, teamNames: data.teams || {},
   };
+
+  rpHqInit(data.hq);
+  if (data.diagnostics && data.diagnostics.enabled) rpDiagInit(data.diagnostics);
 
   const teamNames = data.teams || {};
   document.getElementById("rp-legend").innerHTML = RP_TEAM_ORDER.map(team => {
@@ -1483,6 +1501,187 @@ function rpInfoTick() {
   }
 }
 
+/* ---- Quartier generale ---- */
+function rpHqInit(hq) {
+  RP.hq = hq || null;
+  if (!hq) return;
+  const where = hq.source === "gateway"
+    ? `posizione trasmessa dal gateway ${esc(hq.callsign || hq.node_id)}`
+    : "posizione impostata a mano (tab Manutenzione)";
+  L.marker([hq.lat, hq.lon], {
+    icon: L.divIcon({ className: "", html: `<span class="rp-hq">🏠</span>`, iconSize: [22, 22], iconAnchor: [11, 11] }),
+    zIndexOffset: 200,
+  }).addTo(RP.map).bindTooltip(`<b>Quartier generale</b><br>${where}<br>antenna a ${hq.height_m} m`);
+}
+
+/* ---- Strumenti diagnostici: portata radio, bolla con vegetazione, Sentinel-2 ----
+   Stesso modello di radio.py (i test stanno lì: tenere le due versioni uguali).
+   Due raggi su terreno piatto + Weissberger sul fogliame attraversato. */
+const RD = {
+  C: 299792458,
+  breakpoint: (h1, h2, f) => 4 * Math.PI * h1 * h2 / (RD.C / (f * 1e6)),
+  fspl: (d, f) => 20 * Math.log10(Math.max(d, 1)) + 20 * Math.log10(f) - 27.55,
+  pathLoss: (d, h1, h2, f) => d <= RD.breakpoint(h1, h2, f) ? RD.fspl(d, f) : 40 * Math.log10(d) - 20 * Math.log10(h1 * h2),
+  vegLoss(depth, f) {
+    if (depth <= 0) return 0;
+    const k = Math.pow(f / 1000, 0.284);
+    return depth < 14 ? 0.45 * k * depth : 1.33 * k * Math.pow(depth, 0.588);
+  },
+  openRange(allowed, h1, h2, f) {
+    const dc = RD.breakpoint(h1, h2, f);
+    return allowed <= RD.fspl(dc, f)
+      ? Math.pow(10, (allowed - 20 * Math.log10(f) + 27.55) / 20)
+      : Math.pow(10, (allowed + 20 * Math.log10(h1 * h2)) / 40);
+  },
+  dest(lat, lon, bearing, d) {
+    const b = bearing * Math.PI / 180, R = 6371000;
+    return [lat + d * Math.cos(b) / R * 180 / Math.PI,
+            lon + d * Math.sin(b) / (R * Math.cos(lat * Math.PI / 180)) * 180 / Math.PI];
+  },
+  reach(allowed, h1, h2, f, densityAlong, step = 10) {
+    const limit = RD.openRange(allowed, h1, h2, f);
+    let depth = 0, d = 0;
+    while (d + step <= limit) {
+      const next = d + step;
+      depth += step * densityAlong(d + step / 2);
+      if (RD.pathLoss(next, h1, h2, f) + RD.vegLoss(depth, f) > allowed) return d;
+      d = next;
+    }
+    return limit;
+  },
+};
+
+function rpDiagAllowed(bodies) {
+  const D = RP.diag.cfg;
+  return D.presets[RP.diag.preset].budget_db + (D.tx_dbm - D.reference_tx_dbm) + 2 * D.antenna_dbi
+    - bodies * D.body_loss_db - D.margin_db;
+}
+
+function rpDiagDensity(lat, lon) {
+  const g = RP.diag.grid;
+  if (!g) return 0;
+  const col = Math.floor((lon - g.area.w) / (g.area.e - g.area.w) * g.width);
+  const row = Math.floor((g.area.n - lat) / (g.area.n - g.area.s) * g.height);
+  return col >= 0 && col < g.width && row >= 0 && row < g.height ? g.cells[row * g.width + col] / 255 : 0;
+}
+
+function rpDiagBubble(lat, lon, h1, bodies) {
+  const D = RP.diag.cfg, allowed = rpDiagAllowed(bodies), pts = [];
+  for (let k = 0; k < 72; k++) {
+    const bearing = k * 5;
+    const d = RD.reach(allowed, h1, D.tag_height_m, D.freq_mhz,
+      dd => rpDiagDensity(...RD.dest(lat, lon, bearing, dd)));
+    pts.push(RD.dest(lat, lon, bearing, d));
+  }
+  return pts;
+}
+
+function rpDiagStatus(html) {
+  const el = document.getElementById("rp-diag-status");
+  if (el) el.innerHTML = html;
+}
+
+function rpDiagInit(cfg) {
+  RP.diag = { cfg, preset: cfg.preset, show: { range: false, bubble: false, s2: false }, grid: null, s2: null, hqLayers: {} };
+  const onChange = () => {
+    RP.diag.preset = document.getElementById("rp-diag-preset").value;
+    RP.diag.show.range = document.getElementById("rp-diag-range").checked;
+    RP.diag.show.bubble = document.getElementById("rp-diag-bubble").checked;
+    RP.diag.show.s2 = document.getElementById("rp-diag-s2").checked;
+    if (RP.diag.s2) {
+      if (RP.diag.show.s2) RP.diag.s2.addTo(RP.map).bringToBack(); else RP.map.removeLayer(RP.diag.s2);
+    }
+    for (const t of RP.tracks) t.bubbleKey = null;      // preset cambiato: bolle da rifare
+    RP.diag.hqLayers.bubbleKey = null;
+    rpUpdate(false);
+  };
+  ["rp-diag-preset", "rp-diag-range", "rp-diag-bubble", "rp-diag-s2"].forEach(id =>
+    document.getElementById(id).addEventListener("change", onChange));
+  const env = cfg.environment;
+  if (!env) {
+    rpDiagStatus(cfg.environment_too_wide
+      ? "⚠️ Giocata troppo estesa per scaricare i dati d'ambiente: bolle calcolate senza vegetazione."
+      : "Nessuna posizione in questa giocata.");
+    return;
+  }
+  rpDiagLoadEnvironment(env, _rpToken);
+}
+
+async function rpDiagLoadEnvironment(env, token) {
+  const q = `w=${env.w}&s=${env.s}&e=${env.e}&n=${env.n}&date=${env.date}&max_days=${env.max_days}`;
+  for (;;) {
+    if (token !== _rpToken || !RP || !RP.diag) return;
+    let res;
+    try { res = await api(`/replay/environment?${q}`); }
+    catch (e) { rpDiagStatus(`⚠️ Dati d'ambiente non disponibili: ${esc(e.message)}`); return; }
+    if (res.state === "ready") {
+      const raw = atob(res.density), cells = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) cells[i] = raw.charCodeAt(i);
+      RP.diag.grid = { area: res.area, width: res.width, height: res.height, cells };
+      const s2 = res.sentinel2;
+      if (s2) {
+        RP.diag.s2 = L.imageOverlay(`${API}/replay/environment/${res.key}/s2.png`,
+          [[res.area.s, res.area.w], [res.area.n, res.area.e]], { opacity: 0.9, attribution: esc(res.attribution) });
+        if (RP.diag.show.s2) RP.diag.s2.addTo(RP.map).bringToBack();
+      } else {
+        document.getElementById("rp-diag-s2").disabled = true;
+      }
+      const when = s2 ? (s2.days_offset === 0 ? "del giorno della giocata"
+        : `di ${Math.abs(s2.days_offset)} giorni ${s2.days_offset < 0 ? "prima" : "dopo"}`) : "";
+      rpDiagStatus((s2 ? `🛰 Sentinel-2 del ${esc(s2.date)} (${when}; nuvole sulla zona ${s2.area_cloud}%) · ` : "")
+        + `vegetazione da ESA WorldCover${s2 ? " + NDVI" : ""}. Bolla = dove un altro operatore con la radio
+          a ${RP.diag.cfg.tag_height_m} m avrebbe ricevuto il segnale: stima, non misura.`
+        + (res.notes || []).map(n => `<br>⚠️ ${esc(n)}`).join(""));
+      for (const t of RP.tracks) t.bubbleKey = null;
+      RP.diag.hqLayers.bubbleKey = null;
+      rpUpdate(false);
+      return;
+    }
+    if (res.state === "error") { rpDiagStatus(`⚠️ Dati d'ambiente: ${esc(res.error || "errore")}`); return; }
+    rpDiagStatus(`⏳ Scarico dati d'ambiente: ${esc(res.step || "…")} (la prima volta per questa zona e data)`);
+    await new Promise(r => setTimeout(r, 3000));
+  }
+}
+
+// Cerchio e bolla di un emettitore; layers = oggetto dove tenerli (traccia o QG)
+function rpDiagDraw(layers, pos, color, h1, bodies, visible) {
+  const D = RP.diag, map = RP.map;
+  const range = RD.openRange(rpDiagAllowed(bodies), h1, D.cfg.tag_height_m, D.cfg.freq_mhz);
+  if (visible && D.show.range) {
+    if (!layers.circle) layers.circle = L.circle(pos, { radius: range, color, weight: 1, dashArray: "4 4", fillOpacity: 0.03, interactive: false });
+    layers.circle.setLatLng(pos).setRadius(range);
+    if (!map.hasLayer(layers.circle)) layers.circle.addTo(map);
+  } else if (layers.circle && map.hasLayer(layers.circle)) map.removeLayer(layers.circle);
+
+  if (visible && D.show.bubble) {
+    // Ricalcolo solo se si è spostato di oltre 25 m (o cambiato preset/dati): al massimo
+    // 3 bolle per fotogramma, le altre al giro dopo
+    const moved = !layers.bubbleAt || Math.hypot(
+      (pos[0] - layers.bubbleAt[0]) * 111320, (pos[1] - layers.bubbleAt[1]) * 111320 * Math.cos(pos[0] * Math.PI / 180)) > 25;
+    const key = `${D.preset}|${D.grid ? 1 : 0}`;
+    if ((moved || layers.bubbleKey !== key) && D.budget > 0) {
+      D.budget--;
+      const pts = rpDiagBubble(pos[0], pos[1], h1, bodies);
+      if (!layers.bubble) layers.bubble = L.polygon(pts, { color, weight: 1.5, fillOpacity: 0.12, interactive: false });
+      else layers.bubble.setLatLngs(pts);
+      layers.bubbleAt = pos; layers.bubbleKey = key;
+    }
+    if (layers.bubble && !map.hasLayer(layers.bubble)) layers.bubble.addTo(map);
+  } else if (layers.bubble && map.hasLayer(layers.bubble)) map.removeLayer(layers.bubble);
+}
+
+function rpDiagTick() {
+  if (!RP || !RP.diag) return;
+  RP.diag.budget = 3;
+  for (const t of RP.tracks) {
+    t.diagLayers = t.diagLayers || {};
+    const on = t.visible && t.onMap;
+    const ll = on ? t.marker.getLatLng() : null;
+    rpDiagDraw(t.diagLayers, on ? [ll.lat, ll.lng] : null, t.color, RP.diag.cfg.tag_height_m, 2, on);
+  }
+  if (RP.hq) rpDiagDraw(RP.diag.hqLayers, [RP.hq.lat, RP.hq.lon], "#455a64", RP.hq.height_m, 1, true);
+}
+
 function rpSetHeading(t) {
   const el = t.marker.getElement();
   if (!el) return;
@@ -1529,6 +1728,7 @@ function rpUpdate(fromLoop) {
   const clockEl = document.getElementById("rp-clock");
   if (clockEl) clockEl.textContent = rpClock(clock);
   rpInfoTick();
+  rpDiagTick();
   const ovTime = document.getElementById("rp-ov-time");
   if (ovTime) {
     ovTime.textContent = rpClock(clock);
@@ -2174,6 +2374,59 @@ async function renderHealth() {
       morto darebbe comunque zero consumer sulla coda. Per riavviare un servizio serve il server.</p>`;
 }
 
+async function renderDiagConfig() {
+  const box = document.getElementById("diag-config");
+  let cfg;
+  try { cfg = await api("/config"); } catch (e) { box.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`; return; }
+  const presets = { SHORT_FAST: "Short Fast (143 dB)", SHORT_SLOW: "Short Slow (145,5 dB)", MEDIUM_FAST: "Medium Fast (148 dB)",
+    MEDIUM_SLOW: "Medium Slow (150,5 dB)", LONG_FAST: "Long Fast (153 dB)", LONG_MODERATE: "Long Moderate (156 dB)" };
+  const num = (key, label, step, title) => `<label title="${title}">${label}
+    <input type="number" id="dg-${key}" step="${step}" value="${cfg[key] ?? ""}" style="width:80px"></label>`;
+  box.innerHTML = `
+    <p class="muted" style="margin-top:0">Nel replay delle giocate, quando sono attivi: <b>raggio radio</b> teorico per preset,
+      <b>bolla</b> di portata che tiene conto della vegetazione (ESA WorldCover + NDVI Sentinel-2 del giorno più vicino) e
+      layer <b>Sentinel-2</b>. Sono stime, non misure; scaricano dati da Internet la prima volta per ogni zona e data.</p>
+    <form class="inline" id="diag-form">
+      <label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="dg-on" ${cfg.OTS_MILSIM_DIAGNOSTICS ? "checked" : ""}>
+        <b>Strumenti diagnostici attivi</b></label>
+      <label title="Il preset non viaggia nei CoT: va dichiarato quello configurato sui tag">Preset LoRa
+        <select id="dg-preset">${Object.entries(presets).map(([k, l]) => `<option value="${k}" ${k === cfg.OTS_MILSIM_DIAG_PRESET ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      ${num("OTS_MILSIM_DIAG_TX_DBM", "Potenza dBm", "0.5", "22 = riferimento Meshtastic; T-Beam con SX1276: 20")}
+      ${num("OTS_MILSIM_DIAG_ANTENNA_DBI", "Antenna dBi", "0.5", "Guadagno dell'antenna dei tag")}
+      ${num("OTS_MILSIM_DIAG_BODY_LOSS_DB", "Corpo dB", "0.5", "Perdita dovuta al corpo per ogni operatore con la radio addosso")}
+      ${num("OTS_MILSIM_DIAG_MARGIN_DB", "Margine dB", "0.5", "Riserva per fading e interferenze")}
+      ${num("OTS_MILSIM_DIAG_TAG_HEIGHT_M", "Altezza tag m", "0.1", "Altezza dell'antenna da terra (spalla ≈ 1,5 m)")}
+      ${num("OTS_MILSIM_DIAG_MAX_SCENE_DAYS", "Sentinel-2 entro giorni", "1", "Distanza massima, prima o dopo la giocata, della scena satellitare")}
+    </form>
+    <h3>Quartier generale</h3>
+    <p class="muted" style="margin-top:0">Il gateway <b>meshtasticd</b> non ha bisogno di un GPS: con
+      <code>meshtastic --host localhost --setlat &lt;lat&gt; --setlon &lt;lon&gt; --setalt &lt;m&gt;</code> trasmette una posizione fissa.
+      Indicane qui il node id e la posizione verrà presa da lì; altrimenti scrivila a mano.</p>
+    <form class="inline" id="hq-form">
+      <label>Node id gateway <input id="dg-hq-node" value="${esc(cfg.OTS_MILSIM_HQ_NODE_ID || "")}" placeholder="!a1b2c3d4" style="width:110px"></label>
+      ${num("OTS_MILSIM_HQ_LAT", "Latitudine", "0.000001", "0 = non impostata")}
+      ${num("OTS_MILSIM_HQ_LON", "Longitudine", "0.000001", "0 = non impostata")}
+      ${num("OTS_MILSIM_HQ_HEIGHT_M", "Antenna m", "0.5", "Altezza dell'antenna del gateway da terra")}
+    </form>
+    <p><button class="btn primary" id="diag-save">💾 Salva</button></p>`;
+  document.getElementById("diag-save").onclick = async () => {
+    const body = {
+      OTS_MILSIM_DIAGNOSTICS: document.getElementById("dg-on").checked,
+      OTS_MILSIM_DIAG_PRESET: document.getElementById("dg-preset").value,
+      OTS_MILSIM_HQ_NODE_ID: document.getElementById("dg-hq-node").value.trim(),
+    };
+    for (const key of ["OTS_MILSIM_DIAG_TX_DBM", "OTS_MILSIM_DIAG_ANTENNA_DBI", "OTS_MILSIM_DIAG_BODY_LOSS_DB",
+      "OTS_MILSIM_DIAG_MARGIN_DB", "OTS_MILSIM_DIAG_TAG_HEIGHT_M", "OTS_MILSIM_HQ_LAT", "OTS_MILSIM_HQ_LON", "OTS_MILSIM_HQ_HEIGHT_M"]) {
+      body[key] = parseFloat(document.getElementById(`dg-${key}`).value || "0");
+    }
+    body.OTS_MILSIM_DIAG_MAX_SCENE_DAYS = parseInt(document.getElementById("dg-OTS_MILSIM_DIAG_MAX_SCENE_DAYS").value || "20", 10);
+    try {
+      await api("/config", { method: "POST", body });
+      toast("Impostazioni diagnostiche salvate.");
+    } catch (e) { toast("Errore: " + e.message, false); }
+  };
+}
+
 async function renderMaintenance() {
   const el = document.getElementById("content");
   el.innerHTML = `
@@ -2182,9 +2435,12 @@ async function renderMaintenance() {
       se lo smistamento CoT è fermo gli EUD smettono di vedersi fra loro <b>senza nessun errore</b>
       da nessuna parte, ed è il primo posto da guardare quando «non si vede niente in mappa».</p>
     <div id="health-box"></div>
+    <h2 style="margin-top:26px">Strumenti diagnostici e quartier generale</h2>
+    <div id="diag-config">Caricamento…</div>
     <h2 style="margin-top:26px">Manutenzione dati OpenTAKServer</h2>
     <div id='maint'>Caricamento…</div>`;
   renderHealth();
+  renderDiagConfig();
   const stats = await api("/maintenance/stats");
   document.getElementById("maint").innerHTML = `
     <p class="muted">Svuota le tabelle di OpenTAKServer quando si accumulano dati di test o vecchi.

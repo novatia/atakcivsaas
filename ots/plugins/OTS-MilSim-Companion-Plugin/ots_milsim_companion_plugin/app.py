@@ -40,7 +40,7 @@ from opentakserver.models.MissionContentMission import MissionContentMission
 from opentakserver.models.user import User
 from opentakserver.plugins.Plugin import Plugin
 
-from . import chat, cot, datapackage, engine, health, history, mesh, offline_map, replay, skyfi, teams
+from . import chat, cot, datapackage, diag, engine, health, history, mesh, offline_map, radio, replay, skyfi, teams
 from .default_config import DefaultConfig
 from .game_modes import GAME_MODES, MARKER_TYPES, ZONE_TYPES, serialize_registry, validate_template
 from .models import (
@@ -772,15 +772,93 @@ def _gps_tracks(start_utc: datetime, end_utc: datetime, step: int, match_roles: 
     for track in tracks:
         track["user"] = usernames.get(track.pop("user_id", None))
 
+    # Il gateway del quartier generale non è un operatore: se trasmette la sua
+    # posizione via MQTT OTS lo tratta come un nodo qualsiasi, qui lo si toglie
+    cfg = history.config_on_disk(app.config)
+    hq = _hq_position(cfg, start, end)
+    if hq and hq.get("node_id"):
+        tracks = [t for t in tracks if t.get("node_id") != hq["node_id"]]
+
     # Nomi in legenda: le squadre della partita, o la mappatura valida a fine finestra
     end_ts = end_utc.timestamp()
     roles = match_roles or (timeline.roles_at(end_ts) if timeline.covers(end_ts) else current_roles)
     return {
         "tracks": tracks,
         "teams": _replay_teams(roles),
-        "team_colors": teams.colors_from_config(history.config_on_disk(app.config)),
+        "team_colors": teams.colors_from_config(cfg),
         # Fuso del campo per l'orologio del player (il browser può stare altrove)
         "timezone": app.config.get("OTS_EVENTCALENDAR_TIMEZONE", "Europe/Rome"),
+        "hq": hq,
+        "diagnostics": _diagnostics(cfg, tracks, hq, start_utc),
+    }
+
+
+def _hq_position(cfg: dict, start: datetime, end: datetime) -> dict | None:
+    """Dove stava il quartier generale. Prima la posizione che il gateway
+    trasmette (nodo `OTS_MILSIM_HQ_NODE_ID`, posizione fissa impostata su
+    meshtasticd): l'ultima durante la giocata, altrimenti l'ultima nota. Poi
+    quella scritta a mano. None se nessuna delle due c'è."""
+    from opentakserver.models.EUD import EUD
+    from opentakserver.models.Point import Point
+
+    height = float(cfg.get("OTS_MILSIM_HQ_HEIGHT_M") or 3.0)
+    node = mesh.normalize_node_id(cfg.get("OTS_MILSIM_HQ_NODE_ID")) if cfg.get("OTS_MILSIM_HQ_NODE_ID") else None
+    if node:
+        eud = (
+            db.session.query(EUD)
+            .filter_by(meshtastic_id=int(node[1:], 16), platform=mesh.MESH_PLATFORM)
+            .first()
+        )
+        if eud:
+            base = (
+                db.session.query(Point.latitude, Point.longitude, Point.timestamp)
+                .filter(Point.device_uid == eud.uid)
+                .filter(Point.latitude.isnot(None), Point.longitude.isnot(None))
+                .filter(Point.latitude != 0)
+            )
+            row = (base.filter(Point.timestamp >= start, Point.timestamp <= end)
+                   .order_by(Point.timestamp.desc()).first()
+                   or base.filter(Point.timestamp <= end).order_by(Point.timestamp.desc()).first())
+            if row:
+                return {
+                    "lat": row.latitude, "lon": row.longitude, "height_m": height,
+                    "source": "gateway", "node_id": node, "callsign": eud.callsign,
+                    "at": row.timestamp.isoformat() + "Z",
+                }
+    lat, lon = cfg.get("OTS_MILSIM_HQ_LAT") or 0, cfg.get("OTS_MILSIM_HQ_LON") or 0
+    if lat or lon:
+        return {"lat": float(lat), "lon": float(lon), "height_m": height, "source": "manual", "node_id": node}
+    return None
+
+
+def _diagnostics(cfg: dict, tracks: list, hq: dict | None, start_utc: datetime) -> dict:
+    """Parametri degli strumenti diagnostici per il player; {"enabled": False}
+    se spenti. La zona per i dati d'ambiente la decide il server (tracce più
+    margine), non il browser."""
+    if not cfg.get("OTS_MILSIM_DIAGNOSTICS"):
+        return {"enabled": False}
+    points = [(p[1], p[2]) for t in tracks for p in t["points"]]
+    if hq:
+        points.append((hq["lat"], hq["lon"]))
+    area = diag.area_for(points)
+    preset = cfg.get("OTS_MILSIM_DIAG_PRESET") or "LONG_FAST"
+    return {
+        "enabled": True,
+        "preset": preset if preset in radio.PRESETS else "LONG_FAST",
+        "presets": {k: {"label": radio.PRESET_LABELS[k], "budget_db": v} for k, v in radio.PRESETS.items()},
+        "tx_dbm": float(cfg.get("OTS_MILSIM_DIAG_TX_DBM", 22.0)),
+        "antenna_dbi": float(cfg.get("OTS_MILSIM_DIAG_ANTENNA_DBI", 0.0)),
+        "body_loss_db": float(cfg.get("OTS_MILSIM_DIAG_BODY_LOSS_DB", 3.0)),
+        "margin_db": float(cfg.get("OTS_MILSIM_DIAG_MARGIN_DB", 10.0)),
+        "tag_height_m": float(cfg.get("OTS_MILSIM_DIAG_TAG_HEIGHT_M", 1.5)),
+        "reference_tx_dbm": radio.REFERENCE_TX_DBM,
+        "freq_mhz": radio.FREQ_MHZ,
+        "environment": area and {
+            **area,
+            "date": start_utc.date().isoformat(),
+            "max_days": int(cfg.get("OTS_MILSIM_DIAG_MAX_SCENE_DAYS", diag.MAX_SCENE_AGE_DAYS)),
+        },
+        "environment_too_wide": area is None and bool(points),
     }
 
 
@@ -4116,6 +4194,47 @@ class MilSimCompanionPlugin(Plugin):
         except BaseException as e:
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 500
+
+    # ------------------------------------------------------------------
+    # Strumenti diagnostici del replay: dati d'ambiente (diag.py)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @blueprint.route("/replay/environment")
+    @roles_accepted("administrator")
+    def replay_environment():
+        """Copertura del suolo + NDVI Sentinel-2 per la zona di una giocata.
+        Il primo giro scarica in background (decine di secondi): il player
+        richiama finché lo stato non è «ready»."""
+        try:
+            cfg = history.config_on_disk(app.config)
+            if not cfg.get("OTS_MILSIM_DIAGNOSTICS"):
+                return jsonify({"success": False, "error": "Strumenti diagnostici disattivati (tab Manutenzione)"}), 403
+            try:
+                area = {k: round(float(request.args[k]), 3) for k in ("w", "s", "e", "n")}
+                day = datetime.strptime(request.args["date"], "%Y-%m-%d").date()
+                max_days = int(request.args.get("max_days", diag.MAX_SCENE_AGE_DAYS))
+            except (KeyError, ValueError):
+                return jsonify({"success": False, "error": "Parametri w, s, e, n, date obbligatori"}), 400
+            if not (area["w"] < area["e"] and area["s"] < area["n"]) or not 1 <= max_days <= 90:
+                return jsonify({"success": False, "error": "Zona o limite di giorni non validi"}), 400
+            if diag.grid_size(area) == (0, 0) or max(
+                (area["e"] - area["w"]) * 111_320, (area["n"] - area["s"]) * 111_320
+            ) > diag.MAX_EXTENT_M * 1.5:
+                return jsonify({"success": False, "error": "Zona troppo grande"}), 400
+            return jsonify(diag.environment(app.config.get("OTS_DATA_FOLDER"), area, day, max_days))
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @blueprint.route("/replay/environment/<key>/s2.png")
+    @roles_accepted("administrator")
+    def replay_environment_image(key: str):
+        path = diag.image_path(app.config.get("OTS_DATA_FOLDER"), key)
+        if not path:
+            return jsonify({"success": False, "error": "Immagine non disponibile"}), 404
+        return send_from_directory(os.path.dirname(path), "s2.png", max_age=86400)
 
     # ------------------------------------------------------------------
     # Ordini SkyFi (ereditato dal fork OTS-SkyFi-Plugin)
