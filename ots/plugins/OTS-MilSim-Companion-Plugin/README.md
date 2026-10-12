@@ -729,7 +729,7 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
-- **3.33.0** — replay: **orologio di gioco** in alto a destra sulla mappa, con l'ora grande, il tempo
+- **3.34.0** — replay: **orologio di gioco** in alto a destra sulla mappa, con l'ora grande, il tempo
   trascorso dall'inizio (`T+hh:mm:ss`, dall'inizio evento o dalla luce verde della partita), stato ▶/⏸ e
   velocità. L'ora è nel fuso del calendario (`OTS_EVENTCALENDAR_TIMEZONE`), non in quello del PC da cui si
   guarda; vale anche per l'orologio piccolo nella barra.
