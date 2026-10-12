@@ -774,6 +774,8 @@ def _gps_tracks(start_utc: datetime, end_utc: datetime, step: int, match_roles: 
         "tracks": tracks,
         "teams": _replay_teams(roles),
         "team_colors": teams.colors_from_config(history.config_on_disk(app.config)),
+        # Fuso del campo per l'orologio del player (il browser può stare altrove)
+        "timezone": app.config.get("OTS_EVENTCALENDAR_TIMEZONE", "Europe/Rome"),
     }
 
 

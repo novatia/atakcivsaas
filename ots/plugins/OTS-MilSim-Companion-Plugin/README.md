@@ -729,6 +729,10 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.33.0** — replay: **orologio di gioco** in alto a destra sulla mappa, con l'ora grande, il tempo
+  trascorso dall'inizio (`T+hh:mm:ss`, dall'inizio evento o dalla luce verde della partita), stato ▶/⏸ e
+  velocità. L'ora è nel fuso del calendario (`OTS_EVENTCALENDAR_TIMEZONE`), non in quello del PC da cui si
+  guarda; vale anche per l'orologio piccolo nella barra.
 - **3.33.0** — editor delle modalità di gioco: le **aree in cui conta la presenza** (area valida ordigni,
   area punto di dominio) devono contenere un **cerchio di almeno 20 m di raggio**. Il GPS dei tag
   Meshtastic sbaglia di 3-5 m in campo aperto e 5-10 m nel bosco, e tra un invio e l'altro chi cammina

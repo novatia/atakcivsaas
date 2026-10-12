@@ -84,6 +84,11 @@
   #rp-map { height: min(62vh, 560px); min-height: 340px; border: 1px solid var(--border); border-radius: 8px; margin-top: 10px; }
   .rp-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .rp-clock { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 15px; margin-left: auto; }
+  /* Orologio di gioco sopra la mappa */
+  .rp-overlay { background: rgba(20,24,18,.82); color: #fff; padding: 6px 12px 7px; border-radius: 8px; text-align: right;
+    font-variant-numeric: tabular-nums; box-shadow: 0 1px 6px rgba(0,0,0,.4); pointer-events: none; }
+  .rp-ov-time { font-size: 26px; font-weight: 700; line-height: 1.1; letter-spacing: .02em; }
+  .rp-ov-sub { font-size: 12px; opacity: .85; }
   .rp-speed.on { background: var(--accent); color: #fff; border-color: var(--accent); }
   #rp-slider { width: 100%; margin-top: 10px; accent-color: var(--accent); }
   #rp-legend { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
@@ -968,7 +973,17 @@ function hashMatchReplayId() {
 }
 
 function rpClock(t) {
-  return new Date(t * 1000).toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const opts = { hour: "2-digit", minute: "2-digit", second: "2-digit" };
+  // Ora del campo (fuso del calendario), non del PC da cui si guarda il replay
+  try { return new Date(t * 1000).toLocaleTimeString("it-IT", { ...opts, timeZone: (RP && RP.tz) || undefined }); }
+  catch (e) { return new Date(t * 1000).toLocaleTimeString("it-IT", opts); }
+}
+
+// Tempo trascorso dall'inizio della finestra (evento o luce verde della partita)
+function rpElapsed(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  const pad = n => String(n).padStart(2, "0");
+  return `T+${pad(Math.floor(s / 3600))}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`;
 }
 
 async function renderReplay(id, isMatch = false) {
@@ -1036,6 +1051,15 @@ async function renderReplay(id, isMatch = false) {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }).addTo(map);
 
+  // Orologio di gioco in alto a destra sulla mappa: avanza con la velocità scelta
+  const overlay = L.control({ position: "topright" });
+  overlay.onAdd = () => {
+    const div = L.DomUtil.create("div", "rp-overlay");
+    div.innerHTML = `<div class="rp-ov-time" id="rp-ov-time"></div><div class="rp-ov-sub" id="rp-ov-sub"></div>`;
+    return div;
+  };
+  overlay.addTo(map);
+
   // Marker della sede di gioco
   if (ev.field && ev.field.latitude != null && ev.field.longitude != null) {
     L.marker([ev.field.latitude, ev.field.longitude], {
@@ -1075,7 +1099,7 @@ async function renderReplay(id, isMatch = false) {
     map, tracks,
     start: data.start, end: data.end,
     clock: Math.max(data.start, firstT),
-    speed: 1, playing: false, last: null,
+    speed: 1, playing: false, last: null, tz: data.timezone,
   };
 
   const teamNames = data.teams || {};
@@ -1095,6 +1119,7 @@ async function renderReplay(id, isMatch = false) {
     btn.onclick = () => {
       RP.speed = parseInt(btn.dataset.speed, 10);
       document.querySelectorAll(".rp-speed").forEach(b => b.classList.toggle("on", b === btn));
+      rpUpdate(false);
     };
   });
   document.querySelector('.rp-speed[data-speed="1"]').classList.add("on");
@@ -1126,6 +1151,7 @@ function rpSetPlaying(playing) {
   RP.playing = playing;
   const btn = document.getElementById("rp-play");
   if (btn) btn.textContent = playing ? "⏸" : "▶";
+  rpUpdate(false);
 }
 
 function rpToggle(index, visible) {
@@ -1195,6 +1221,12 @@ function rpUpdate(fromLoop) {
   }
   const clockEl = document.getElementById("rp-clock");
   if (clockEl) clockEl.textContent = rpClock(clock);
+  const ovTime = document.getElementById("rp-ov-time");
+  if (ovTime) {
+    ovTime.textContent = rpClock(clock);
+    document.getElementById("rp-ov-sub").textContent =
+      `${rpElapsed(clock - RP.start)} · ${RP.playing ? "▶" : "⏸"} ${RP.speed}x`;
+  }
   if (fromLoop) {
     const slider = document.getElementById("rp-slider");
     if (slider) slider.value = clock;
