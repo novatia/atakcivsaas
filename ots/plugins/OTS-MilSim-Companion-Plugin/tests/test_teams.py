@@ -237,3 +237,14 @@ def test_arbitro_che_scende_in_campo_resta_arbitro():
     # E togliendolo dalla squadra torna solo arbitro
     apply(state, "arbitro", teams.plan_remove(ALPHA, ROLES, state["arbitro"]))
     assert state["arbitro"] == {(OBS, teams.IN), (OBS, teams.OUT)}
+
+
+def test_colori_squadre_dalla_configurazione():
+    assert teams.colors_from_config({}) == teams.DEFAULT_COLORS
+    colors = teams.colors_from_config({
+        "OTS_MILSIM_TEAM_A_COLOR": "#00ff00",
+        "OTS_MILSIM_TEAM_B_COLOR": "rosso",      # non valido: torna al default
+        "OTS_MILSIM_OBSERVERS_COLOR": "#123",    # formato corto non accettato
+    })
+    assert colors == {"team_a": "#00ff00", "team_b": "#1E88E5", "observers": "#616161"}
+    assert teams.is_color("#A1b2C3") and not teams.is_color(None) and not teams.is_color("#12345g")

@@ -768,7 +768,11 @@ def _gps_tracks(start_utc: datetime, end_utc: datetime, step: int, match_roles: 
     # Nomi in legenda: le squadre della partita, o la mappatura valida a fine finestra
     end_ts = end_utc.timestamp()
     roles = match_roles or (timeline.roles_at(end_ts) if timeline.covers(end_ts) else current_roles)
-    return {"tracks": tracks, "teams": _replay_teams(roles)}
+    return {
+        "tracks": tracks,
+        "teams": _replay_teams(roles),
+        "team_colors": teams.colors_from_config(history.config_on_disk(app.config)),
+    }
 
 
 def _replay_teams(roles: dict) -> dict:

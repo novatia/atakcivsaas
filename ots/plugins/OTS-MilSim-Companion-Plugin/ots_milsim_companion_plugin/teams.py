@@ -21,6 +21,8 @@
 # vede tutti e resta invisibile. E le due squadre non si vedono fra loro,
 # perché nessun giocatore ha OUT sul gruppo osservatori.
 
+import re
+
 IN = "IN"
 OUT = "OUT"
 
@@ -37,6 +39,29 @@ def roles_from_config(config) -> dict:
         "team_a": int(config.get("OTS_EVENTCALENDAR_GM_TEAM_A_ID") or 0) or None,
         "team_b": int(config.get("OTS_EVENTCALENDAR_GM_TEAM_B_ID") or 0) or None,
         "observers": [int(g) for g in observers if g],
+    }
+
+
+# Colori di default delle squadre: gli stessi degli spawn (MARKER_TYPES)
+DEFAULT_COLORS = {"team_a": "#E53935", "team_b": "#1E88E5", "observers": "#616161"}
+COLOR_KEYS = {
+    "team_a": "OTS_MILSIM_TEAM_A_COLOR",
+    "team_b": "OTS_MILSIM_TEAM_B_COLOR",
+    "observers": "OTS_MILSIM_OBSERVERS_COLOR",
+}
+_HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def is_color(value) -> bool:
+    return isinstance(value, str) and bool(_HEX_COLOR.match(value))
+
+
+def colors_from_config(config) -> dict:
+    """Colore di ogni squadra (#rrggbb); un valore mancante o non valido
+    torna al default invece di rompere la UI."""
+    return {
+        role: config.get(key) if is_color(config.get(key)) else DEFAULT_COLORS[role]
+        for role, key in COLOR_KEYS.items()
     }
 
 

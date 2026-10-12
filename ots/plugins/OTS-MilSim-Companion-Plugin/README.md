@@ -610,6 +610,9 @@ restano invariate per compatibilità con i config esistenti.
 | `OTS_EVENTCALENDAR_GM_TEAM_A_ID` | `0` | Gruppo ATAK di default del Team A (id `groups` di OTS, 0 = non impostato) |
 | `OTS_EVENTCALENDAR_GM_TEAM_B_ID` | `0` | Gruppo ATAK di default del Team B |
 | `OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS` | `[]` | Gruppo ATAK osservatore broadcast di default |
+| `OTS_MILSIM_TEAM_A_COLOR` | `#E53935` | Colore del Team A (replay, tab Team), dal selettore nella Mappatura Team |
+| `OTS_MILSIM_TEAM_B_COLOR` | `#1E88E5` | Colore del Team B |
+| `OTS_MILSIM_OBSERVERS_COLOR` | `#616161` | Colore degli osservatori |
 | `OTS_MILSIM_MESH_ENABLED` | `true` | Monitor Meshtastic attivo (osserva il firehose CoT) |
 | `OTS_MILSIM_MESH_MQTT_OBSERVER` | `false` | Osserva anche il traffico MQTT grezzo: unica strada da cui arrivano canale, node id, RSSI/SNR |
 | `OTS_MILSIM_MESH_LIVE_SECONDS` | `60` | Sotto questa età il tag è LIVE |
@@ -726,6 +729,11 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.31.0** — **colori delle squadre** configurabili: un selettore accanto a Team A, Team B e osservatori
+  nella Mappatura Team (tab Team). Valgono per le tracce e la legenda del replay e per le etichette TEAM A/B
+  nella tab Team (testo chiaro o scuro in base al colore). Il replay li legge da `config.yml`, così un
+  cambio vale subito anche negli altri processi di OTS. I marker di spawn su ATAK restano rosso/blu: sono
+  simboli di affiliazione, non colori liberi.
 - **3.30.0** — tab Eventi: **casella di ricerca** sopra la lista. Filtra mentre scrivi su titolo,
   descrizione, sede, indirizzo e data (es. `06/12`), senza distinguere maiuscole e accenti; con più parole
   devono esserci tutte. Durante la ricerca sono compresi anche gli eventi passati.

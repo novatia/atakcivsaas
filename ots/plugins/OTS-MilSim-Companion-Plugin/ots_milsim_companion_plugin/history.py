@@ -53,23 +53,27 @@ def diff(open_rows: dict, facts: set) -> tuple[list, list]:
     return to_close, to_open
 
 
-def roles_on_disk(config) -> dict:
-    """Mappatura Team da config.yml, non da app.config: il salvataggio
-    aggiorna app.config solo nel processo che riceve la richiesta, e il loop
-    del motore può girare in un altro con la copia vecchia (lo storico
-    oscillerebbe fra le due)."""
+def config_on_disk(config) -> dict:
+    """app.config aggiornato con config.yml. Il salvataggio dalla UI
+    aggiorna app.config solo nel processo che riceve la richiesta: il loop
+    del motore, o un altro worker che serve il replay, avrebbe la copia
+    vecchia (lo storico oscillerebbe fra le due)."""
     import os
 
     import yaml
 
-    from . import teams
-
     try:
         with open(os.path.join(config.get("OTS_DATA_FOLDER"), "config.yml")) as config_file:
-            on_disk = yaml.safe_load(config_file) or {}
-        return teams.roles_from_config({**config, **on_disk})
+            return {**config, **(yaml.safe_load(config_file) or {})}
     except BaseException:
-        return teams.roles_from_config(config)
+        return dict(config)
+
+
+def roles_on_disk(config) -> dict:
+    """Mappatura Team valida adesso (vedi config_on_disk)."""
+    from . import teams
+
+    return teams.roles_from_config(config_on_disk(config))
 
 
 def sync(config, force: bool = False) -> None:

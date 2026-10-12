@@ -36,6 +36,10 @@ class DefaultConfig:
     OTS_EVENTCALENDAR_GM_TEAM_A_ID = 0
     OTS_EVENTCALENDAR_GM_TEAM_B_ID = 0
     OTS_EVENTCALENDAR_GM_OBSERVER_TEAM_IDS = []
+    # Colori delle squadre (#rrggbb) per replay e tab Team; default = colori degli spawn
+    OTS_MILSIM_TEAM_A_COLOR = "#E53935"
+    OTS_MILSIM_TEAM_B_COLOR = "#1E88E5"
+    OTS_MILSIM_OBSERVERS_COLOR = "#616161"
 
     # ---- Meshtastic / TAK tracker (tab Meshtastic) -------------------
     # Osservatore del firehose: senza questo il monitor resta vuoto
@@ -106,6 +110,11 @@ class DefaultConfig:
                     not isinstance(value, list) or not all(isinstance(v, int) and v > 0 for v in value)
                 ):
                     return {"success": False, "error": f"{key} should be a list of team ids"}
+                if key in ("OTS_MILSIM_TEAM_A_COLOR", "OTS_MILSIM_TEAM_B_COLOR", "OTS_MILSIM_OBSERVERS_COLOR"):
+                    from .teams import is_color
+
+                    if not is_color(value):
+                        return {"success": False, "error": f"{key} should be a color like #E53935"}
                 if key in ("OTS_MILSIM_MESH_ENABLED", "OTS_MILSIM_MESH_MQTT_OBSERVER") and not isinstance(value, bool):
                     return {"success": False, "error": f"{key} should be a boolean"}
                 if key in (
