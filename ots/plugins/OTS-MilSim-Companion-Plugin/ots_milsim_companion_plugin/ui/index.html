@@ -1235,14 +1235,39 @@ function rpDistanceM(lat1, lon1, lat2, lon2) {
 
 // Riepilogo della sessione: distanza (solo spostamenti oltre 8 m, come per la direzione:
 // il GPS fermo "balla" e gonfierebbe il totale), interruzioni oltre 2 minuti, batteria
+const RP_GAP_S = 120;            // oltre, fra due punti c'è un buco di tracciamento
+const RP_GAP_WINDOW_S = 900;     // velocità "di quel momento": 15 min prima e dopo il buco
+
 function rpStats(t) {
   const p = t.points;
-  let dist = 0, anchor = p[0], gaps = 0, gapTime = 0;
+  let dist = 0, anchor = p[0], trackedTime = 0;
+  const steps = [];    // [t, metri] spostamenti misurati, per la velocità locale attorno ai buchi
+  const tracked = [];  // [t0, t1] tratti con dati continui
+  const holes = [];    // indici dei punti subito dopo un buco
   for (let i = 1; i < p.length; i++) {
     const dt = p[i][0] - p[i - 1][0];
-    if (dt > 120) { gaps++; gapTime += dt; anchor = p[i]; continue; }
+    if (dt > RP_GAP_S) { holes.push(i); anchor = p[i]; continue; }
+    trackedTime += dt;
+    tracked.push([p[i - 1][0], p[i][0]]);
     const d = rpDistanceM(anchor[1], anchor[2], p[i][1], p[i][2]);
-    if (d >= 8) { dist += d; anchor = p[i]; }
+    if (d >= 8) { dist += d; anchor = p[i]; steps.push([p[i][0], d]); }
+  }
+
+  // Stima dei buchi. Per ognuno: velocità media effettiva (soste comprese) nei 15 minuti
+  // prima e dopo, per il tempo del buco; mai meno della linea d'aria fra il punto prima e
+  // quello dopo, che è stata percorsa per forza. Senza dati attorno: media della sessione.
+  const sessionSpeed = trackedTime > 0 ? dist / trackedTime : 0;
+  const inWindow = (tt, a, b) => (tt > a - RP_GAP_WINDOW_S && tt <= a) || (tt >= b && tt < b + RP_GAP_WINDOW_S);
+  let gapTime = 0, gapEstimate = 0, gapMinimum = 0;
+  for (const i of holes) {
+    const a = p[i - 1][0], b = p[i][0], dt = b - a;
+    const near = steps.filter(([tt]) => inWindow(tt, a, b)).reduce((sum, [, d]) => sum + d, 0);
+    const nearTime = tracked.reduce((sum, [t0, t1]) => sum + (inWindow(t1, a, b) ? t1 - t0 : 0), 0);
+    const speed = nearTime >= RP_GAP_S ? near / nearTime : sessionSpeed;
+    const straight = rpDistanceM(p[i - 1][1], p[i - 1][2], p[i][1], p[i][2]);
+    gapTime += dt;
+    gapMinimum += straight;
+    gapEstimate += Math.max(straight, speed * dt);
   }
   const withBat = p.filter(q => q[5] != null);
   let battery = null;
@@ -1250,7 +1275,10 @@ function rpStats(t) {
     const a = withBat[0], b = withBat[withBat.length - 1], hours = (b[0] - a[0]) / 3600;
     battery = { from: a[5], to: b[5], perHour: hours >= 0.25 ? (a[5] - b[5]) / hours : null };
   }
-  return { dist, gaps, gapTime, battery, first: p[0][0], last: p[p.length - 1][0] };
+  return {
+    dist, gaps: holes.length, gapTime, gapEstimate, gapMinimum, battery,
+    first: p[0][0], last: p[p.length - 1][0],
+  };
 }
 
 function rpTeamPill(t) {
@@ -1413,8 +1441,11 @@ function rpRenderInfo() {
     <h4>Sessione</h4>
     <dl>
       <dt>Dati</dt><dd>${rpClock(st.first).slice(0, 5)} → ${rpClock(st.last).slice(0, 5)} · ${t.points.length} punti</dd>
-      <dt>Percorso</dt><dd>${(st.dist / 1000).toFixed(2)} km</dd>
+      <dt>Percorso</dt><dd>${(st.dist / 1000).toFixed(2)} km misurati</dd>
       <dt>Interruzioni</dt><dd>${st.gaps ? `${st.gaps} oltre 2 min (${fmtH(st.gapTime)} in tutto)` : "nessuna"}</dd>
+      ${st.gaps ? `<dt>Stima totale</dt><dd title="Per ogni interruzione: velocità media (soste comprese) nei 15 minuti prima e dopo, per la sua durata; mai meno della linea d'aria fra il punto prima e quello dopo">≈ ${((st.dist + st.gapEstimate) / 1000).toFixed(2)} km
+        <span class="muted">(+${(st.gapEstimate / 1000).toFixed(2)} km stimati nelle interruzioni dalla velocità
+        attorno a ciascuna; minimo certo ${((st.dist + st.gapMinimum) / 1000).toFixed(2)} km)</span></dd>` : ""}
       <dt>Batteria</dt><dd>${bat ? `${bat.from}% → ${bat.to}%${bat.perHour != null ? ` · ${bat.perHour.toFixed(1)}%/h` : ""}` : '<span class="muted">non riportata</span>'}</dd>
     </dl>
     ${rpChart("rp-ch-bat", "Batteria %", batSeries, 100, "%")}

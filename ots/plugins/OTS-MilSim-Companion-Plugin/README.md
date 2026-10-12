@@ -729,6 +729,11 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.36.0** — pannello dettagli del replay: riga **Stima totale** dei km quando ci sono interruzioni.
+  Per ogni interruzione (oltre 2 min senza dati): velocità media effettiva, soste comprese, nei 15 minuti
+  prima e dopo, moltiplicata per la durata; mai meno della linea d'aria fra il punto prima e quello dopo
+  (percorsa per forza); senza dati attorno, media effettiva della sessione. Mostra anche il «minimo certo»
+  (misurato + linee d'aria) per far vedere quanto pesa la stima.
 - **3.35.0** — replay: **pannello dettagli** accanto alla mappa (sotto, su schermi stretti). Si apre
   cliccando un operatore sulla mappa o il suo nome in legenda: utente, squadra, node id, da chi è stato
   ricevuto (telefoni che l'hanno rilanciato / gateway MQTT, in percentuale), posizione, velocità, direzione e
