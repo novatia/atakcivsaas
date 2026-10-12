@@ -1021,6 +1021,11 @@ async function renderReplay(id, isMatch = false) {
   el.innerHTML = "Caricamento tracce…";
   if (RP && RP.map) { try { RP.map.remove(); } catch (e) {} }
   RP = null;
+  // Un contrassegno per replay, preso subito: animazione e caricamenti in background
+  // (terreno, dati d'ambiente) si fermano solo quando si apre un ALTRO replay.
+  // Prima era incrementato dopo aver avviato i caricamenti, che si credevano vecchi e
+  // smettevano di aggiornarsi al secondo controllo (UI ferma su «avvio»).
+  ++_rpToken;
 
   const back = isMatch
     ? `<button class="btn" onclick="clearEventHash(); gmGoTab('gm_matches')">← Partite</button>`
@@ -1188,7 +1193,7 @@ async function renderReplay(id, isMatch = false) {
 
   rpUpdate(false);
 
-  const token = ++_rpToken;
+  const token = _rpToken;
   requestAnimationFrame(function frame(ts) {
     if (token !== _rpToken || !document.getElementById("rp-map")) return;
     if (RP.playing && RP.last != null) {

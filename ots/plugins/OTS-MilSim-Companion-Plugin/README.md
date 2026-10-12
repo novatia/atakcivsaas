@@ -729,6 +729,9 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.38.4** — replay: altitudine e dati della diagnostica restavano fermi su «avvio» anche a scarico finito.
+  Il contrassegno del replay veniva incrementato dopo aver avviato i caricamenti in background, che al secondo
+  controllo si credevano di un replay vecchio e smettevano di aggiornarsi. Ora è preso all'apertura del replay.
 - **3.38.3** — dati satellitari e terreno: tolto `GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR` (e
   `CPL_VSIL_CURL_ALLOWED_EXTENSIONS`) da gdalwarp. Vale anche per i file locali: con l'uscita ENVI (dati + `.hdr`)
   gdalwarp creava il file e usciva con codice 1 senza messaggio. Diagnosticato col log della 3.38.2: la lettura via
