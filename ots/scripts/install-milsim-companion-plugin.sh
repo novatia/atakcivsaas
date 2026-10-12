@@ -7,9 +7,13 @@
 # non cambiano nome e le chiavi di config.yml restano le stesse.
 #
 # Uso (da root sul server, dentro il clone del repo):
-#   ./install-milsim-companion-plugin.sh            # (ri)installa il plugin + restart + verifica
+#   ./install-milsim-companion-plugin.sh            # git pull del repo, poi installa + restart + verifica
+#   ./install-milsim-companion-plugin.sh --no-pull  # installa quello che c'è già nel clone, senza pull
 #   ./install-milsim-companion-plugin.sh --check    # mostra solo la versione installata
-#   ./install-milsim-companion-plugin.sh --pull     # prima fa git pull del repo, poi installa
+#
+# Il pull è il default (dal 2026-10-12): senza, lo script reinstallava la
+# versione già presente nel clone e l'aggiornamento sembrava riuscito ma non
+# cambiava nulla. `--pull` è ancora accettato (non fa niente di diverso).
 #
 # Percorsi/nomi sovrascrivibili via variabili d'ambiente, es:
 #   OTS_USER=ots OTS_SERVICE=opentakserver ./install-milsim-companion-plugin.sh
@@ -39,6 +43,19 @@ WATCHDOG_TIMER="${WATCHDOG_TIMER:-ots-health-check.timer}"
 WATCHDOG_SERVICE="${WATCHDOG_TIMER%.timer}.service"
 
 PIP="${OTS_VENV}/bin/pip"
+
+# ------------------------- Argomenti -------------------------
+DO_PULL=1
+CHECK_ONLY=0
+for arg in "$@"; do
+    case "${arg}" in
+        --pull)    DO_PULL=1 ;;
+        --no-pull) DO_PULL=0 ;;
+        --check)   CHECK_ONLY=1 ;;
+        -h|--help) sed -n '3,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        *) echo "Opzione sconosciuta: ${arg} (usa --no-pull, --check o --help)" >&2; exit 2 ;;
+    esac
+done
 
 # ------------------------- Utility -------------------------
 log()  { echo -e "\e[1;32m[PLUGIN-INSTALL]\e[0m $*"; }
@@ -100,13 +117,13 @@ else
     log "${PLUGIN_DISTRO} non risulta installato: prima installazione."
 fi
 
-if [[ "${1:-}" == "--check" ]]; then
+if (( CHECK_ONLY )); then
     log "Modalità --check: nessuna modifica effettuata."
     exit 0
 fi
 
-# ------------------------- Git pull (opzionale) -------------------------
-if [[ "${1:-}" == "--pull" ]]; then
+# ------------------------- Git pull (default, salvo --no-pull) -------------------------
+if (( DO_PULL )); then
     step "Aggiornamento repo (git pull)"
     # Il clone sul server è solo di deploy: scarta eventuali modifiche locali
     # (es. chmod, edit al volo) che bloccherebbero la pull.
@@ -123,6 +140,8 @@ if [[ "${1:-}" == "--pull" ]]; then
     repo_git fetch origin
     repo_git reset --hard "origin/${BRANCH}"
     log "Repo a: $(repo_git log -1 --format='%h %s')"
+else
+    warn "--no-pull: installo il plugin così com'è nel clone (nessun aggiornamento da origin)."
 fi
 
 # ------------------------- Rimozione pacchetti precedenti -------------------------

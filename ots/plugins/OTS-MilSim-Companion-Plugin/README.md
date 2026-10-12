@@ -564,9 +564,9 @@ e disinstalla i vecchi OTS-EventCalendar-Plugin / OTS-GameMode-Plugin):
 git clone https://github.com/novatia/atakcivsaas.git
 cd atakcivsaas/ots/scripts
 chmod +x install-milsim-companion-plugin.sh
-./install-milsim-companion-plugin.sh          # installa/aggiorna + restart + verifica
-./install-milsim-companion-plugin.sh --check  # mostra solo la versione installata
-./install-milsim-companion-plugin.sh --pull   # git pull del repo e poi installa
+./install-milsim-companion-plugin.sh            # git pull del repo, poi installa + restart + verifica
+./install-milsim-companion-plugin.sh --no-pull  # reinstalla quello che c'è nel clone, senza pull
+./install-milsim-companion-plugin.sh --check    # mostra solo la versione installata
 ```
 
 Equivalente manuale, come utente `ots`:
