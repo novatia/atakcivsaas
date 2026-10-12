@@ -1,5 +1,7 @@
 """Dati d'ambiente degli strumenti diagnostici: parti senza rete né GDAL."""
 
+import pytest
+
 from datetime import date
 
 from ots_milsim_companion_plugin import diag, radio
@@ -94,3 +96,53 @@ def test_validazione_configurazione_diagnostica():
                      ("OTS_MILSIM_DIAG_MAX_SCENE_DAYS", True)):
         assert not DefaultConfig.validate({**ok, key: bad})["success"], key
     assert DefaultConfig.validate({**ok, "OTS_MILSIM_HQ_NODE_ID": "!a1b2c3d4"})["success"]
+
+
+# ----------------------------------------------------------------------
+# Terreno (altitudine)
+# ----------------------------------------------------------------------
+
+def test_tile_dem_e_griglia_a_un_secondo_d_arco():
+    area = diag.area_for([(44.9349, 9.5510)], margin_m=diag.TERRAIN_MARGIN_M)
+    assert diag.dem_tiles(area) == ["N44_00_E009_00"]
+    assert diag.dem_tiles({"w": 9.9, "s": 44.9, "e": 10.1, "n": 45.1}) == [
+        "N44_00_E009_00", "N44_00_E010_00", "N45_00_E009_00", "N45_00_E010_00"]
+    w, h = diag.terrain_size(area)
+    assert 30 < w < 60 and 30 < h < 60          # ~1 km a 1" (~22×31 m a questa latitudine)
+
+
+def _hill_with_wood(canopy):
+    # Pendio da 100 a 109 m da ovest a est; colonne 3-6 bosco con le chiome `canopy` m sopra
+    width, height = 10, 6
+    ground = [100.0 + c for r in range(height) for c in range(width)]
+    cover = [radio.GRASS if c not in (3, 4, 5, 6) else radio.TREE for r in range(height) for c in range(width)]
+    surface = [g + (canopy if k == radio.TREE else 0) for g, k in zip(ground, cover)]
+    return ground, cover, surface, width, height
+
+
+def test_chiome_alte_tolte_dal_modello_di_superficie():
+    ground, cover, surface, width, height = _hill_with_wood(18.0)
+    assert diag.canopy_offset(surface, cover, width, height) == pytest.approx(18.0)
+    out, info = diag.remove_canopy(surface, cover, width, height)
+    assert out == pytest.approx(ground)                     # pendio intatto, gradino sparito
+    assert info["tree_m"] == 18.0
+
+
+def test_dem_che_segue_gia_il_terreno_resta_com_e():
+    # Come sul campo del 2026-10-11: al margine del bosco il DEM non sale
+    ground, cover, surface, width, height = _hill_with_wood(0.5)
+    out, info = diag.remove_canopy(surface, cover, width, height)
+    assert out == surface and info["tree_m"] == 0.0
+
+
+def test_superficie_lasciata_com_e_senza_margini():
+    out, info = diag.remove_canopy([5.0, 6.0], [radio.TREE, radio.BUILT], 2, 1)
+    assert out == [5.0, 6.0] and info["tree_m"] is None
+
+
+def test_codifica_quote_in_decimetri():
+    import array as _array
+    import base64 as _b64
+    raw = _b64.b64decode(diag.encode_elevation([217.1071, -3.0, 1234.56]))
+    values = _array.array("h"); values.frombytes(raw)
+    assert values.tolist() == [2171, -30, 12346]

@@ -23,6 +23,7 @@ import json
 import math
 import os
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -36,6 +37,16 @@ WORLDCOVER_URL = ("https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/202
                   "ESA_WorldCover_10m_2021_v200_{tile}_Map.tif")
 ATTRIBUTION = ("ESA WorldCover 2021 (CC BY 4.0) · Copernicus Sentinel-2 L2A, "
                "dati modificati, via Element 84 Earth Search")
+# Copernicus DEM GLO-30: quote sul geoide EGM2008 (cioè sul livello del mare),
+# tile da 1°×1°, pubblico su AWS. È un modello di SUPERFICIE: nei boschi e
+# sugli edifici può misurare la cima, vedi remove_canopy().
+DEM_URL = ("https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_{tile}_DEM/"
+           "Copernicus_DSM_COG_10_{tile}_DEM.tif")
+DEM_ATTRIBUTION = ("Copernicus DEM GLO-30 © DLR e.V. 2010-2014 e © Airbus Defence and Space GmbH "
+                   "2014-2018, fornito nell'ambito di COPERNICUS da Unione Europea ed ESA · ESA WorldCover 2021")
+DEM_CELL_DEG = 1 / 3600       # 1 secondo d'arco, la risoluzione nativa
+TERRAIN_MARGIN_M = 500.0      # attorno alle tracce: serve solo dove si è camminato
+MAX_TERRAIN_CELLS = 1500
 
 CELL_M = 10.0                 # risoluzione nativa di entrambe le fonti
 MAX_CELLS = 1000              # lato massimo della griglia (oltre, celle più grandi)
@@ -94,6 +105,93 @@ def worldcover_tiles(area: dict) -> list[str]:
             ew = f"{'E' if lon0 >= 0 else 'W'}{abs(lon0):03d}"
             tiles.append(ns + ew)
     return tiles
+
+
+def dem_tiles(area: dict) -> list[str]:
+    """Tile Copernicus DEM (1°×1°, nome dall'angolo sud-ovest) che coprono il riquadro."""
+    tiles = []
+    for lat0 in range(math.floor(area["s"]), math.floor(area["n"]) + 1):
+        for lon0 in range(math.floor(area["w"]), math.floor(area["e"]) + 1):
+            tiles.append(f"{'N' if lat0 >= 0 else 'S'}{abs(lat0):02d}_00_"
+                         f"{'E' if lon0 >= 0 else 'W'}{abs(lon0):03d}_00")
+    return tiles
+
+
+def terrain_size(area: dict) -> tuple[int, int]:
+    """Griglia a 1 secondo d'arco, ridotta se la zona è grande."""
+    w = (area["e"] - area["w"]) / DEM_CELL_DEG
+    h = (area["n"] - area["s"]) / DEM_CELL_DEG
+    scale = max(1.0, max(w, h) / MAX_TERRAIN_CELLS)
+    return max(1, round(w / scale)), max(1, round(h / scale))
+
+
+OBSTACLES = {radio.TREE, radio.BUILT}
+MIN_CANOPY_M = 3.0            # sotto, il gradino al margine è rumore del DEM: niente correzione
+MAX_CANOPY_M = 35.0
+
+
+def _neighbours(i: int, width: int, height: int):
+    r, c = divmod(i, width)
+    for dr in (-1, 0, 1):
+        for dc in (-1, 0, 1):
+            if (dr or dc) and 0 <= r + dr < height and 0 <= c + dc < width:
+                yield (r + dr) * width + (c + dc)
+
+
+def canopy_offset(elevation: list[float], cover: list[int], width: int, height: int, kind: int = radio.TREE):
+    """Quanto la superficie del DEM sta sopra il terreno in quel tipo di
+    copertura, misurato dove si vede: ai margini, confrontando ogni cella
+    coperta con le celle libere accanto (mediana, robusta ai pendii).
+    None se i margini sono troppo pochi per dirlo."""
+    steps = []
+    for i, c in enumerate(cover):
+        if c != kind:
+            continue
+        free = [elevation[j] for j in _neighbours(i, width, height) if cover[j] not in OBSTACLES]
+        if free:
+            steps.append(elevation[i] - sum(free) / len(free))
+    if len(steps) < 10:
+        return None
+    import statistics
+
+    return statistics.median(steps)
+
+
+def remove_canopy(elevation: list[float], cover: list[int], width: int, height: int) -> tuple[list[float], dict]:
+    """Toglie alberi ed edifici dal modello di superficie, se ci sono.
+
+    Copernicus DEM è un modello di superficie, ma quanto «vede» le chiome
+    dipende dal bosco: misurato sul campo della giocata del 2026-10-11
+    (colline dell'Oltrepò, latifoglie) il gradino al margine del bosco è di
+    0-1 m, cioè il DEM segue già il terreno. Si misura quindi zona per zona
+    e si sottrae l'altezza stimata, uniforme, solo se supera MIN_CANOPY_M:
+    in un bosco continuo la forma del pendio resta quella del DEM e sparisce
+    il gradino che il dislivello conterebbe come salita. (Ricostruire il
+    terreno dalle radure è stato provato e scartato: con l'84% di bosco
+    inventava pendii di 30 m.)"""
+    out = list(elevation)
+    applied = {}
+    for kind in (radio.TREE, radio.BUILT):
+        offset = canopy_offset(elevation, cover, width, height, kind)
+        if offset is not None and offset >= MIN_CANOPY_M:
+            offset = min(offset, MAX_CANOPY_M)
+            for i, c in enumerate(cover):
+                if c == kind:
+                    out[i] -= offset
+            applied[kind] = round(offset, 1)
+        else:
+            applied[kind] = 0.0 if offset is not None else None
+    return out, {"tree_m": applied[radio.TREE], "built_m": applied[radio.BUILT]}
+
+
+def encode_elevation(values: list[float]) -> str:
+    """Quote in decimetri, int16 little-endian, base64 (±3276 m bastano)."""
+    data = array.array("h", (max(-32768, min(32767, round(v * 10))) for v in values))
+    if data.itemsize != 2:
+        raise DiagError("int16 non disponibile")
+    if sys.byteorder != "little":
+        data.byteswap()
+    return base64.b64encode(data.tobytes()).decode()
 
 
 def cache_key(area: dict, day: date, max_age_days: int = MAX_SCENE_AGE_DAYS) -> str:
@@ -307,6 +405,42 @@ def build(area: dict, day: date, folder: str, on_step=lambda text: None,
         shutil.rmtree(work, ignore_errors=True)
 
 
+def build_terrain(area: dict, folder: str, on_step=lambda text: None) -> dict:
+    """Quote del terreno (DEM corretto per boschi ed edifici); scrive result.json."""
+    from . import offline_map
+
+    missing = offline_map.missing_tools()
+    if "gdalwarp" in missing:
+        raise DiagError("sul server manca il comando GDAL gdalwarp")
+    size = terrain_size(area)
+    work = tempfile.mkdtemp(prefix="milsim-terrain-")
+    try:
+        on_step("modello del terreno (Copernicus DEM)")
+        elevation = _warp([DEM_URL.format(tile=t) for t in dem_tiles(area)],
+                          area, size, os.path.join(work, "dem.bin"), "Float32", "bilinear")
+        on_step("boschi ed edifici (ESA WorldCover)")
+        cover = _warp([WORLDCOVER_URL.format(tile=t) for t in worldcover_tiles(area)],
+                      area, size, os.path.join(work, "cover.bin"), "Byte", "mode")
+        on_step("altezza di chiome ed edifici")
+        ground, canopy = remove_canopy(elevation, cover, *size)
+        covered = sum(c in OBSTACLES for c in cover) / len(cover)
+        result = {
+            "area": area,
+            "width": size[0],
+            "height": size[1],
+            "elevation_dm": encode_elevation(ground),
+            "obstacle_share": round(covered * 100, 1),
+            "canopy_removed": canopy,
+            "attribution": DEM_ATTRIBUTION,
+            "built_at": datetime.utcnow().isoformat() + "Z",
+        }
+        with open(os.path.join(folder, "result.json"), "w") as f:
+            json.dump(result, f)
+        return result
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 # ---------------------------------------------------------------------------
 # Cache e stato del lavoro in background
 # ---------------------------------------------------------------------------
@@ -321,10 +455,21 @@ def _write_status(folder: str, **status) -> None:
 
 
 def environment(base: str, area: dict, day: date, max_age_days: int = MAX_SCENE_AGE_DAYS) -> dict:
-    """Stato dei dati d'ambiente per riquadro e data; avvia lo scarico se
-    serve. Stato su disco: con più processi OTS la richiesta successiva può
-    arrivare a un altro, che deve vedere lo stesso lavoro."""
+    """Stato dei dati d'ambiente per riquadro e data; avvia lo scarico se serve."""
     key = cache_key(area, day, max_age_days)
+    return _job(base, key, lambda folder, on_step: build(area, day, folder, on_step, max_age_days=max_age_days))
+
+
+def terrain(base: str, area: dict) -> dict:
+    """Stato del modello del terreno per il riquadro; avvia lo scarico se serve."""
+    key = "t" + hashlib.sha1(json.dumps([area["w"], area["s"], area["e"], area["n"]]).encode()).hexdigest()[:15]
+    return _job(base, key, lambda folder, on_step: build_terrain(area, folder, on_step))
+
+
+def _job(base: str, key: str, builder) -> dict:
+    """Risultato in cache, o lavoro in corso, o avvio del lavoro. Stato su
+    disco: con più processi OTS la richiesta successiva può arrivare a un
+    altro, che deve vedere lo stesso lavoro."""
     folder = _folder(base, key)
     result_path = os.path.join(folder, "result.json")
     if os.path.exists(result_path):
@@ -350,8 +495,7 @@ def environment(base: str, area: dict, day: date, max_age_days: int = MAX_SCENE_
 
     def work():
         try:
-            build(area, day, folder, on_step=lambda text: _write_status(folder, state="running", step=text),
-                  max_age_days=max_age_days)
+            builder(folder, lambda text: _write_status(folder, state="running", step=text))
             _write_status(folder, state="ready")
         except BaseException as e:
             message = str(e) if isinstance(e, DiagError) else f"{type(e).__name__}: {e}"

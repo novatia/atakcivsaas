@@ -10,7 +10,9 @@
 #   propagazione modello a due raggi (terreno piatto): con antenne basse,
 #                oltre il «punto di rottura» d_c = 4π·h1·h2/λ la perdita cresce
 #                di 40 dB/decade invece che di 20. Prima di d_c, spazio libero.
-#                La pianura del Po è piatta: niente modello del terreno;
+#                LIMITE: terreno piatto. In collina (il campo della giocata del
+#                2026-10-11 sta fra 170 e 240 m, Oltrepò) un dosso fra due
+#                operatori può bloccare il segnale e qui non si vede;
 #   vegetazione  modello di Weissberger sulla profondità di fogliame
 #                attraversata lungo il raggio, pesata per la densità della cella
 #                (copertura ESA WorldCover × NDVI Sentinel-2, vedi diag.py).

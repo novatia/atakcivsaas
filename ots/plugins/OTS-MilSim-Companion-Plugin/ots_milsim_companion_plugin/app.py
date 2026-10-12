@@ -790,6 +790,8 @@ def _gps_tracks(start_utc: datetime, end_utc: datetime, step: int, match_roles: 
         "timezone": app.config.get("OTS_EVENTCALENDAR_TIMEZONE", "Europe/Rome"),
         "hq": hq,
         "diagnostics": _diagnostics(cfg, tracks, hq, start_utc),
+        # Zona per il modello del terreno (altitudine e dislivello nel pannello dettagli)
+        "terrain": diag.area_for([(p[1], p[2]) for t in tracks for p in t["points"]], margin_m=diag.TERRAIN_MARGIN_M),
     }
 
 
@@ -4223,6 +4225,26 @@ class MilSimCompanionPlugin(Plugin):
             ) > diag.MAX_EXTENT_M * 1.5:
                 return jsonify({"success": False, "error": "Zona troppo grande"}), 400
             return jsonify(diag.environment(app.config.get("OTS_DATA_FOLDER"), area, day, max_days))
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @blueprint.route("/replay/terrain")
+    @roles_accepted("administrator")
+    def replay_terrain():
+        """Quote del terreno (Copernicus DEM) per la zona di una giocata: altitudine
+        e dislivello nel pannello dettagli del player. Primo giro in background."""
+        try:
+            try:
+                area = {k: round(float(request.args[k]), 3) for k in ("w", "s", "e", "n")}
+            except (KeyError, ValueError):
+                return jsonify({"success": False, "error": "Parametri w, s, e, n obbligatori"}), 400
+            if not (area["w"] < area["e"] and area["s"] < area["n"]) or max(
+                (area["e"] - area["w"]) * 111_320, (area["n"] - area["s"]) * 111_320
+            ) > diag.MAX_EXTENT_M * 1.5:
+                return jsonify({"success": False, "error": "Zona non valida o troppo grande"}), 400
+            return jsonify(diag.terrain(app.config.get("OTS_DATA_FOLDER"), area))
         except BaseException as e:
             logger.error(traceback.format_exc())
             return jsonify({"success": False, "error": str(e)}), 500

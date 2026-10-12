@@ -729,6 +729,14 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.38.0** — pannello dettagli del replay: **altitudine e dislivello**. Le quote vengono dal modello del
+  terreno Copernicus DEM GLO-30 (30 m, pubblico su AWS, scaricato in background una volta per zona) nella
+  posizione di ogni punto, non dal GPS: la quota GPS è rumorosa e i tag rilanciati da ATAK non la
+  trasmettono. Il DEM è un modello di superficie: l'altezza delle chiome al margine dei boschi viene
+  misurata zona per zona e tolta se supera 3 m (sul campo del 2026-10-11 è 0-1 m: il DEM segue già il
+  terreno). Grafico dell'altitudine, quota min-max, dislivello misurato (soglia di isteresi 2 m) e, con le
+  interruzioni, dislivello stimato dalla pendenza media locale per la distanza stimata, mai sotto la
+  differenza di quota fra il punto prima e quello dopo (minimo certo).
 - **3.37.0** — **strumenti diagnostici del replay** (spenti di default, tab Manutenzione): raggio radio
   teorico in campo aperto per preset LoRa (link budget di Meshtastic, modello a due raggi con antenne a
   1,5 m), **bolla** di portata che toglie l'attenuazione della vegetazione attraversata (Weissberger;
