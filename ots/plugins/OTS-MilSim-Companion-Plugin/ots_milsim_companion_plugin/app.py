@@ -4250,6 +4250,36 @@ class MilSimCompanionPlugin(Plugin):
             return jsonify({"success": False, "error": str(e)}), 500
 
     @staticmethod
+    @blueprint.route("/diag/jobs")
+    @roles_accepted("administrator")
+    def diag_jobs():
+        """Log degli scarichi di terreno e dati d'ambiente (tab Manutenzione)."""
+        try:
+            return jsonify(diag.list_jobs(app.config.get("OTS_DATA_FOLDER")))
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
+    @blueprint.route("/diag/jobs/<key>", methods=["DELETE"])
+    @roles_accepted("administrator")
+    def diag_job_retry(key: str):
+        if not diag.retry(app.config.get("OTS_DATA_FOLDER"), key):
+            return jsonify({"success": False, "error": "Scarico non trovato"}), 404
+        return jsonify({"success": True})
+
+    @staticmethod
+    @blueprint.route("/diag/selftest", methods=["POST"])
+    @roles_accepted("administrator")
+    def diag_selftest():
+        """Prove dal server con output completo: GDAL, rete, lettura del DEM."""
+        try:
+            return jsonify(diag.selftest())
+        except BaseException as e:
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    @staticmethod
     @blueprint.route("/replay/environment/<key>/s2.png")
     @roles_accepted("administrator")
     def replay_environment_image(key: str):

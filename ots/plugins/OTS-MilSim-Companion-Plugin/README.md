@@ -729,6 +729,10 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.38.1** — tab Manutenzione: **log dati satellitari e terreno** (stato di ogni scarico, errore completo
+  col comando GDAL e il suo output, ↻ Riprova) e **autotest dal server** (comandi e versione di GDAL, formati,
+  raggiungibilità dei quattro host, lettura vera di una finestra del DEM via /vsicurl). Nel pannello dettagli
+  del replay gli errori lunghi vanno a capo invece di uscire dal bordo.
 - **3.38.0** — pannello dettagli del replay: **altitudine e dislivello**. Le quote vengono dal modello del
   terreno Copernicus DEM GLO-30 (30 m, pubblico su AWS, scaricato in background una volta per zona) nella
   posizione di ogni punto, non dal GPS: la quota GPS è rumorosa e i tag rilanciati da ATAK non la

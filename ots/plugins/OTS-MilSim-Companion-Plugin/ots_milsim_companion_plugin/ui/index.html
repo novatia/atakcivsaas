@@ -102,7 +102,8 @@
   .rp-info h4 { margin: 12px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
   .rp-info dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; }
   .rp-info dt { color: var(--muted); }
-  .rp-info dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .rp-info dd { margin: 0; font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; }
+  .rp-info { overflow-x: hidden; }
   .rp-pair { border: 1px dashed var(--border); border-radius: 6px; padding: 6px 8px; margin-top: 8px; }
   .rp-chart { position: relative; }
   .rp-chart svg { display: block; width: 100%; cursor: crosshair; }
@@ -117,7 +118,7 @@
   /* Strumenti diagnostici del replay */
   .rp-diag { margin-top: 8px; padding: 6px 10px; border: 1px dashed var(--border); border-radius: 8px; font-size: 13px; }
   .rp-diag label { display: inline-flex; align-items: center; gap: 4px; }
-  .rp-diag-status { flex-basis: 100%; font-size: 12px; }
+  .rp-diag-status { flex-basis: 100%; font-size: 12px; overflow-wrap: anywhere; white-space: pre-line; }
   .rp-hq { font-size: 20px; line-height: 1; filter: drop-shadow(0 0 2px rgba(0,0,0,.8)); }
   #rp-legend label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; font-size: 12.5px; }
   .rp-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; border: 2px solid #fff; box-shadow: 0 0 3px rgba(0,0,0,.5); flex: none; }
@@ -1343,7 +1344,7 @@ function rpElevationStats(p, holes, holeDist, steps, inWindow) {
 function rpElevationRows(st) {
   const T = RP.terrain || {};
   if (!st.elevation) {
-    if (T.state === "error") return `<dt>Dislivello</dt><dd class="muted">quote del terreno non disponibili: ${esc(T.error || "")}</dd>`;
+    if (T.state === "error") return `<dt>Dislivello</dt><dd class="muted" style="white-space:pre-line">quote del terreno non disponibili: ${esc(T.error || "")}</dd>`;
     if (T.state === "ready") return "";
     return `<dt>Dislivello</dt><dd class="muted">⏳ ${esc(T.step || "carico le quote del terreno")}…</dd>`;
   }
@@ -2470,6 +2471,57 @@ async function renderHealth() {
       morto darebbe comunque zero consumer sulla coda. Per riavviare un servizio serve il server.</p>`;
 }
 
+// Scarichi di terreno (altitudine) e dati d'ambiente (diagnostica radio): stato,
+// errore completo col comando GDAL e il suo output, autotest dal server
+async function renderDiagLogs() {
+  const box = document.getElementById("diag-logs");
+  if (!box) return;
+  let jobs;
+  try { jobs = await api("/diag/jobs"); } catch (e) { box.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`; return; }
+  const when = at => at ? new Date(at * 1000).toLocaleString("it-IT") : "";
+  const pill = s => s === "ready" ? '<span class="pill ok">pronto</span>' : s === "error" ? '<span class="pill err">errore</span>'
+    : s === "running" ? '<span class="pill warn">in corso</span>' : `<span class="pill neutral">${esc(s)}</span>`;
+  const rows = jobs.map(j => `<tr>
+      <td>${j.kind}<br><code style="font-size:11px">${esc(j.key)}</code></td>
+      <td>${pill(j.state)}<br><span class="muted" style="font-size:11.5px">${esc(when(j.at))}</span></td>
+      <td style="overflow-wrap:anywhere">${j.state === "ready"
+        ? `${j.width}×${j.height} celle${j.sentinel2 ? ` · Sentinel-2 del ${esc(j.sentinel2.date)}` : ""}${j.canopy_removed ? ` · chiome tolte: ${j.canopy_removed.tree_m ?? "—"} m` : ""}`
+        : esc(j.error || j.step || "")}
+        ${j.detail || j.trace ? `<details><summary class="muted" style="cursor:pointer">dettagli</summary><pre style="white-space:pre-wrap;font-size:11px;max-height:300px;overflow:auto">${esc([j.detail, j.trace].filter(Boolean).join("\n\n---\n"))}</pre></details>` : ""}</td>
+      <td><button class="btn small" onclick="retryDiagJob('${esc(j.key)}')" title="Dimentica e riscarica alla prossima apertura del replay">↻ Riprova</button></td>
+    </tr>`).join("");
+  box.innerHTML = `
+    <p class="muted" style="margin-top:0">Quote del terreno (altitudine e dislivello nel replay) e dati d'ambiente (strumenti diagnostici),
+      scaricati dal server una volta per zona. Se qualcosa non arriva, qui c'è l'errore completo; l'autotest prova dal server
+      GDAL, rete e una lettura vera del modello del terreno.</p>
+    <p><button class="btn" id="diag-selftest-btn" onclick="runDiagSelftest(this)">🧪 Autotest dal server</button>
+      <button class="btn" onclick="renderDiagLogs()">↻ Aggiorna</button></p>
+    <div id="diag-selftest"></div>
+    ${jobs.length ? `<table style="table-layout:fixed;width:100%"><colgroup><col style="width:130px"><col style="width:120px"><col><col style="width:100px"></colgroup>
+      <thead><tr><th>Tipo</th><th>Stato</th><th>Esito</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+      : '<p class="muted">Nessuno scarico ancora: parte aprendo il replay di una giocata.</p>'}`;
+}
+
+async function retryDiagJob(key) {
+  try { await api(`/diag/jobs/${encodeURIComponent(key)}`, { method: "DELETE" }); toast("Riscaricherà alla prossima apertura del replay."); }
+  catch (e) { toast("Errore: " + e.message, false); }
+  renderDiagLogs();
+}
+
+async function runDiagSelftest(btn) {
+  const out = document.getElementById("diag-selftest");
+  btn.disabled = true;
+  out.innerHTML = '<p class="muted">⏳ Autotest in corso (fino a un minuto)…</p>';
+  try {
+    const checks = await api("/diag/selftest", { method: "POST" });
+    out.innerHTML = checks.map(c => `<details ${c.ok ? "" : "open"} style="margin-bottom:4px">
+        <summary style="cursor:pointer">${c.ok ? "✅" : "❌"} ${esc(c.name)}</summary>
+        <pre style="white-space:pre-wrap;font-size:11.5px;max-height:300px;overflow:auto">${esc(c.output || "")}</pre></details>`).join("");
+  } catch (e) {
+    out.innerHTML = `<p>⚠️ ${esc(e.message)}</p>`;
+  } finally { btn.disabled = false; }
+}
+
 async function renderDiagConfig() {
   const box = document.getElementById("diag-config");
   let cfg;
@@ -2533,10 +2585,13 @@ async function renderMaintenance() {
     <div id="health-box"></div>
     <h2 style="margin-top:26px">Strumenti diagnostici e quartier generale</h2>
     <div id="diag-config">Caricamento…</div>
+    <h2 style="margin-top:26px">Log dati satellitari e terreno</h2>
+    <div id="diag-logs">Caricamento…</div>
     <h2 style="margin-top:26px">Manutenzione dati OpenTAKServer</h2>
     <div id='maint'>Caricamento…</div>`;
   renderHealth();
   renderDiagConfig();
+  renderDiagLogs();
   const stats = await api("/maintenance/stats");
   document.getElementById("maint").innerHTML = `
     <p class="muted">Svuota le tabelle di OpenTAKServer quando si accumulano dati di test o vecchi.

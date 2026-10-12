@@ -62,7 +62,12 @@ _lock = threading.Lock()
 
 
 class DiagError(Exception):
-    pass
+    """Errore leggibile; `detail` = comando eseguito e output completo, per i
+    log della tab Manutenzione."""
+
+    def __init__(self, message: str, detail: str | None = None):
+        super().__init__(message)
+        self.detail = detail
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +293,8 @@ def _warp(sources: list[str], area: dict, size: tuple[int, int], out: str, ot: s
     try:
         offline_map.run(cmd, timeout=600)
     except offline_map.OfflineMapError as e:
-        raise DiagError(f"lettura di {sources[0].rsplit('/', 1)[-1]} fallita: {e}") from e
+        raise DiagError(f"lettura di {sources[0].rsplit('/', 1)[-1]} fallita: {e}",
+                        detail=" ".join(cmd) + "\n\n" + str(e)) from e
     data = array.array({"Byte": "B", "Float32": "f", "UInt16": "H"}[ot])
     with open(out, "rb") as f:
         data.frombytes(f.read())
@@ -301,18 +307,20 @@ def _png(source: str, area: dict, size: tuple[int, int], out_png: str, work: str
     from . import offline_map
 
     tif = os.path.join(work, "visual.tif")
+    cmd = [
+        "gdalwarp", "-overwrite", "-q",
+        "--config", "GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR",
+        "-t_srs", "EPSG:4326",
+        "-te", str(area["w"]), str(area["s"]), str(area["e"]), str(area["n"]),
+        "-ts", str(size[0]), str(size[1]), "-r", "bilinear",
+        f"/vsicurl/{source}", tif,
+    ]
     try:
-        offline_map.run([
-            "gdalwarp", "-overwrite", "-q",
-            "--config", "GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR",
-            "-t_srs", "EPSG:4326",
-            "-te", str(area["w"]), str(area["s"]), str(area["e"]), str(area["n"]),
-            "-ts", str(size[0]), str(size[1]), "-r", "bilinear",
-            f"/vsicurl/{source}", tif,
-        ], timeout=600)
-        offline_map.run(["gdal_translate", "-q", "-of", "PNG", tif, out_png], timeout=300)
+        offline_map.run(cmd, timeout=600)
+        cmd = ["gdal_translate", "-q", "-of", "PNG", tif, out_png]
+        offline_map.run(cmd, timeout=300)
     except offline_map.OfflineMapError as e:
-        raise DiagError(f"immagine Sentinel-2 non generata: {e}") from e
+        raise DiagError(f"immagine Sentinel-2 non generata: {e}", detail=" ".join(cmd) + "\n\n" + str(e)) from e
 
 
 def _search_scenes(area: dict, day: date, max_age_days: int) -> list[dict]:
@@ -500,10 +508,129 @@ def _job(base: str, key: str, builder) -> dict:
         except BaseException as e:
             message = str(e) if isinstance(e, DiagError) else f"{type(e).__name__}: {e}"
             _write_status(folder, state="error", error=message, retry_after=time.time() + 120,
-                          trace=traceback.format_exc()[-2000:])
+                          detail=getattr(e, "detail", None), trace=traceback.format_exc()[-4000:])
 
     threading.Thread(target=work, daemon=True, name=f"milsim-diag-{key}").start()
     return {"state": "running", "key": key, "step": "avvio"}
+
+
+# ---------------------------------------------------------------------------
+# Log e autotest (tab Manutenzione)
+# ---------------------------------------------------------------------------
+
+def list_jobs(base: str) -> list[dict]:
+    """Scarichi in cache o tentati: stato, ultimo passo, errore completo."""
+    root = os.path.join(base, "milsim_diag")
+    jobs = []
+    if not os.path.isdir(root):
+        return jobs
+    for key in sorted(os.listdir(root)):
+        folder = os.path.join(root, key)
+        if not os.path.isdir(folder) or not key.isalnum():
+            continue
+        status = {}
+        try:
+            with open(os.path.join(folder, "status.json")) as f:
+                status = json.load(f)
+        except (OSError, ValueError):
+            pass
+        info = {}
+        result = os.path.join(folder, "result.json")
+        if os.path.exists(result):
+            try:
+                with open(result) as f:
+                    data = json.load(f)
+                info = {k: data.get(k) for k in ("area", "width", "height", "sentinel2", "notes",
+                                                 "canopy_removed", "obstacle_share", "built_at")}
+            except (OSError, ValueError):
+                pass
+        jobs.append({
+            "key": key,
+            "kind": "terreno" if key.startswith("t") else "ambiente",
+            "state": "ready" if os.path.exists(result) else status.get("state", "?"),
+            "step": status.get("step"),
+            "error": status.get("error"),
+            "detail": status.get("detail"),
+            "trace": status.get("trace"),
+            "at": status.get("at"),
+            **info,
+        })
+    return sorted(jobs, key=lambda j: j.get("at") or 0, reverse=True)
+
+
+def retry(base: str, key: str) -> bool:
+    """Dimentica un tentativo fallito o un risultato: la prossima richiesta riparte."""
+    if not key.isalnum():
+        return False
+    folder = _folder(base, key)
+    if not os.path.isdir(folder):
+        return False
+    shutil.rmtree(folder, ignore_errors=True)
+    return True
+
+
+SELFTEST_HOSTS = (
+    ("Catalogo Sentinel-2 (Element 84)", STAC_SEARCH + "?collections=sentinel-2-l2a&limit=1"),
+    ("Sentinel-2 COG (AWS)", "https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs/"
+                             "32/T/NQ/2026/10/S2A_32TNQ_20261009_1_L2A/B04.tif"),
+    ("ESA WorldCover (AWS)", WORLDCOVER_URL.format(tile="N45E009")),
+    ("Copernicus DEM (AWS)", DEM_URL.format(tile="N44_00_E009_00")),
+)
+
+
+def selftest() -> list[dict]:
+    """Prove dal server, con l'output completo: comandi GDAL, rete, una
+    lettura vera di una finestra del DEM via /vsicurl come fa build_terrain."""
+    import requests
+
+    from . import offline_map
+
+    checks = []
+
+    def check(name, fn):
+        try:
+            ok, output = fn()
+        except BaseException as e:
+            ok, output = False, f"{type(e).__name__}: {e}\n{traceback.format_exc()[-1500:]}"
+        checks.append({"name": name, "ok": ok, "output": output})
+
+    def tools():
+        missing = offline_map.missing_tools()
+        found = {t: shutil.which(t) for t in offline_map.GDAL_TOOLS}
+        return not missing, "\n".join(f"{t}: {p or 'NON TROVATO'}" for t, p in found.items())
+
+    def version():
+        return True, offline_map.run(["gdalwarp", "--version"], timeout=30).strip()
+
+    def drivers():
+        out = offline_map.run(["gdalinfo", "--formats"], timeout=30)
+        wanted = [line.strip() for line in out.splitlines() if line.strip().split(" ")[0] in ("ENVI", "GTiff", "PNG")]
+        return len(wanted) == 3, "\n".join(wanted) or out[-800:]
+
+    check("Comandi GDAL", tools)
+    check("Versione GDAL", version)
+    check("Formati ENVI, GTiff, PNG", drivers)
+    for name, url in SELFTEST_HOSTS:
+        def reach(url=url):
+            r = requests.get(url, headers={"Range": "bytes=0-1023"}, timeout=20, stream=True)
+            r.close()
+            return r.status_code < 400, f"GET {url}\nHTTP {r.status_code}"
+        check(f"Rete: {name}", reach)
+
+    def dem_window():
+        work = tempfile.mkdtemp(prefix="milsim-selftest-")
+        try:
+            area = {"w": 9.540, "s": 44.925, "e": 9.560, "n": 44.940}
+            values = _warp([DEM_URL.format(tile="N44_00_E009_00")], area, (20, 20),
+                           os.path.join(work, "dem.bin"), "Float32", "bilinear")
+            return True, f"20×20 quote lette: min {min(values):.1f} m, max {max(values):.1f} m"
+        except DiagError as e:
+            return False, f"{e}\n\n{e.detail or ''}"
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    check("Lettura via /vsicurl di una finestra del DEM", dem_window)
+    return checks
 
 
 def image_path(base: str, key: str) -> str | None:
