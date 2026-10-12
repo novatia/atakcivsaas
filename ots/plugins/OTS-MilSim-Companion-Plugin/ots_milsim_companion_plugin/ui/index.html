@@ -1075,6 +1075,7 @@ async function renderReplay(id, isMatch = false) {
       <label title="Portata teorica in campo aperto, senza ostacoli: il massimo possibile con questo preset"><input type="checkbox" id="rp-diag-range"> ◯ raggio in campo aperto</label>
       <label title="Portata stimata direzione per direzione togliendo l'attenuazione della vegetazione attraversata"><input type="checkbox" id="rp-diag-bubble"> 🫧 bolla con vegetazione</label>
       <label title="Immagine satellitare Sentinel-2 a colori veri della data più vicina alla giocata"><input type="checkbox" id="rp-diag-s2"> 🛰 Sentinel-2</label>
+      <label title="Chi si sentiva con chi in quell'istante secondo il modello (verde = margine ≥ 6 dB, giallo = al limite) e con quanti salti ogni nodo arrivava a un telefono che rilanciava al server"><input type="checkbox" id="rp-diag-net"> 🔗 rete stimata</label>
       <span class="muted rp-diag-status" id="rp-diag-status"></span>
     </div>` : ""}
     <input type="range" id="rp-slider" min="${data.start}" max="${data.end}" step="1">
@@ -1594,7 +1595,8 @@ function rpInfoTick() {
         <dt>Posizione</dt><dd>${p[1].toFixed(5)}, ${p[2].toFixed(5)}</dd>
         <dt>Velocità</dt><dd>${p[3] == null ? "—" : (p[3] * 3.6).toFixed(1) + " km/h"}</dd>
         <dt>Direzione</dt><dd>${p[4] == null ? '<span class="muted">non ancora nota</span>' : rpWind(p[4])}</dd>
-        <dt>Batteria</dt><dd>${p[5] == null ? "—" : p[5] + "%"}${radio ? ` · 📡 ${rb == null ? "—" : rb + "%"}` : ""}</dd>`;
+        <dt>Batteria</dt><dd>${p[5] == null ? "—" : p[5] + "%"}${radio ? ` · 📡 ${rb == null ? "—" : rb + "%"}` : ""}</dd>
+        ${rpNetSummary(t) != null ? `<dt>Rete stimata</dt><dd>${rpNetSummary(t)}</dd>` : ""}`;
     }
   }
   for (const c of RP.charts || []) {
@@ -1640,6 +1642,17 @@ const RD = {
     return [lat + d * Math.cos(b) / R * 180 / Math.PI,
             lon + d * Math.sin(b) / (R * Math.cos(lat * Math.PI / 180)) * 180 / Math.PI];
   },
+  // Perdita totale (due raggi + vegetazione attraversata) fino a distanza d
+  lossAt(d, h1, h2, f, densityAlong, step = 10) {
+    let depth = 0;
+    for (let x = 0; x < d; x += step) depth += Math.min(step, d - x) * densityAlong(x + Math.min(step, d - x) / 2);
+    return RD.pathLoss(d, h1, h2, f) + RD.vegLoss(depth, f);
+  },
+  bearing(lat1, lon1, lat2, lon2) {
+    const r = Math.PI / 180, y = Math.sin((lon2 - lon1) * r) * Math.cos(lat2 * r);
+    const x = Math.cos(lat1 * r) * Math.sin(lat2 * r) - Math.sin(lat1 * r) * Math.cos(lat2 * r) * Math.cos((lon2 - lon1) * r);
+    return (Math.atan2(y, x) / r + 360) % 360;
+  },
   reach(allowed, h1, h2, f, densityAlong, step = 10) {
     const limit = RD.openRange(allowed, h1, h2, f);
     let depth = 0, d = 0;
@@ -1684,12 +1697,15 @@ function rpDiagStatus(html) {
 }
 
 function rpDiagInit(cfg) {
-  RP.diag = { cfg, preset: cfg.preset, show: { range: false, bubble: false, s2: false }, grid: null, s2: null, hqLayers: {} };
+  RP.diag = { cfg, preset: cfg.preset, show: { range: false, bubble: false, s2: false, net: false }, grid: null, s2: null,
+    hqLayers: {}, net: null, netAt: null, netLayer: L.layerGroup().addTo(RP.map) };
   const onChange = () => {
     RP.diag.preset = document.getElementById("rp-diag-preset").value;
     RP.diag.show.range = document.getElementById("rp-diag-range").checked;
     RP.diag.show.bubble = document.getElementById("rp-diag-bubble").checked;
     RP.diag.show.s2 = document.getElementById("rp-diag-s2").checked;
+    RP.diag.show.net = document.getElementById("rp-diag-net").checked;
+    RP.diag.netAt = null;
     if (RP.diag.s2) {
       if (RP.diag.show.s2) RP.diag.s2.addTo(RP.map).bringToBack(); else RP.map.removeLayer(RP.diag.s2);
     }
@@ -1697,7 +1713,7 @@ function rpDiagInit(cfg) {
     RP.diag.hqLayers.bubbleKey = null;
     rpUpdate(false);
   };
-  ["rp-diag-preset", "rp-diag-range", "rp-diag-bubble", "rp-diag-s2"].forEach(id =>
+  ["rp-diag-preset", "rp-diag-range", "rp-diag-bubble", "rp-diag-s2", "rp-diag-net"].forEach(id =>
     document.getElementById(id).addEventListener("change", onChange));
   const env = cfg.environment;
   if (!env) {
@@ -1736,6 +1752,7 @@ async function rpDiagLoadEnvironment(env, token) {
         + (res.notes || []).map(n => `<br>⚠️ ${esc(n)}`).join(""));
       for (const t of RP.tracks) t.bubbleKey = null;
       RP.diag.hqLayers.bubbleKey = null;
+      RP.diag.netAt = null;
       rpUpdate(false);
       return;
     }
@@ -1772,8 +1789,94 @@ function rpDiagDraw(layers, pos, color, h1, bodies, visible) {
   } else if (layers.bubble && map.hasLayer(layers.bubble)) map.removeLayer(layers.bubble);
 }
 
+/* ---- Rete stimata: chi si sentiva con chi, e in quanti salti si arrivava al server ----
+   Nodi LoRa attivi (dato negli ultimi 2 minuti): i tag e i telefoni (la loro radio è
+   addosso a loro; la radio abbinata non conta due volte), più il QG se è noto.
+   Collegamento se la perdita lungo la linea fra i due sta nel budget del preset. */
+const RP_NET_MARGIN_OK_DB = 6;
+const RP_NET_MAX_HOPS = 3;          // hop limit di default di Meshtastic
+
+function rpNetCompute() {
+  const D = RP.diag, f = D.cfg.freq_mhz, clock = RP.clock;
+  const nodes = [];
+  for (const t of RP.tracks) {
+    if (t.paired_with) continue;
+    const i = rpLocate(t.points, clock);
+    if (i < 0 || clock - t.points[i][0] > RP_GAP_S || !t.onMap) continue;
+    const ll = t.marker.getLatLng();
+    nodes.push({ id: t.uid, name: (t.isTag ? "📡 " : "📱 ") + t.callsign, lat: ll.lat, lon: ll.lng, h: D.cfg.tag_height_m, body: 1, track: t });
+  }
+  if (RP.hq) nodes.push({ id: "hq", name: "🏠 QG", lat: RP.hq.lat, lon: RP.hq.lon, h: RP.hq.height_m, body: 0 });
+
+  // Telefoni che rilanciavano al server: chi compare in «Ricevuto da» di qualche tag
+  const relaying = new Set();
+  for (const t of RP.tracks) for (const via of Object.keys(t.relayers || {})) if (via !== "mqtt") relaying.add(via);
+  const receivers = new Set(nodes.filter(n => relaying.has(n.id) || (n.id === "hq" && RP.hq.source === "gateway")).map(n => n.id));
+
+  const links = [];
+  for (let a = 0; a < nodes.length; a++) for (let b = a + 1; b < nodes.length; b++) {
+    const A = nodes[a], B = nodes[b];
+    const d = rpDistanceM(A.lat, A.lon, B.lat, B.lon);
+    const allowed = rpDiagAllowed(A.body + B.body);
+    if (d > RD.openRange(allowed, A.h, B.h, f)) continue;
+    const brg = RD.bearing(A.lat, A.lon, B.lat, B.lon);
+    const loss = RD.lossAt(d, A.h, B.h, f, x => rpDiagDensity(...RD.dest(A.lat, A.lon, brg, x)));
+    if (loss <= allowed) links.push({ a: A, b: B, d, margin: allowed - loss });
+  }
+
+  // Salti fino al ricevitore più vicino (visita in ampiezza sul grafo dei collegamenti)
+  const near = new Map(nodes.map(n => [n.id, []]));
+  for (const l of links) { near.get(l.a.id).push(l.b); near.get(l.b.id).push(l.a); }
+  const hops = new Map(), via = new Map();
+  let frontier = nodes.filter(n => receivers.has(n.id));
+  frontier.forEach(n => hops.set(n.id, 0));
+  for (let k = 1; frontier.length; k++) {
+    const next = [];
+    for (const n of frontier) for (const m of near.get(n.id)) if (!hops.has(m.id)) { hops.set(m.id, k); via.set(m.id, n); next.push(m); }
+    frontier = next;
+  }
+  return { nodes, links, hops, via, receivers };
+}
+
+function rpNetDraw() {
+  const D = RP.diag;
+  D.netLayer.clearLayers();
+  if (!D.show.net || !D.net) return;
+  for (const l of D.net.links) {
+    const ok = l.margin >= RP_NET_MARGIN_OK_DB;
+    L.polyline([[l.a.lat, l.a.lon], [l.b.lat, l.b.lon]], {
+      color: ok ? "#2e7d32" : "#f9a825", weight: ok ? 3 : 2, opacity: 0.85, dashArray: ok ? null : "6 5",
+    }).bindTooltip(`${esc(l.a.name)} ↔ ${esc(l.b.name)}: ${Math.round(l.d)} m, margine ${l.margin.toFixed(1)} dB`, { sticky: true })
+      .addTo(D.netLayer);
+  }
+}
+
+// Riga del pannello dettagli: come arrivava al server l'operatore selezionato
+function rpNetSummary(t) {
+  const N = RP.diag && RP.diag.show.net && RP.diag.net;
+  if (!N) return null;
+  const node = N.nodes.find(n => n.id === t.uid);
+  if (!node) return '<span class="muted">non attivo in questo istante (nessun dato da oltre 2 min)</span>';
+  if (N.receivers.has(t.uid)) return "📶 rilancia lui al server";
+  if (!N.receivers.size) return '<span class="muted">nessun telefono attivo che rilanciava al server</span>';
+  const h = N.hops.get(t.uid);
+  if (h == null) return '<span class="pill err">isolato</span> nessun percorso verso un telefono che rilanciava';
+  const path = [];
+  for (let n = node; n && N.via.get(n.id); n = N.via.get(n.id)) path.push(N.via.get(n.id).name);
+  const label = h === 1 ? "diretto" : `${h} salti`;
+  return `${h > RP_NET_MAX_HOPS ? '<span class="pill warn">oltre i 3 salti di default</span> ' : ""}${label}: ${path.map(esc).join(" → ")}`;
+}
+
 function rpDiagTick() {
   if (!RP || !RP.diag) return;
+  // Rete: ricalcolata ogni 2 s di gioco (o subito dopo un cambio di preset, dati o casella)
+  if (RP.diag.show.net && (RP.diag.netAt == null || Math.abs(RP.clock - RP.diag.netAt) >= 2)) {
+    RP.diag.net = rpNetCompute();
+    RP.diag.netAt = RP.clock;
+    rpNetDraw();
+  } else if (!RP.diag.show.net && RP.diag.netLayer.getLayers().length) {
+    RP.diag.netLayer.clearLayers();
+  }
   RP.diag.budget = 3;
   for (const t of RP.tracks) {
     t.diagLayers = t.diagLayers || {};
@@ -1829,8 +1932,8 @@ function rpUpdate(fromLoop) {
   }
   const clockEl = document.getElementById("rp-clock");
   if (clockEl) clockEl.textContent = rpClock(clock);
-  rpInfoTick();
   rpDiagTick();
+  rpInfoTick();
   const ovTime = document.getElementById("rp-ov-time");
   if (ovTime) {
     ovTime.textContent = rpClock(clock);

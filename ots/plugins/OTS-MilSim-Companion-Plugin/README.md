@@ -729,6 +729,13 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.39.0** — strumenti diagnostici del replay: **rete stimata**. In ogni istante una linea fra ogni coppia
+  di nodi LoRa attivi (tag e telefoni con un dato negli ultimi 2 minuti, più il QG) che secondo il modello si
+  sentivano: perdita lungo la linea (due raggi + vegetazione attraversata) entro il budget del preset; verde con
+  margine di almeno 6 dB, gialla al limite, margine nel tooltip. Nel pannello dettagli la riga «Rete stimata»
+  dice se l'operatore arrivava direttamente a un telefono che rilanciava al server, in quanti salti e tramite
+  chi, o se era isolato (con avviso oltre i 3 salti di default di Meshtastic). È una stima: i dati del relay
+  ATAK non dicono il percorso vero dei pacchetti.
 - **3.38.4** — replay: altitudine e dati della diagnostica restavano fermi su «avvio» anche a scarico finito.
   Il contrassegno del replay veniva incrementato dopo aver avviato i caricamenti in background, che al secondo
   controllo si credevano di un replay vecchio e smettevano di aggiornarsi. Ora è preso all'apertura del replay.
