@@ -752,15 +752,17 @@ def _gps_tracks(start_utc: datetime, end_utc: datetime, step: int, match_roles: 
     )
 
     rows = (
-        db.session.query(Point.timestamp, Point.uid, Point.device_uid, Point.latitude, Point.longitude, Point.speed)
+        db.session.query(
+            Point.timestamp, Point.uid, Point.device_uid, Point.latitude, Point.longitude, Point.speed, Point.course,
+        )
         .filter(Point.timestamp >= start, Point.timestamp <= end)
         .filter(Point.latitude.isnot(None), Point.longitude.isnot(None))
         .order_by(Point.timestamp)
     )
     tracks = replay.build_tracks(
         (
-            (ts.replace(tzinfo=timezone.utc).timestamp(), uid, device_uid, lat, lon, speed)
-            for ts, uid, device_uid, lat, lon, speed in rows
+            (ts.replace(tzinfo=timezone.utc).timestamp(), uid, device_uid, lat, lon, speed, course)
+            for ts, uid, device_uid, lat, lon, speed, course in rows
         ),
         tags, euds, team_at, step,
     )

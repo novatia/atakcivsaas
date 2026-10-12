@@ -32,6 +32,7 @@ def current_team_at(owner, t):
 
 def build(rows, tags=(TAG,), mesh_euds=(MESH_EUD,), relay_uids=(), step=0, team_at=current_team_at):
     index = replay.TagIndex(list(tags), list(mesh_euds), relay_uids)
+    rows = [r if len(r) == 7 else (*r, None) for r in rows]   # course non rilevante qui
     return replay.build_tracks(rows, index, {PHONE: ("ALFA-1", 10)}, team_at, step)
 
 
@@ -49,7 +50,7 @@ def test_tag_rilanciato_non_finisce_nella_traccia_del_telefono():
         (101.0, "TRACKER-01", PHONE, 45.2, 9.2, 0),   # relay ATAK (Path A)
     ])
     by_uid = {t["uid"]: t for t in tracks}
-    assert by_uid[PHONE]["points"] == [[100.0, 45.1, 9.1, 0]]
+    assert by_uid[PHONE]["points"] == [[100.0, 45.1, 9.1, 0, None]]
     tag = by_uid["tag:!bbad0ac8"]
     assert tag["kind"] == "tag" and tag["callsign"] == "T-ALFA-1"
     assert tag["team"] == replay.TEAM_B       # squadra del proprietario, non del telefono
@@ -160,3 +161,46 @@ def test_squadra_prevalente_e_partita_con_squadre_proprie():
     # Replay partita: valgono i gruppi salvati nella partita, non la mappatura dello storico
     swapped = replay.team_resolver(_timeline(), {}, {}, ROLES, match_roles={"team_a": BRAVO, "team_b": ALPHA, "observers": []})
     assert build(rows, team_at=swapped)[0]["team"] == replay.TEAM_B
+
+
+# ----------------------------------------------------------------------
+# Direzione di marcia
+# ----------------------------------------------------------------------
+
+# ~11 m verso nord / est a queste latitudini
+NORTH = 0.0001
+EAST = 0.00014
+
+
+def _pts(*coords, speed=None, dt=5):
+    return [[i * dt, lat, lon, speed] for i, (lat, lon) in enumerate(coords)]
+
+
+def test_direzione_dallo_spostamento():
+    pts = _pts((45.0, 9.0), (45.0 + NORTH, 9.0), (45.0 + NORTH, 9.0 + EAST))
+    assert replay.headings(pts, [None] * 3) == [None, 0, 90]
+
+
+def test_da_fermo_resta_l_ultima_direzione_buona():
+    # Cammina verso nord, poi il fix balla di 1-2 m in tutte le direzioni
+    pts = _pts((45.0, 9.0), (45.0 + NORTH, 9.0),
+               (45.0 + NORTH + 0.00001, 9.0 - 0.00002), (45.0 + NORTH - 0.00001, 9.0 + 0.00001))
+    assert replay.headings(pts, [None] * 4) == [None, 0, 0, 0]
+
+
+def test_course_del_gps_solo_in_movimento():
+    pts = _pts((45.0, 9.0), (45.0, 9.0), (45.0, 9.0), (45.0, 9.0))
+    for p, speed in zip(pts, (0.0, 1.5, 0.2, 1.5)):
+        p[3] = speed
+    # 200° a 1,5 m/s vale; 45° a 0,2 m/s è rumore; course 0 = «non disponibile»
+    assert replay.headings(pts, [None, 200.0, 45.0, 0.0]) == [None, 200, 200, 200]
+
+
+def test_niente_direzione_attraverso_un_buco():
+    pts = _pts((45.0, 9.0), (45.0 + NORTH * 20, 9.0), dt=600)
+    assert replay.headings(pts, [None, None]) == [None, None]
+
+
+def test_build_tracks_aggiunge_la_direzione():
+    tracks = build([(0.0, PHONE, PHONE, 45.0, 9.0, 0, None), (5.0, PHONE, PHONE, 45.0 + NORTH, 9.0, 0, None)])
+    assert [p[4] for p in tracks[0]["points"]] == [None, 0]

@@ -92,6 +92,9 @@
   .rp-marker { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
   .rp-name { font-size: 11px; font-weight: 600; color: #111; background: rgba(255,255,255,.85); padding: 0 4px; border-radius: 4px; }
   .rp-dot.tag { border-radius: 2px; transform: rotate(45deg) scale(.85); }
+  /* Simbolo sulla mappa: pallino/rombo finché la direzione di marcia non è nota, poi triangolo orientato */
+  .rp-sym { position: relative; width: 16px; height: 16px; flex: none; display: inline-flex; align-items: center; justify-content: center; }
+  .rp-tri { position: absolute; left: -4px; top: -4px; width: 24px; height: 24px; filter: drop-shadow(0 0 2px rgba(0,0,0,.7)); }
   .rp-group { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; width: 100%; }
   .rp-group > b { font-size: 12.5px; min-width: 110px; }
   .muted { color: var(--muted); }
@@ -1020,7 +1023,8 @@ async function renderReplay(id, isMatch = false) {
     <div id="rp-map"></div>
     <div id="rp-legend"></div>
     <p class="muted" style="margin-top:6px">Vengono mostrati tutti gli EUD (●) e i tag LoRa Meshtastic (◆) che hanno
-       inviato la posizione, colorati con la squadra <b>di quel momento</b> (per i tag: dell'utente a cui erano
+       inviato la posizione; appena si muovono il simbolo diventa un <b>▲ orientato verso la direzione di marcia</b>
+       (non dove guardano: i tag non hanno bussola) e da fermi tiene l'ultima direzione affidabile. Sono colorati con la squadra <b>di quel momento</b> (per i tag: dell'utente a cui erano
        assegnati), presa dallo storico delle squadre; se qualcuno ha cambiato squadra durante la giocata vale quella
        in cui è stato più a lungo. Usa le caselle qui sopra per nascondere le tracce che non ti interessano.</p>
     ${data.tracks.some(t => t.team_from_current) ? `<p class="muted">⚠️ Parte di questa giocata è precedente
@@ -1048,7 +1052,9 @@ async function renderReplay(id, isMatch = false) {
     const marker = L.marker(latlngs[0], {
       icon: L.divIcon({
         className: "",
-        html: `<div class="rp-marker"><span class="rp-dot${isTag ? " tag" : ""}" style="background:${color}"></span><span class="rp-name">${isTag ? "📡 " : ""}${esc(t.callsign)}</span></div>`,
+        html: `<div class="rp-marker"><span class="rp-sym"><span class="rp-dot${isTag ? " tag" : ""}" style="background:${color}"></span>`
+          + `<svg class="rp-tri" viewBox="0 0 24 24" style="display:none"><path d="M12 2 L21 21 L12 16.5 L3 21 Z" fill="${color}" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg></span>`
+          + `<span class="rp-name">${isTag ? "📡 " : ""}${esc(t.callsign)}</span></div>`,
         iconSize: null,
         iconAnchor: [8, 8],
       }),
@@ -1145,6 +1151,16 @@ function rpLocate(points, t) {
   return ans;
 }
 
+function rpSetHeading(t) {
+  const el = t.marker.getElement();
+  if (!el) return;
+  const dot = el.querySelector(".rp-dot"), tri = el.querySelector(".rp-tri");
+  const known = t.heading != null;
+  dot.style.display = known ? "none" : "";
+  tri.style.display = known ? "" : "none";
+  if (known) tri.style.transform = `rotate(${t.heading}deg)`;
+}
+
 function rpUpdate(fromLoop) {
   if (!RP) return;
   const clock = RP.clock;
@@ -1157,7 +1173,8 @@ function rpUpdate(fromLoop) {
       if (t.lastIdx !== -1) { t.trail.setLatLngs([]); t.lastIdx = -1; }
       continue;
     }
-    if (!t.onMap) { t.marker.addTo(RP.map); t.onMap = true; }
+    // Leaflet ricrea l'icona a ogni addTo: la direzione va riapplicata
+    if (!t.onMap) { t.marker.addTo(RP.map); t.onMap = true; t.heading = undefined; }
 
     let lat = t.points[i][1], lon = t.points[i][2];
     if (i < t.points.length - 1) {
@@ -1170,6 +1187,10 @@ function rpUpdate(fromLoop) {
       }
     }
     t.marker.setLatLng([lat, lon]);
+    // Direzione di marcia calcolata dal server: null finché non ce n'è una affidabile,
+    // poi resta l'ultima buona anche quando l'operatore si ferma
+    const heading = t.points[i][4];
+    if (heading !== t.heading) { t.heading = heading; rpSetHeading(t); }
     if (i !== t.lastIdx) { t.trail.setLatLngs(t.latlngs.slice(0, i + 1)); t.lastIdx = i; }
   }
   const clockEl = document.getElementById("rp-clock");

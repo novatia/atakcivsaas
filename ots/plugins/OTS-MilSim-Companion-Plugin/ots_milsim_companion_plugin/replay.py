@@ -14,6 +14,8 @@
 # dentro la traccia del telefono: il tag non compariva mai e il telefono
 # «saltava». Qui la decisione è pura (niente DB) e verificata dai test.
 
+import math
+
 from .mesh import normalize_node_id
 
 TEAM_A = "team_a"
@@ -120,8 +122,9 @@ def track_key(uid: str | None, device_uid: str | None, tags: TagIndex) -> tuple[
 
 
 def build_tracks(rows, tags: TagIndex, euds: dict, team_at, step: int) -> list[dict]:
-    """Tracce del replay da righe (t, uid, device_uid, lat, lon, speed)
-    ordinate per tempo. `euds`: uid → (callsign, user_id) degli ATAK.
+    """Tracce del replay da righe (t, uid, device_uid, lat, lon, speed, course)
+    ordinate per tempo. Ogni punto esce come [t, lat, lon, speed, direzione]
+    (direzione di marcia in gradi, vedi headings()). `euds`: uid → (callsign, user_id) degli ATAK.
 
     `team_at(owner, t)` → (squadra o None, dallo storico?) con owner
     {"user_id": ...} per un EUD o {"tag_key": ..., "user_id": ...} per un tag
@@ -135,7 +138,8 @@ def build_tracks(rows, tags: TagIndex, euds: dict, team_at, step: int) -> list[d
     tracks: dict[str, dict] = {}
     owners: dict[str, dict] = {}
     last_kept: dict[str, float] = {}
-    for t, uid, device_uid, lat, lon, speed in rows:
+    courses: dict[str, list] = {}
+    for t, uid, device_uid, lat, lon, speed, course in rows:
         if lat is None or lon is None or (not lat and not lon):
             continue  # (0, 0) = nessun fix GPS
         found = track_key(uid, device_uid, tags)
@@ -156,11 +160,16 @@ def build_tracks(rows, tags: TagIndex, euds: dict, team_at, step: int) -> list[d
                 track = {"uid": key, "callsign": callsign or key, "kind": "eud"}
             track["points"] = []
             tracks[key] = track
+            courses[key] = []
+        courses[key].append(course)
         track["points"].append(
             [round(t, 1), round(lat, 6), round(lon, 6), round(speed, 1) if speed is not None else None]
         )
 
     for key, track in tracks.items():
+        for point, heading in zip(track["points"], headings(track["points"], courses[key])):
+            point.append(heading)
+
         votes: dict = {}
         from_current = False
         for point in track["points"]:
@@ -206,3 +215,61 @@ def team_resolver(timeline, current_groups: dict, current_tag_owner: dict, curre
         return user_team(groups, roles), timeline.covers(t)
 
     return team_at
+
+
+# ----------------------------------------------------------------------
+# Direzione di marcia
+# ----------------------------------------------------------------------
+#
+# I tag non hanno bussola: si sa solo da che parte uno CAMMINA, non dove
+# guarda. Due fonti, entrambe inaffidabili da fermi:
+#   - `course` del GPS (Meshtastic ground_track, track/course di ATAK): buono
+#     solo sopra una velocità minima, da fermo è rumore;
+#   - lo spostamento fra due posizioni: buono solo quando supera l'errore del
+#     GPS (qualche metro), altrimenti è il fix che balla.
+# Quando nessuna delle due è affidabile si tiene l'ultima direzione buona.
+
+MIN_SPEED = 0.7          # m/s: sotto, il course del GPS è rumore (passo lento ~1 m/s)
+MIN_MOVE_M = 8.0         # m: spostamento minimo per fidarsi della direzione
+MAX_GAP_S = 120.0        # oltre, la traccia è interrotta: si riparte da capo
+
+
+def _distance_m(lat1, lon1, lat2, lon2) -> float:
+    """Distanza approssimata (equirettangolare): esatta a sufficienza su un campo."""
+    x = math.radians(lon2 - lon1) * math.cos(math.radians((lat1 + lat2) / 2))
+    y = math.radians(lat2 - lat1)
+    return math.hypot(x, y) * 6371000.0
+
+
+def _bearing(lat1, lon1, lat2, lon2) -> float:
+    """Rotta iniziale da 1 a 2, in gradi da nord in senso orario."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dl = math.radians(lon2 - lon1)
+    x = math.sin(dl) * math.cos(p2)
+    y = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    return (math.degrees(math.atan2(x, y)) + 360.0) % 360.0
+
+
+def headings(points: list, courses: list) -> list:
+    """Direzione di marcia (gradi, intero) per ogni punto [t, lat, lon, speed, ...];
+    None finché non ce n'è stata una affidabile."""
+    result = []
+    heading = None
+    anchor = None        # (lat, lon) da cui si misura lo spostamento
+    prev_t = None
+    for point, course in zip(points, courses):
+        t, lat, lon, speed = point[0], point[1], point[2], point[3]
+        if anchor is None or t - prev_t > MAX_GAP_S:
+            # Inizio o buco nella traccia: lo spostamento attraverso il buco non dice
+            # da che parte camminava, si tiene la direzione e si riparte da qui
+            anchor = (lat, lon)
+        elif speed is not None and speed >= MIN_SPEED and course is not None and 0 < course < 360:
+            # course esattamente 0 è il «non disponibile» che OTS salva al posto di 9999999
+            heading = round(course) % 360
+            anchor = (lat, lon)
+        elif _distance_m(anchor[0], anchor[1], lat, lon) >= MIN_MOVE_M:
+            heading = round(_bearing(anchor[0], anchor[1], lat, lon)) % 360
+            anchor = (lat, lon)
+        prev_t = t
+        result.append(heading)
+    return result

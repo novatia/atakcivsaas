@@ -729,6 +729,13 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.32.0** — replay: appena un operatore (EUD o tag) si muove il suo simbolo diventa un **triangolo
+  orientato verso la direzione di marcia**. La direzione è calcolata dal server per ogni punto: vale il `course`
+  del GPS solo sopra 0,7 m/s (da fermo è rumore; `course` esattamente 0 è il «non disponibile» di OTS),
+  altrimenti lo spostamento quando supera 8 m dall'ultimo punto affidabile; se nessuna delle due è
+  affidabile resta l'ultima direzione buona. Dopo un buco di oltre 2 minuti la misura riparte da capo.
+  È la direzione in cui si cammina, non dove si guarda: i tag non hanno bussola. Punti del replay ora
+  `[t, lat, lon, speed, direzione]`.
 - **3.31.0** — **colori delle squadre** configurabili: un selettore accanto a Team A, Team B e osservatori
   nella Mappatura Team (tab Team). Valgono per le tracce e la legenda del replay e per le etichette TEAM A/B
   nella tab Team (testo chiaro o scuro in base al colore). Il replay li legge da `config.yml`, così un
