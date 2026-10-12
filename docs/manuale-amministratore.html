@@ -204,7 +204,7 @@
 
 <div class="wrap">
   <header>
-    <div class="doc-meta"><span>MA-TAK-001 · Rev 25 · 2026-10-12</span><span>Server: n3test002</span></div>
+    <div class="doc-meta"><span>MA-TAK-001 · Rev 26 · 2026-10-12</span><span>Server: n3test002</span></div>
     <div class="head-row">
       <div>
         <h1>Manuale Amministratore<br>Tactical Scout Codogno</h1>
@@ -477,6 +477,28 @@ ss -tlnp | grep -E '8080|8089|8443'
 pgrep -af 'bin/eud_handler'   <span class="c"># una sola riga</span>
 tail -20 /home/ots/ots/logs/opentakserver.log</pre>
 
+    <h3>Replay: dettagli degli operatori, altitudine e strumenti diagnostici</h3>
+    <p>Nel player (MilSim Companion ≥ 3.35) un clic su un operatore apre il <strong>pannello dettagli</strong>: batteria, velocità, percorso,
+      dislivello. Cose da sapere quando i numeri sembrano strani:</p>
+    <ul>
+      <li><strong>Tag rilanciati da ATAK</strong> (Path A): in <code>points</code> la riga ha <code>uid</code> = tag e <code>device_uid</code> = il
+        telefono che l'ha rilanciato. Per estrarre la traccia di un tag si filtra su <code>uid</code>, non su <code>device_uid</code>.</li>
+      <li><strong>Radio abbinata</strong>: un tag rilanciato quasi solo da un telefono e quasi sempre entro 30 m da lui è la radio Bluetooth di
+        quel telefono; il player nasconde la sua traccia e ne mostra la batteria nel pannello del telefono.</li>
+      <li><strong>Altitudine</strong>: dal modello del terreno Copernicus DEM (30 m), non dal GPS (rumoroso; i tag rilanciati non la mandano).
+        Scaricato dal server la prima volta che si apre il replay di una zona: serve l'uscita verso Internet e GDAL
+        (<code>gdalwarp</code>) sul server. Cache in <code>/home/ots/ots/milsim_diag/</code>.</li>
+    </ul>
+    <p><strong>Strumenti diagnostici</strong> (tab Manutenzione → «Strumenti diagnostici attivi», spenti di default): nel player raggio radio teorico
+      per preset LoRa, <strong>bolla</strong> di portata che toglie l'attenuazione della vegetazione (ESA WorldCover + NDVI Sentinel-2) e layer
+      <strong>Sentinel-2</strong>. La scena satellitare è quella del giorno della giocata o la più vicina prima o dopo, entro 20 giorni; quelle
+      coperte di nuvole sul campo vengono scartate. Sono <strong>stime</strong>: il modello assume terreno piatto, quindi in collina non vede i
+      dossi fra due operatori. Il preset LoRa non viaggia nei CoT e va impostato uguale a quello dei tag.</p>
+    <div class="warn"><span class="tag">Se i dati d'ambiente non arrivano</span><p>Il player mostra l'errore nella barra «Diagnostica radio».
+      Cause tipiche: server senza accesso a <code>earth-search.aws.element84.com</code>, <code>sentinel-cogs.s3.us-west-2.amazonaws.com</code>,
+      <code>esa-worldcover.s3.eu-central-1.amazonaws.com</code>, <code>copernicus-dem-30m.s3.amazonaws.com</code>; GDAL assente. Dopo un errore il
+      plugin riprova da solo dopo 2 minuti; per forzare, cancellare la cartella della zona in <code>/home/ots/ots/milsim_diag/</code>.</p></div>
+
     <h3>Nodo Meshtastic su Raspberry Pi: sistema operativo e meshtasticd</h3>
     <p>Un Raspberry Pi con radio LoRa collegata via SPI può fare da <strong>gateway Meshtastic</strong> per il server: riceve la mesh via LoRa e la inoltra a OpenTAKServer via MQTT (Path B, v. «Integrazione col server» in sez. 5 e il documento <code>docs/meshtastic-architettura.md</code> nel repo per l'analisi completa del meccanismo di instradamento). Questa sezione documenta la procedura verificata passo-passo su un Raspberry Pi 3B+ reale.</p>
     <p>Sistema operativo: <strong>Raspberry Pi OS Lite 64-bit</strong> (Bookworm o Trixie) — mai la variante 32-bit, <code>meshtasticd</code> non la supporta. Verifica dopo l'installazione:</p>
@@ -585,6 +607,15 @@ meshtastic --host localhost --set mqtt.root opentakserver
 meshtastic --host localhost --set mqtt.encryption_enabled true
 meshtastic --host localhost --ch-index 0 --ch-set uplink_enabled true</pre>
     <p><code>mqtt.root</code> deve combaciare con <code>OTS_MESHTASTIC_TOPIC</code> lato server; <code>uplink_enabled</code> va abilitato sul canale (indice <code>0</code> è il canale primario, <code>LongFast</code> di default) che deve raggiungere il server — senza, il nodo resta sulla mesh locale e non pubblica nulla via MQTT.</p>
+
+    <h3>Posizione fissa del gateway (quartier generale)</h3>
+    <p>Il gateway non ha bisogno di un'antenna GPS per comparire in mappa: meshtasticd accetta una <strong>posizione fissa</strong>
+      e la trasmette come un nodo qualsiasi.</p>
+    <pre>meshtastic --host localhost --setlat &lt;lat&gt; --setlon &lt;lon&gt; --setalt &lt;quota m&gt;   <span class="c"># es. --setlat 44.93412 --setlon 9.55204 --setalt 230</span></pre>
+    <p>Poi nella tab <strong>Manutenzione</strong> del plugin MilSim Companion → «Quartier generale» si indica il <strong>node id</strong> del
+      gateway (<code>!xxxxxxxx</code>, lo mostra <code>meshtastic --host localhost --info</code>) e l'altezza dell'antenna: il replay mette 🏠 nella
+      posizione trasmessa durante la giocata. Senza gateway funzionante si possono scrivere le coordinate a mano nello stesso riquadro.
+      La posizione arriva al server solo via Path B (MQTT): se il gateway non pubblica, il QG non compare — vedi la verifica qui sotto.</p>
 
     <h3>Path A o Path B: che cosa arriva davvero al server</h3>
     <p>Esistono due modi in cui un tag Meshtastic raggiunge OpenTAKServer, e portano informazioni molto diverse — la scelta/comprensione di quale via è in uso determina cosa si può vedere e mappare per canale:</p>
@@ -818,8 +849,8 @@ rm /tmp/eud.pem   <span class="c"># pulizia: contiene la chiave privata</span></
   </section>
 
   <footer>
-    <span>MA-TAK-001 · Rev 25</span>
-    <span>Aggiornato il 2026-10-12: lo script di update del plugin MilSim Companion fa il git pull per default (<code>--no-pull</code> per saltarlo), con riga di troubleshooting per l'aggiornamento che non aggiorna</span>
+    <span>MA-TAK-001 · Rev 26</span>
+    <span>Aggiornato il 2026-10-12: posizione fissa del gateway meshtasticd (quartier generale, niente GPS) e sottosezione sul replay — tag rilanciati in <code>points</code>, radio abbinate, altitudine dal DEM, strumenti diagnostici e cosa fare se i dati d'ambiente non arrivano</span>
   </footer>
 </div>
 
