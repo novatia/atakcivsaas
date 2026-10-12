@@ -281,9 +281,10 @@ def _warp(sources: list[str], area: dict, size: tuple[int, int], out: str, ot: s
     from . import offline_map
 
     cmd = [
+        # Niente GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR: vale anche per i file
+        # locali e con l'uscita ENVI (dati + .hdr accanto) gdalwarp usciva con
+        # codice 1 senza un messaggio (server, 2026-10-12; senza, funziona)
         "gdalwarp", "-overwrite",
-        "--config", "GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR",
-        "--config", "CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif",
         "-t_srs", "EPSG:4326",
         "-te", str(area["w"]), str(area["s"]), str(area["e"]), str(area["n"]),
         "-ts", str(size[0]), str(size[1]),
@@ -345,7 +346,6 @@ def _png(source: str, area: dict, size: tuple[int, int], out_png: str, work: str
     tif = os.path.join(work, "visual.tif")
     cmd = [
         "gdalwarp", "-overwrite",
-        "--config", "GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR",
         "-t_srs", "EPSG:4326",
         "-te", str(area["w"]), str(area["s"]), str(area["e"]), str(area["n"]),
         "-ts", str(size[0]), str(size[1]), "-r", "bilinear",

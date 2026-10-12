@@ -729,6 +729,10 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.38.3** — dati satellitari e terreno: tolto `GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR` (e
+  `CPL_VSIL_CURL_ALLOWED_EXTENSIONS`) da gdalwarp. Vale anche per i file locali: con l'uscita ENVI (dati + `.hdr`)
+  gdalwarp creava il file e usciva con codice 1 senza messaggio. Diagnosticato col log della 3.38.2: la lettura via
+  rete andava (HTTP 206), lo stesso comando senza quelle opzioni da shell funzionava.
 - **3.38.2** — dati satellitari e terreno: quando `gdalwarp` fallisce senza messaggio (visto sul server: codice 1,
   nessun output, mentre `gdalinfo` sullo stesso URL da shell funziona) il log riporta in automatico lo stesso
   comando rilanciato con `--debug on` catturando stdout/stderr, le variabili d'ambiente GDAL/PROJ del processo
