@@ -729,6 +729,13 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.33.0** — editor delle modalità di gioco: le **aree in cui conta la presenza** (area valida ordigni,
+  area punto di dominio) devono contenere un **cerchio di almeno 20 m di raggio**. Il GPS dei tag
+  Meshtastic sbaglia di 3-5 m in campo aperto e 5-10 m nel bosco, e tra un invio e l'altro chi cammina
+  si sposta di 15-20 m: sotto questa misura un giocatore risulterebbe dentro o fuori a caso. Si misura il
+  raggio interno (polylabel), non la superficie, così un'area lunga e stretta non passa. L'editor non
+  chiude un'area troppo piccola e il popup ne mostra il raggio; il server rifiuta il salvataggio e il Play
+  (anche per i template salvati prima). Il perimetro del campo non ha minimo.
 - **3.32.0** — replay: appena un operatore (EUD o tag) si muove il suo simbolo diventa un **triangolo
   orientato verso la direzione di marcia**. La direzione è calcolata dal server per ogni punto: vale il `course`
   del GPS solo sopra 0,7 m/s (da fermo è rumore; `course` esattamente 0 è il «non disponibile» di OTS),

@@ -9,6 +9,16 @@
 # "spot marker" colorati.
 
 
+import heapq
+import math
+
+# Raggio minimo delle aree in cui conta la presenza dei giocatori: il GPS dei
+# tag Meshtastic sbaglia di 3-5 m in campo aperto e 5-10 m nel bosco, e tra un
+# invio e l'altro chi cammina si sposta di 15-20 m. Sotto questa misura uno
+# risulterebbe dentro o fuori a caso.
+MIN_ZONE_RADIUS_M = 20
+
+
 def argb(hex_argb: str) -> int:
     """'FFE53935' -> intero ARGB con segno, il formato colore di CoT/ATAK."""
     value = int(hex_argb, 16)
@@ -85,6 +95,7 @@ ZONE_TYPES = {
         "stroke_argb": argb("FF9C27B0"),
         "fill_argb": argb("409C27B0"),   # stesso colore, alpha 25%
         "audience": "all",
+        "min_radius_m": MIN_ZONE_RADIUS_M,
     },
     "dom_area": {
         "label": "Area punto di dominio",
@@ -92,6 +103,7 @@ ZONE_TYPES = {
         "stroke_argb": argb("FFFB8C00"),
         "fill_argb": argb("40FB8C00"),
         "audience": "all",
+        "min_radius_m": MIN_ZONE_RADIUS_M,
     },
     "field_boundary": {
         "label": "Perimetro campo",
@@ -197,6 +209,74 @@ def serialize_registry() -> dict:
     }
 
 
+def inner_radius_m(points: list) -> float:
+    """Raggio del cerchio più grande che sta dentro il poligono [[lat, lon], ...].
+
+    È la misura giusta per «quanto è grande un'area» quando conta la presenza:
+    un poligono lungo e stretto ha area grande ma raggio interno piccolo.
+    Algoritmo polylabel (Mapbox) su coordinate locali in metri, precisione
+    0,5 m. La stessa funzione è replicata in ui/index.html (innerRadiusM):
+    tenerle allineate.
+    """
+    if len(points) < 3:
+        return 0.0
+    lat0 = sum(p[0] for p in points) / len(points)
+    lon0 = sum(p[1] for p in points) / len(points)
+    k = math.pi / 180 * 6371000
+    ring = [((p[1] - lon0) * k * math.cos(math.radians(lat0)), (p[0] - lat0) * k) for p in points]
+
+    def signed_dist(x: float, y: float) -> float:
+        inside = False
+        best = math.inf
+        j = len(ring) - 1
+        for i in range(len(ring)):
+            ax, ay = ring[i]
+            bx, by = ring[j]
+            if (ay > y) != (by > y) and x < (bx - ax) * (y - ay) / (by - ay) + ax:
+                inside = not inside
+            dx, dy = bx - ax, by - ay
+            t = 0.0
+            if dx or dy:
+                t = max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)))
+            best = min(best, math.hypot(x - ax - t * dx, y - ay - t * dy))
+            j = i
+        return best if inside else -best
+
+    xs = [p[0] for p in ring]
+    ys = [p[1] for p in ring]
+    size = min(max(xs) - min(xs), max(ys) - min(ys))
+    if size <= 0:
+        return 0.0
+    precision = 0.5
+    half = size / 2
+
+    def cell(x: float, y: float, h: float):
+        d = signed_dist(x, y)
+        return (-(d + h * math.sqrt(2)), x, y, h, d)
+
+    queue = []
+    x = min(xs)
+    while x < max(xs):
+        y = min(ys)
+        while y < max(ys):
+            heapq.heappush(queue, cell(x + half, y + half, half))
+            y += size
+        x += size
+    best = max(signed_dist(sum(xs) / len(xs), sum(ys) / len(ys)), 0.0)
+    for _ in range(20000):
+        if not queue:
+            break
+        neg_max, cx, cy, h, d = heapq.heappop(queue)
+        best = max(best, d)
+        if -neg_max - best <= precision:
+            break
+        h /= 2
+        for sx in (-h, h):
+            for sy in (-h, h):
+                heapq.heappush(queue, cell(cx + sx, cy + sy, h))
+    return best
+
+
 def validate_template(mode_key: str, markers: list, zones: list, for_play: bool = False) -> list[str]:
     """Errori di coerenza tra template e modalità.
 
@@ -234,6 +314,14 @@ def validate_template(mode_key: str, markers: list, zones: list, for_play: bool 
         points = zone.get("points") or []
         if len(points) < 3:
             errors.append(f"L'area '{ZONE_TYPES[ztype]['label']}' ha meno di 3 vertici")
+        elif ZONE_TYPES[ztype].get("min_radius_m"):
+            radius = inner_radius_m(points)
+            if radius < ZONE_TYPES[ztype]["min_radius_m"]:
+                errors.append(
+                    f"L'area '{zone.get('label') or ZONE_TYPES[ztype]['label']}' è troppo piccola: "
+                    f"contiene un cerchio di raggio {radius:.0f} m, il minimo è "
+                    f"{ZONE_TYPES[ztype]['min_radius_m']} m (precisione GPS dei tag)"
+                )
         zone_counts[ztype] = zone_counts.get(ztype, 0) + 1
 
     for mtype, limits in mode["markers"].items():

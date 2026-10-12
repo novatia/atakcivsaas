@@ -2365,8 +2365,56 @@ function mapClick(latlng) {
   }
 }
 
+// Raggio del cerchio più grande dentro il poligono [[lat, lon], ...] (polylabel,
+// precisione 0,5 m): copia di inner_radius_m in game_modes.py, tenerle allineate.
+function innerRadiusM(points) {
+  if (points.length < 3) return 0;
+  const lat0 = points.reduce((s, p) => s + p[0], 0) / points.length;
+  const lon0 = points.reduce((s, p) => s + p[1], 0) / points.length;
+  const k = Math.PI / 180 * 6371000;
+  const ring = points.map(p => [(p[1] - lon0) * k * Math.cos(lat0 * Math.PI / 180), (p[0] - lat0) * k]);
+  const signedDist = (x, y) => {
+    let inside = false, best = Infinity;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [ax, ay] = ring[i], [bx, by] = ring[j];
+      if ((ay > y) !== (by > y) && x < (bx - ax) * (y - ay) / (by - ay) + ax) inside = !inside;
+      const dx = bx - ax, dy = by - ay;
+      const t = (dx || dy) ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy))) : 0;
+      best = Math.min(best, Math.hypot(x - ax - t * dx, y - ay - t * dy));
+    }
+    return inside ? best : -best;
+  };
+  const xs = ring.map(p => p[0]), ys = ring.map(p => p[1]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const size = Math.min(maxX - minX, maxY - minY);
+  if (size <= 0) return 0;
+  const cell = (x, y, h) => { const d = signedDist(x, y); return { x, y, h, d, max: d + h * Math.SQRT2 }; };
+  const queue = [];
+  for (let x = minX; x < maxX; x += size)
+    for (let y = minY; y < maxY; y += size) queue.push(cell(x + size / 2, y + size / 2, size / 2));
+  let best = Math.max(signedDist(xs.reduce((a, b) => a + b) / xs.length, ys.reduce((a, b) => a + b) / ys.length), 0);
+  for (let n = 0; n < 20000 && queue.length; n++) {
+    let top = 0;
+    for (let i = 1; i < queue.length; i++) if (queue[i].max > queue[top].max) top = i;
+    const c = queue.splice(top, 1)[0];
+    best = Math.max(best, c.d);
+    if (c.max - best <= 0.5) break;
+    const h = c.h / 2;
+    for (const sx of [-h, h]) for (const sy of [-h, h]) queue.push(cell(c.x + sx, c.y + sy, h));
+  }
+  return best;
+}
+
 function finishZone() {
   if (!ED.drawing || ED.drawing.points.length < 3) return;
+  const minR = REGISTRY.zone_types[ED.drawing.type].min_radius_m;
+  if (minR) {
+    const r = innerRadiusM(ED.drawing.points);
+    if (r < minR) {
+      return toast(`Area troppo piccola: ci sta un cerchio di raggio ${Math.round(r)} m, servono almeno ${minR} m `
+        + `(il GPS dei tag sbaglia di 5-10 m). Allarga l'area aggiungendo vertici o annulla.`, false);
+    }
+  }
   const zone = { type: ED.drawing.type, label: REGISTRY.zone_types[ED.drawing.type].label, points: ED.drawing.points };
   ED.zones.push(zone);
   ED.map.removeLayer(ED.drawing.line);
@@ -2421,7 +2469,10 @@ function addZoneLayer(zone) {
   layer.bindTooltip(() => zone.label || zt.label);
   layer.on("click", () => {
     const idx = ED.zones.indexOf(zone);
+    const r = innerRadiusM(zone.points);
+    const small = zt.min_radius_m && r < zt.min_radius_m;
     layer.bindPopup(`<b>${esc(zt.label)}</b> (${zone.points.length} vertici)<br>
+      <span class="${small ? "" : "muted"}" style="font-size:11.5px">${small ? "⚠️ " : ""}raggio interno ${Math.round(r)} m${zt.min_radius_m ? ` (minimo ${zt.min_radius_m} m)` : ""}</span><br>
       <button class="btn danger" style="margin-top:6px" onclick="removeZone(${idx})">🗑 Rimuovi</button>`).openPopup();
   });
   zone._layer = layer;
