@@ -281,7 +281,7 @@ def _warp(sources: list[str], area: dict, size: tuple[int, int], out: str, ot: s
     from . import offline_map
 
     cmd = [
-        "gdalwarp", "-overwrite", "-q",
+        "gdalwarp", "-overwrite",
         "--config", "GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR",
         "--config", "CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif",
         "-t_srs", "EPSG:4326",
@@ -294,7 +294,7 @@ def _warp(sources: list[str], area: dict, size: tuple[int, int], out: str, ot: s
         offline_map.run(cmd, timeout=600)
     except offline_map.OfflineMapError as e:
         raise DiagError(f"lettura di {sources[0].rsplit('/', 1)[-1]} fallita: {e}",
-                        detail=" ".join(cmd) + "\n\n" + str(e)) from e
+                        detail=" ".join(cmd) + "\n\n" + str(e) + _probe(cmd, sources[0])) from e
     data = array.array({"Byte": "B", "Float32": "f", "UInt16": "H"}[ot])
     with open(out, "rb") as f:
         data.frombytes(f.read())
@@ -303,12 +303,48 @@ def _warp(sources: list[str], area: dict, size: tuple[int, int], out: str, ot: s
     return data.tolist()
 
 
+def _probe(cmd: list[str], url: str) -> str:
+    """Dopo un fallimento muto di gdalwarp (visto sul server il 2026-10-12:
+    codice 1 e nessun output, mentre da shell gdalinfo sullo stesso URL
+    funziona): rilancia lo stesso comando catturando stdout e stderr a parte
+    (senza passare dal lettore non bloccante di offline_map.run), mostra le
+    variabili d'ambiente di GDAL/PROJ del processo OTS e prova l'URL con
+    gdalinfo e con una GET diretta. Dicono se è l'ambiente, PROJ, la rete o GDAL."""
+    import subprocess
+
+    parts = []
+    env_keys = sorted(k for k in os.environ if k.startswith(("GDAL", "PROJ", "CPL", "CURL", "SSL", "HTTP", "LD_")))
+    parts.append("ambiente del processo OTS:\n" + ("\n".join(f"  {k}={os.environ[k]}" for k in env_keys) or "  (nessuna variabile GDAL/PROJ/CURL)")
+                 + f"\n  PATH={os.environ.get('PATH', '')}")
+
+    def capture(title, command):
+        try:
+            done = subprocess.run(command, capture_output=True, text=True, timeout=180)
+            parts.append(f"{title}: codice {done.returncode}\n[stdout]\n{done.stdout[-1500:]}\n[stderr]\n{done.stderr[-2500:]}")
+        except BaseException as e:
+            parts.append(f"{title}: {type(e).__name__}: {e}")
+
+    retry = [c for c in cmd if c != "-q"] + ["--debug", "on"]
+    capture("stesso gdalwarp rilanciato con debug", retry)
+    capture("gdalinfo sullo stesso URL", ["gdalinfo", f"/vsicurl/{url}"])
+    capture("projinfo EPSG:4326", ["projinfo", "EPSG:4326"])
+    try:
+        import requests
+
+        r = requests.get(url, headers={"Range": "bytes=0-1023"}, timeout=20, stream=True)
+        r.close()
+        parts.append(f"GET diretto da Python: HTTP {r.status_code}")
+    except BaseException as e:
+        parts.append(f"GET diretto da Python: {type(e).__name__}: {e}")
+    return "\n\n--- verifica automatica ---\n" + "\n\n".join(parts)
+
+
 def _png(source: str, area: dict, size: tuple[int, int], out_png: str, work: str) -> None:
     from . import offline_map
 
     tif = os.path.join(work, "visual.tif")
     cmd = [
-        "gdalwarp", "-overwrite", "-q",
+        "gdalwarp", "-overwrite",
         "--config", "GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR",
         "-t_srs", "EPSG:4326",
         "-te", str(area["w"]), str(area["s"]), str(area["e"]), str(area["n"]),

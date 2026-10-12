@@ -729,6 +729,10 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.38.2** — dati satellitari e terreno: quando `gdalwarp` fallisce senza messaggio (visto sul server: codice 1,
+  nessun output, mentre `gdalinfo` sullo stesso URL da shell funziona) il log riporta in automatico lo stesso
+  comando rilanciato con `--debug on` catturando stdout/stderr, le variabili d'ambiente GDAL/PROJ del processo
+  OTS, `gdalinfo` e `projinfo EPSG:4326` e una GET diretta all'URL. Tolto `-q` da gdalwarp.
 - **3.38.1** — tab Manutenzione: **log dati satellitari e terreno** (stato di ogni scarico, errore completo
   col comando GDAL e il suo output, ↻ Riprova) e **autotest dal server** (comandi e versione di GDAL, formati,
   raggiungibilità dei quattro host, lettura vera di una finestra del DEM via /vsicurl). Nel pannello dettagli
