@@ -656,27 +656,69 @@ async function renderEvents() {
   }
 
   const events = await api("/events");
-  const list = document.getElementById("ev-list");
   window._events = events;
 
-  const now = new Date();
-  const isPast = ev => new Date(ev.end_time) < now;
-  const pastCount = events.filter(isPast).length;
-
+  const pastCount = events.filter(evIsPast).length;
   // Eventi passati nascosti di default; flag per mostrarli (ricordata sul dispositivo)
   let showPast = false;
   try { showPast = localStorage.getItem("ec_show_past") === "1"; } catch (e) {}
-  const visible = showPast ? events : events.filter(e => !isPast(e));
 
-  let html = pastCount ? `<label class="muted" style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
-      <input type="checkbox" ${showPast ? "checked" : ""} onchange="togglePast(this.checked)">
-      Mostra eventi passati (${pastCount})</label>` : "";
+  // Barra fissa: ridisegnando solo i risultati la casella di ricerca non perde il focus
+  document.getElementById("ev-list").innerHTML = `
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:10px">
+      <input type="search" id="ev-search" placeholder="🔍 Cerca per titolo, sede, descrizione o data…"
+        value="${esc(EV_QUERY)}" style="flex:1;min-width:240px" oninput="EV_QUERY = this.value; drawEventList()">
+      ${pastCount ? `<label class="muted" style="display:flex;align-items:center;gap:6px">
+        <input type="checkbox" ${showPast ? "checked" : ""} onchange="togglePast(this.checked)">
+        Mostra eventi passati (${pastCount})</label>` : ""}
+    </div>
+    <div id="ev-results"></div>`;
+  drawEventList();
+}
+
+let EV_QUERY = "";   // resta fra un ridisegno e l'altro (RSVP, modifica…)
+
+function evIsPast(ev) { return new Date(ev.end_time) < new Date(); }
+
+// Minuscole e senza accenti: «citta» trova «Città»
+function evNorm(text) {
+  return String(text || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+// Tutte le parole cercate devono comparire in titolo, descrizione, sede, indirizzo o data
+function evMatches(ev, words) {
+  const haystack = evNorm([
+    ev.title, ev.description,
+    ev.field && ev.field.name, ev.field && ev.field.address,
+    fmtDT(ev.start_time), fmtDT(ev.end_time),
+  ].join(" "));
+  return words.every(w => haystack.includes(w));
+}
+
+function drawEventList() {
+  const box = document.getElementById("ev-results");
+  if (!box) return;
+  const events = window._events || [];
+  let showPast = false;
+  try { showPast = localStorage.getItem("ec_show_past") === "1"; } catch (e) {}
+
+  const words = evNorm(EV_QUERY).split(/\s+/).filter(Boolean);
+  // Cercando si guarda anche fra i passati: l'evento che cerchi può essere quello di ieri
+  const visible = words.length
+    ? events.filter(ev => evMatches(ev, words))
+    : (showPast ? events : events.filter(ev => !evIsPast(ev)));
+
   if (!visible.length) {
-    list.innerHTML = html + "<p class='muted'>Nessun evento in programma.</p>";
+    box.innerHTML = words.length
+      ? `<p class="muted">Nessun evento corrisponde a «${esc(EV_QUERY.trim())}».</p>`
+      : "<p class='muted'>Nessun evento in programma.</p>";
     return;
   }
-  list.innerHTML = html + visible.map(ev => {
-    const past = isPast(ev);
+  const summary = words.length
+    ? `<p class="muted" style="margin:0 0 8px">${visible.length} ${visible.length === 1 ? "evento trovato" : "eventi trovati"} (passati compresi)</p>`
+    : "";
+  box.innerHTML = summary + visible.map(ev => {
+    const past = evIsPast(ev);
     const st = ev.my_rsvp;
     return `<div class="event-card ${past ? "past" : ""}" id="event-${ev.id}">
       <div class="event-head">

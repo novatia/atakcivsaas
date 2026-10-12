@@ -726,6 +726,9 @@ tile JPEG, bordi trasparenti e stretch; altrimenti quei test vengono saltati.
 
 ## Changelog
 
+- **3.30.0** — tab Eventi: **casella di ricerca** sopra la lista. Filtra mentre scrivi su titolo,
+  descrizione, sede, indirizzo e data (es. `06/12`), senza distinguere maiuscole e accenti; con più parole
+  devono esserci tutte. Durante la ricerca sono compresi anche gli eventi passati.
 - **3.29.0** — **storico delle squadre**: nuova tabella `ms_membership_history` con gli intervalli di
   validità di appartenenza utente→gruppo, proprietario di ogni tag Meshtastic e mappatura Team A/B/
   osservatori. Il replay colora ogni traccia con la squadra del momento invece di quella attuale
